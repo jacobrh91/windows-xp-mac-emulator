@@ -34,7 +34,42 @@ fn main() {
                 eprintln!("{USAGE}");
                 process::exit(2);
             };
-            run(&path, &read(&path), window, fullscreen, shot);
+            let data = read(&path);
+            if !window {
+                run(&path, &data, None, shot);
+            }
+            // The window lives on the main thread (AppKit wants it there) and the emulator
+            // on its own, so a window that stalls (a Space switch, a slow redraw) never holds
+            // up the game or the sound its mixer makes. The emulator thread ends the process.
+            let shared = std::sync::Arc::new(gui::present::Shared::default());
+            let link = shared.clone();
+            std::thread::Builder::new()
+                .name("emulator".into())
+                .stack_size(64 << 20)
+                .spawn(move || run(&path, &data, Some(link), shot))
+                .expect("emulator thread");
+            let mut presenter = gui::present::Presenter::new("Windows XP emulator", fullscreen)
+                .unwrap_or_else(|e| {
+                    eprintln!("cannot open window: {e}");
+                    process::exit(1);
+                });
+            let mut open = true;
+            let started = std::time::Instant::now();
+            // XP_DEBUG_STALL=<secs>: freeze the window thread for 3 s at that time, as a hidden
+            // window does during a Space switch (the game should carry on regardless).
+            let mut stall = env::var("XP_DEBUG_STALL").ok().and_then(|v| v.parse::<u64>().ok());
+            loop {
+                if stall.is_some_and(|t| started.elapsed().as_secs() >= t) {
+                    stall = None;
+                    eprintln!("[present] window thread stalled for 3 s");
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
+                if open && !presenter.pump(&shared) {
+                    open = false; // closed: the emulator asks the program to quit
+                }
+                let wait = std::time::Duration::from_micros(16_667).saturating_sub(presenter.since_pump());
+                std::thread::sleep(wait.max(std::time::Duration::from_millis(1)));
+            }
         }
         _ => {
             eprintln!("{USAGE}");
@@ -92,7 +127,8 @@ fn info(path: &str, data: &[u8]) {
 }
 
 /// Runs the program inside the emulator only; nothing in the image executes natively.
-fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Option<String>) {
+/// `window`: the link to the window on the main thread, if there is one.
+fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shared>>, screenshot: Option<String>) -> ! {
     let mut emu = cpu::Emu::new();
     if let Some(dir) = std::path::Path::new(path).parent() {
         emu.win.dll_dirs.push(dir.to_path_buf());
@@ -130,19 +166,14 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         image.entry,
         image.unsupported.len()
     );
-    let mut presenter = window.then(|| {
-        gui::present::Presenter::new("Windows XP emulator", fullscreen).unwrap_or_else(|e| {
-            eprintln!("cannot open window: {e}");
-            process::exit(1);
-        })
-    });
+    let mut last_frame = std::time::Instant::now();
+    let mut closing: Option<std::time::Instant> = None;
 
     // XP_MAX_STEPS stops a run early (with the screenshot) for reproducible checks.
     let max_steps: u64 = env::var("XP_MAX_STEPS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(2_000_000_000);
-    let mut closing_waits = 0;
     let dump_after = env::var("XP_DUMP_AFTER")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -299,34 +330,30 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             dumped = true;
             emu.dump_threads();
         }
-        match (&stop, presenter.as_mut()) {
+        if let Some(link) = &window {
+            if link.deliver(&mut emu) && closing.is_none() {
+                // Host window closed: ask the app to quit, but don't wait forever.
+                emu.wm.request_close();
+                closing = Some(std::time::Instant::now());
+            }
+            if closing.is_some_and(|t| t.elapsed().as_secs() >= 3) {
+                break stop;
+            }
+            // A new picture for the window ~60 times a second.
+            if last_frame.elapsed() >= std::time::Duration::from_micros(16_667) {
+                last_frame = std::time::Instant::now();
+                link.publish(&mut emu);
+            }
+        }
+        match (&stop, &window) {
             (cpu::Stop::StepLimit, None) if emu.steps < max_steps => {}
-            // Every thread is waiting for a time: let it pass.
-            (cpu::Stop::Sleeping, None) => {
+            (cpu::Stop::StepLimit, Some(_)) => {}
+            // Every thread is waiting for a time (or for input): let it pass. At most 8 ms,
+            // so pictures and input keep flowing.
+            (cpu::Stop::Sleeping, _) | (cpu::Stop::WaitForInput, Some(_)) => {
                 let ms = emu.idle_ms(8);
                 idle += std::time::Duration::from_millis(ms);
                 std::thread::sleep(std::time::Duration::from_millis(ms));
-            }
-            // Busy: keep running until the window is due for a new frame.
-            (cpu::Stop::StepLimit, Some(p)) if !p.due() => {}
-            (cpu::Stop::StepLimit | cpu::Stop::WaitForInput | cpu::Stop::Sleeping, Some(p)) => {
-                if !p.pump(&mut emu) {
-                    // Host window closed: ask the app to quit, but don't wait forever.
-                    if closing_waits == 0 {
-                        emu.wm.request_close();
-                    }
-                    closing_waits += 1;
-                    if closing_waits > 200 {
-                        break stop;
-                    }
-                }
-                if stop == cpu::Stop::WaitForInput || stop == cpu::Stop::Sleeping {
-                    // Sleep until the next thread or timer is due; at most 8 ms, so the window
-                    // stays responsive.
-                    let ms = emu.idle_ms(8);
-                    idle += std::time::Duration::from_millis(ms);
-                    std::thread::sleep(std::time::Duration::from_millis(ms));
-                }
             }
             _ => break stop,
         }

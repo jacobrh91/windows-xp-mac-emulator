@@ -459,6 +459,24 @@ mod cocoa {
         }
     }
 
+    /// Keep macOS from napping the app (slowing its timers and threads) while its window is
+    /// hidden, on another Space or behind others: the game and its sound must keep going.
+    pub fn keep_awake() {
+        // SAFETY: see module docs; the activity token is kept for the whole run.
+        unsafe {
+            let reason = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, *const c_char) -> Id>(
+                objc_msgSend as *const (),
+            )(send_class(c"NSString"), sel(c"stringWithUTF8String:"), c"Running a game".as_ptr());
+            let info = send_id(send_class(c"NSProcessInfo"), sel(c"processInfo"));
+            // NSActivityUserInitiated | NSActivityLatencyCritical
+            let options: u64 = 0x00FF_FFFF | 0xFF_0000_0000;
+            let token = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, u64, Id) -> Id>(
+                objc_msgSend as *const (),
+            )(info, sel(c"beginActivityWithOptions:reason:"), options, reason);
+            send_id(token, sel(c"retain"));
+        }
+    }
+
     /// Is the window in macOS's own fullscreen?
     pub fn in_native_fullscreen(window: &Window) -> bool {
         // SAFETY: see module docs.
@@ -554,6 +572,7 @@ mod cocoa {
         false
     }
     pub fn toggle_native_fullscreen(_: &Window) {}
+    pub fn keep_awake() {}
     pub fn describe_hit(_: &Window) -> String {
         String::new()
     }
@@ -608,10 +627,76 @@ pub fn window_to_game_stretch(
     (x >= 0.0 && y >= 0.0 && x < game.0 as f32 && y < game.1 as f32).then_some((x as i32, y as i32))
 }
 
+/// What passes between the emulator, on its own thread, and the window, on the main thread.
+/// Neither waits for the other: the window can block (macOS holds up drawing while a Space
+/// switch hides it) and the game, its sound mixer included, carries on.
+#[derive(Default)]
+pub struct Shared {
+    /// The newest picture, replaced by the emulator ~60 times a second.
+    frame: Mutex<Option<Frame>>,
+    /// Input from the window, waiting for the emulator.
+    input: Mutex<Vec<Input>>,
+}
+
+struct Frame {
+    /// The emulated windows' content, cropped to `region`.
+    pixels: Vec<u32>,
+    /// Where that content is on the emulated desktop (None: nothing is showing).
+    region: Option<(i32, i32, u32, u32)>,
+    title: Option<String>,
+}
+
+enum Input {
+    Mouse(u32, i32, i32),
+    /// (virtual key, sided key, extended, down)
+    Key(u32, u32, bool, bool),
+    Char(u32),
+    /// The host window was closed.
+    Close,
+}
+
+impl Shared {
+    /// Emulator side: hand the window the current picture.
+    pub fn publish(&self, emu: &mut Emu) {
+        // Double clicks are timed against the host's real clock.
+        emu.wm.now_ms = emu.wm.now_ms.max(emu.win.elapsed_ms());
+        crate::d3d::d3d8::finish_present(emu, false);
+        let region = emu.wm.content_bounds();
+        let title = emu.wm.windows.iter().find(|w| w.parent == 0 && w.visible).map(|w| w.title.clone());
+        let fb = emu.wm.compose();
+        let (rx, ry, rw, rh) = region.unwrap_or((0, 0, 0, 0));
+        let mut pixels = Vec::with_capacity((rw * rh) as usize);
+        for y in 0..rh {
+            let row = ((ry as u32 + y) * fb.width + rx as u32) as usize;
+            pixels.extend_from_slice(&fb.pixels[row..row + rw as usize]);
+        }
+        *self.frame.lock().unwrap() = Some(Frame { pixels, region, title });
+    }
+
+    /// Emulator side: deliver the window's input. True once the window has been closed.
+    pub fn deliver(&self, emu: &mut Emu) -> bool {
+        let input = std::mem::take(&mut *self.input.lock().unwrap());
+        let mut closed = false;
+        for i in input {
+            match i {
+                Input::Mouse(m, x, y) => emu.wm.post_mouse(m, x, y),
+                Input::Key(vk, side, ext, down) => emu.wm.post_key_ex(vk, side, ext, down),
+                Input::Char(c) => emu.wm.post_char(c),
+                Input::Close => closed = true,
+            }
+        }
+        closed
+    }
+}
+
 pub struct Presenter {
     window: Window,
     chars: Arc<Mutex<Vec<u32>>>,
     left_down: bool,
+    /// Input gathered during a pump, handed to the emulator at its end.
+    out: Vec<Input>,
+    /// The latest picture from the emulator, at `region`'s size.
+    shown: Vec<u32>,
     /// The right and middle buttons, as last sent to the game.
     other_down: [bool; 2],
     /// The left button is down as a Control-click (sent as the right button).
@@ -624,7 +709,6 @@ pub struct Presenter {
     last_pos: (i32, i32),
     /// Top-left of the visible region in emulated-desktop coordinates, and its size.
     region: (i32, i32, u32, u32),
-    buf: Vec<u32>,
     title: String,
     frames: u64,
     last_pump: std::time::Instant,
@@ -637,6 +721,7 @@ pub struct Presenter {
 
 impl Presenter {
     pub fn new(title: &str, fullscreen: bool) -> Result<Presenter, minifb::Error> {
+        cocoa::keep_awake();
         let chars = Arc::new(Mutex::new(Vec::new()));
         let region = (0, 0, 640, 480);
         let window = open(title, (region.2, region.3), &chars)?;
@@ -644,6 +729,8 @@ impl Presenter {
             window,
             chars,
             left_down: false,
+            out: Vec::new(),
+            shown: Vec::new(),
             other_down: [false; 2],
             ctrl_click: false,
             ctrl_click_hold: false,
@@ -651,7 +738,6 @@ impl Presenter {
             modifiers: [false; 6],
             last_pos: (-1, -1),
             region,
-            buf: Vec::new(),
             title: title.to_string(),
             frames: 0,
             last_pump: std::time::Instant::now(),
@@ -661,43 +747,47 @@ impl Presenter {
         })
     }
 
-    /// Draw the emulated windows and forward pending input. The picture is exactly the
-    /// emulated windows' content (no emulated frame), filling the host window. Returns
-    /// false once the host window has been closed.
-    /// Is it time to show a new frame and read input (60 times a second)?
-    pub fn due(&self) -> bool {
-        self.last_pump.elapsed() >= std::time::Duration::from_micros(16_667)
+    /// Time since the last pump.
+    pub fn since_pump(&self) -> std::time::Duration {
+        self.last_pump.elapsed()
     }
 
+
     /// Tell the game about modifier keys that went down or up since last time.
-    fn send_modifiers(&mut self, emu: &mut Emu, now: [bool; 6]) {
+    fn send_modifiers(&mut self, now: [bool; 6]) {
         for (i, (&was, &is)) in self.modifiers.iter().zip(&now).enumerate() {
             if was != is {
                 // (generic key, sided key, extended): VK_SHIFT/VK_LSHIFT, ... right Ctrl and
                 // right Alt are extended keys.
                 let (vk, side, ext) = [(0x10, 0xA0, false), (0x10, 0xA1, false), (0x11, 0xA2, false), (0x11, 0xA3, true), (0x12, 0xA4, false), (0x12, 0xA5, true)][i];
-                emu.wm.post_key_ex(vk, side, ext, is);
+                self.out.push(Input::Key(vk, side, ext, is));
             }
         }
         self.modifiers = now;
     }
 
-    pub fn pump(&mut self, emu: &mut Emu) -> bool {
+    /// Show the emulator's newest picture and pass on pending input. The picture is exactly the
+    /// emulated windows' content (no emulated frame), filling the host window. Returns
+    /// false once the host window has been closed.
+    pub fn pump(&mut self, shared: &Shared) -> bool {
         self.last_pump = std::time::Instant::now();
         self.frames += 1;
         let debug = std::env::var_os("XP_DEBUG_TOGGLE").is_some();
         // Our instant fullscreen, or macOS's own (green button).
         let was_fullscreen = self.fs.is_some() || cocoa::in_native_fullscreen(&self.window);
 
-        let want = emu
-            .wm
-            .content_bounds()
-            .unwrap_or((0, 0, self.region.2, self.region.3));
+        let mut want = self.region;
+        if let Some(f) = shared.frame.lock().unwrap().take() {
+            want = f.region.unwrap_or((0, 0, self.region.2, self.region.3));
+            if f.region.is_some() {
+                self.shown = f.pixels;
+            }
+            if let Some(t) = f.title {
+                self.title = t;
+            }
+        }
         let resized = (want.2, want.3) != (self.region.2, self.region.3);
         self.region = want;
-        if let Some(w) = emu.wm.windows.iter().find(|w| w.parent == 0 && w.visible) {
-            self.title.clone_from(&w.title);
-        }
         // Follow the game window's size by making a fresh host window; never while in
         // fullscreen, where the system owns the size.
         if resized
@@ -717,19 +807,11 @@ impl Presenter {
             }
         }
 
-        // Double clicks are timed against the host's real clock.
-        emu.wm.now_ms = emu.wm.now_ms.max(emu.win.elapsed_ms());
-        crate::d3d::d3d8::finish_present(emu, false);
-        let fb = emu.wm.compose();
-        self.buf.clear();
-        for y in 0..rh {
-            let row = ((ry as u32 + y) * fb.width + rx as u32) as usize;
-            self.buf
-                .extend_from_slice(&fb.pixels[row..row + rw as usize]);
+        if self.shown.len() == (rw * rh) as usize && rw > 0 {
+            let _ = self.window.update_with_buffer(&self.shown, rw as usize, rh as usize);
+        } else {
+            self.window.update();
         }
-        let _ = self
-            .window
-            .update_with_buffer(&self.buf, rw as usize, rh as usize);
 
         // Prefer macOS's own mouse position relative to the drawing view; fall back to
         // minifb's where that is unavailable.
@@ -806,7 +888,7 @@ impl Presenter {
             let pos = (mx + rx, my + ry);
             if pos != self.last_pos {
                 self.last_pos = pos;
-                emu.wm.post_mouse(WM_MOUSEMOVE, pos.0, pos.1);
+                self.out.push(Input::Mouse(WM_MOUSEMOVE, pos.0, pos.1));
             }
             let down = self.window.get_mouse_down(MouseButton::Left);
             if down != self.left_down {
@@ -817,17 +899,13 @@ impl Presenter {
                     self.ctrl_click = true;
                     now[2] = false;
                     now[3] = false;
-                    self.send_modifiers(emu, now);
-                    emu.wm.post_mouse(0x0204, pos.0, pos.1); // WM_RBUTTONDOWN
+                    self.send_modifiers(now);
+                    self.out.push(Input::Mouse(0x0204, pos.0, pos.1)); // WM_RBUTTONDOWN
                 } else if !down && self.ctrl_click {
                     self.ctrl_click = false;
-                    emu.wm.post_mouse(0x0205, pos.0, pos.1); // WM_RBUTTONUP
+                    self.out.push(Input::Mouse(0x0205, pos.0, pos.1)); // WM_RBUTTONUP
                 } else {
-                    emu.wm.post_mouse(
-                        if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP },
-                        pos.0,
-                        pos.1,
-                    );
+                    self.out.push(Input::Mouse(if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP }, pos.0, pos.1));
                 }
             }
             // Right and middle buttons (WM_RBUTTONDOWN/UP, WM_MBUTTONDOWN/UP).
@@ -835,13 +913,13 @@ impl Presenter {
                 let down = self.window.get_mouse_down(button);
                 if down != self.other_down[i] {
                     self.other_down[i] = down;
-                    emu.wm.post_mouse(if down { msg } else { msg + 1 }, pos.0, pos.1);
+                    self.out.push(Input::Mouse(if down { msg } else { msg + 1 }, pos.0, pos.1));
                 }
             }
         } else if self.left_down && !self.window.get_mouse_down(MouseButton::Left) {
             self.left_down = false; // released outside the picture: don't leave a drag stuck
             let up = if std::mem::take(&mut self.ctrl_click) { 0x0205 } else { WM_LBUTTONUP };
-            emu.wm.post_mouse(up, self.last_pos.0, self.last_pos.1);
+            self.out.push(Input::Mouse(up, self.last_pos.0, self.last_pos.1));
         }
 
         // Option+Enter toggles macOS fullscreen and is not forwarded to the game.
@@ -865,7 +943,7 @@ impl Presenter {
             cocoa::toggle_native_fullscreen(&self.window);
         }
         if std::env::var_os("XP_FS_DEBUG").is_some() && self.frames % 120 == 0 {
-            eprintln!("[present] frame {} fullscreen={} {:?} modifiers {:?} game ctrl/alt/shift {} {} {}", self.frames, was_fullscreen, cocoa::presentation_state(&self.window), cocoa::modifiers(), emu.wm.key_down[0x11], emu.wm.key_down[0x12], emu.wm.key_down[0x10]);
+            eprintln!("[present] frame {} fullscreen={} {:?} modifiers {:?} sent {:?}", self.frames, was_fullscreen, cocoa::presentation_state(&self.window), cocoa::modifiers(), self.modifiers);
         }
         if debug && self.frames == 360 {
             cocoa::debug_resize(&self.window, 900.0, 618.0);
@@ -880,19 +958,19 @@ impl Presenter {
                 cocoa::describe(&self.window)
             );
         }
-        self.send_modifiers(emu, now);
+        self.send_modifiers(now);
         for key in self.window.get_keys_pressed(KeyRepeat::Yes) {
             // Command shortcuts are the Mac's (Command-Tab, Command-Q): not keys for the game.
             if (toggle && key == Key::Enter) || command {
                 continue;
             }
             if let Some((vk, ext)) = virtual_key(key) {
-                emu.wm.post_key_ex(vk, 0, ext, true);
+                self.out.push(Input::Key(vk, 0, ext, true));
             }
         }
         for key in self.window.get_keys_released() {
             if let Some((vk, ext)) = virtual_key(key) {
-                emu.wm.post_key_ex(vk, 0, ext, false);
+                self.out.push(Input::Key(vk, 0, ext, false));
             }
         }
         let typed: Vec<u32> = self
@@ -900,7 +978,7 @@ impl Presenter {
             .lock()
             .map(|mut v| std::mem::take(&mut *v))
             .unwrap_or_default();
-        let ctrl = emu.wm.key_down[0x11];
+        let ctrl = self.modifiers[2] || self.modifiers[3];
         for c in typed {
             if command {
                 continue;
@@ -909,13 +987,18 @@ impl Presenter {
             // other keys.
             if ctrl {
                 if let Some(l) = char::from_u32(c).filter(char::is_ascii_alphabetic) {
-                    emu.wm.post_char(l.to_ascii_uppercase() as u32 & 0x1F);
+                    self.out.push(Input::Char(l.to_ascii_uppercase() as u32 & 0x1F));
                 }
                 continue;
             }
-            emu.wm.post_char(c);
+            self.out.push(Input::Char(c));
         }
-        self.window.is_open()
+        let open = self.window.is_open();
+        if !open {
+            self.out.push(Input::Close);
+        }
+        shared.input.lock().unwrap().append(&mut self.out);
+        open
     }
 }
 
