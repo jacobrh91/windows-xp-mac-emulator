@@ -13,8 +13,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
     let r: (usize, Handler) = match name {
         "__set_app_type" | "__setusermatherr" | "_cexit" | "_c_exit" => (CDECL | 1, |_, _| Ok(0)),
         "_adjust_fdiv_noop" => (CDECL, |_, _| Ok(0)),
-        "__p__fmode" => (CDECL, |e, _| Ok(data_addr(e, "_fmode")?)),
-        "__p__commode" => (CDECL, |e, _| Ok(data_addr(e, "_commode")?)),
+        "__p__fmode" => (CDECL, |e, _| data_addr(e, "_fmode")),
+        "__p__commode" => (CDECL, |e, _| data_addr(e, "_commode")),
         "_controlfp" => (CDECL | 2, |_, _| Ok(0x0009_001F)),
         "_initterm" => (CDECL | 2, initterm),
         "__getmainargs" => (CDECL | 5, get_main_args),

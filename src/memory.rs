@@ -17,13 +17,41 @@ pub struct Memory {
     /// Whether the most recent failed access was a write (for access-violation reports).
     pub fault_write: std::cell::Cell<bool>,
     watch_hits: Vec<(u32, u32, u32)>,
+    /// Pages holding instructions the CPU has cached in decoded form (non-zero = yes).
+    code_pages: Vec<u8>,
+    /// Set when such a page was written, mapped or unmapped: the CPU's cache is stale.
+    pub code_dirty: bool,
 }
 
 impl Memory {
     pub fn new() -> Self {
         let mut pages = Vec::new();
         pages.resize_with(PAGE_COUNT, || None);
-        Memory { pages, watch: None, fault_write: std::cell::Cell::new(false), watch_hits: Vec::new() }
+        Memory { pages, watch: None, fault_write: std::cell::Cell::new(false), watch_hits: Vec::new(), code_pages: vec![0; PAGE_COUNT], code_dirty: false }
+    }
+
+    /// Remember that `[addr, addr + len)` holds cached instructions.
+    pub fn note_code(&mut self, addr: u32, len: u32) {
+        self.code_pages[(addr >> PAGE_BITS) as usize] = 1;
+        self.code_pages[(addr.wrapping_add(len - 1) >> PAGE_BITS) as usize] = 1;
+    }
+
+    /// The CPU dropped its cache: no page holds cached instructions any more.
+    pub fn forget_code_pages(&mut self) {
+        self.code_pages.fill(0);
+        self.code_dirty = false;
+    }
+
+    /// A write to `[addr, addr + len)` is about to happen: does it touch cached code?
+    #[inline(always)]
+    fn check_code(&mut self, addr: u32, len: u32) {
+        // SAFETY: both indexes are below PAGE_COUNT (a u32 address shifted by PAGE_BITS).
+        let (a, b) = unsafe {
+            (*self.code_pages.get_unchecked((addr >> PAGE_BITS) as usize), *self.code_pages.get_unchecked((addr.wrapping_add(len.max(1) - 1) >> PAGE_BITS) as usize))
+        };
+        if a | b != 0 {
+            self.code_dirty = true;
+        }
     }
 
     /// Make `[addr, addr + size)` accessible (zero-filled). Already-mapped pages are kept.
@@ -43,6 +71,9 @@ impl Memory {
         for p in first..=last.min(PAGE_COUNT - 1) {
             if self.pages[p].is_none() {
                 self.pages[p] = Some(Box::new([0; PAGE_SIZE]));
+                if self.code_pages[p] != 0 {
+                    self.code_dirty = true;
+                }
             }
         }
     }
@@ -56,6 +87,9 @@ impl Memory {
         let last = (((addr as u64) + (size as u64) - 1) >> PAGE_BITS) as usize;
         for p in first..=last.min(PAGE_COUNT - 1) {
             self.pages[p] = None;
+            if self.code_pages[p] != 0 {
+                self.code_dirty = true;
+            }
         }
     }
 
@@ -136,6 +170,7 @@ impl Memory {
 
     #[inline(always)]
     pub fn write64(&mut self, addr: u32, v: u64) -> Result<(), Fault> {
+        self.check_code(addr, 8);
         let off = (addr as usize) & (PAGE_SIZE - 1);
         if off + 8 <= PAGE_SIZE && self.watch.is_none() {
             self.page_mut(addr)?[off..off + 8].copy_from_slice(&v.to_le_bytes());
@@ -148,15 +183,15 @@ impl Memory {
     #[cold]
     #[inline(never)]
     fn note_watch(&mut self, addr: u32, n: u32, val: u32) {
-        if let Some(w) = self.watch {
-            if addr <= w && w < addr.wrapping_add(n) {
+        if let Some(w) = self.watch
+            && addr <= w && w < addr.wrapping_add(n) {
                 self.watch_hits.push((addr, n, val));
             }
-        }
     }
 
     #[inline(always)]
     pub fn write(&mut self, addr: u32, n: u32, val: u32) -> Result<(), Fault> {
+        self.check_code(addr, n);
         if self.watch.is_some() {
             self.note_watch(addr, n, val);
         }
@@ -220,6 +255,11 @@ impl Memory {
     }
 
     pub fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
+        if !data.is_empty() {
+            for p in (addr >> PAGE_BITS)..=(addr.wrapping_add(data.len() as u32 - 1) >> PAGE_BITS) {
+                self.check_code(p << PAGE_BITS, 1);
+            }
+        }
         if self.watch.is_none() {
             // Whole pages at a time.
             let mut done = 0usize;

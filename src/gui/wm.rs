@@ -743,8 +743,8 @@ impl WindowManager {
             let bar = self.window(hwnd).and_then(|w| self.menus.get(&w.menu));
             if let Some(bar) = bar {
                 let layout = bar_layout(font, bar);
-                if let Some(item) = bar.items.get(index) {
-                    if let Some(sub) = self.menus.get(&item.submenu) {
+                if let Some(item) = bar.items.get(index)
+                    && let Some(sub) = self.menus.get(&item.submenu) {
                         let (pw, rows) = popup_layout(font, sub);
                         let (px, py) = (ox + layout[index].0, oy);
                         if x >= px && x < px + pw {
@@ -761,7 +761,6 @@ impl WindowManager {
                             }
                         }
                     }
-                }
                 // Clicking another bar title switches; anywhere else just closes.
                 let bar_y = oy - MENU_H;
                 if y >= bar_y && y < oy {
@@ -1072,26 +1071,23 @@ impl WindowManager {
                 }
             }
             self.desktop.blit(&w.surface, ox, oy);
-            if w.parent == 0 && w.menu != 0 {
-                if let Some(menu) = self.menus.get(&w.menu) {
+            if w.parent == 0 && w.menu != 0
+                && let Some(menu) = self.menus.get(&w.menu) {
                     let open = self.open_menu.as_ref().filter(|o| o.hwnd == hwnd).map(|o| o.index);
                     let cw = w.surface.width as i32;
                     draw_menu_bar(&mut self.desktop, &font, menu, ox, oy - MENU_H, cw, open);
                 }
-            }
         }
-        if let Some(om) = &self.open_menu {
-            if let (Some((ox, oy)), Some(w)) = (self.client_origin(om.hwnd), self.window(om.hwnd)) {
+        if let Some(om) = &self.open_menu
+            && let (Some((ox, oy)), Some(w)) = (self.client_origin(om.hwnd), self.window(om.hwnd)) {
                 let bar = self.menus.get(&w.menu);
                 let item = bar.and_then(|b| b.items.get(om.index));
-                if let (Some(bar), Some(item)) = (bar, item) {
-                    if let Some(sub) = self.menus.get(&item.submenu) {
+                if let (Some(bar), Some(item)) = (bar, item)
+                    && let Some(sub) = self.menus.get(&item.submenu) {
                         let x0 = bar_layout(&font, bar)[om.index].0;
                         draw_popup(&mut self.desktop, &font, sub, ox + x0, oy);
                     }
-                }
             }
-        }
         self.font = Some(font);
         &self.desktop
     }
@@ -1851,7 +1847,7 @@ mod tests {
         for c in "Sans".encode_utf16().chain([0]) {
             t.extend_from_slice(&c.to_le_bytes());
         }
-        while t.len() % 4 != 0 {
+        while !t.len().is_multiple_of(4) {
             t.push(0);
         }
         t.extend_from_slice(&0x5001_0001u32.to_le_bytes()); // item style

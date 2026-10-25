@@ -141,13 +141,11 @@ impl Emu {
             let esp = if i == self.current { self.regs[4] } else { t.cpu.regs[4] };
             let mut frames = Vec::new();
             for k in 0..256u32 {
-                if let Ok(v) = self.mem.read(esp.wrapping_add(4 * k), 4) {
-                    if let Some(loc) = self.win.locate(v) {
-                        if !loc.starts_with("0x") && frames.len() < 10 {
+                if let Ok(v) = self.mem.read(esp.wrapping_add(4 * k), 4)
+                    && let Some(loc) = self.win.locate(v)
+                        && !loc.starts_with("0x") && frames.len() < 10 {
                             frames.push(loc);
                         }
-                    }
-                }
             }
             eprintln!("[thread {}]   stack: {}", t.id, frames.join(" "));
             eprintln!("[thread {}] {:?} block={:?} at {} wait={:?}{}", t.id, t.state, t.block, at, pending, if i == self.current { " (current)" } else { "" });
@@ -287,11 +285,10 @@ impl Emu {
             return None;
         }
         let key = (self.eip, self.regs[ESP]);
-        if let Some((e, s, d)) = self.pending_wait {
-            if (e, s) == key {
+        if let Some((e, s, d)) = self.pending_wait
+            && (e, s) == key {
                 return Some(d);
             }
-        }
         let d = self.win.now_ms() + ms as u64;
         self.pending_wait = Some((key.0, key.1, d));
         Some(d)
@@ -384,11 +381,10 @@ fn cs_try_enter(e: &mut Emu, cs: u32) -> Res<bool> {
 }
 
 pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
-    if dll == "kernel32" {
-        if let Some(r) = lookup_suspend(name) {
+    if dll == "kernel32"
+        && let Some(r) = lookup_suspend(name) {
             return Some(r);
         }
-    }
     let r: (usize, Handler) = match (dll, name) {
         ("__emu", "thread_exit") => (0, |e, _| {
             let code = e.regs[EAX];

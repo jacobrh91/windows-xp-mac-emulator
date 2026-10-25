@@ -49,7 +49,7 @@ fn put16(v: &mut Vec<u8>, x: u16) {
 }
 
 fn pad_to(v: &mut Vec<u8>, align: usize) {
-    while v.len() % align != 0 {
+    while !v.len().is_multiple_of(align) {
         v.push(0);
     }
 }

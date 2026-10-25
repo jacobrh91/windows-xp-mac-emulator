@@ -511,11 +511,10 @@ fn release(e: &mut Emu, a: &Args) -> Res<u32> {
                 for s in &t.surfaces {
                     e.win.d3d.objects.remove(s);
                 }
-                if !levels_in_use {
-                    if let Some(l) = t.levels.first() {
+                if !levels_in_use
+                    && let Some(l) = t.levels.first() {
                         e.free_virtual(l.ptr);
                     }
-                }
             }
             Some(Obj::Surface(sf)) if sf.kind != SurfaceKind::TextureLevel && sf.ptr != 0 => {
                 e.free_virtual(sf.ptr);
@@ -573,7 +572,7 @@ fn d3d_method(method: &str) -> Handler {
                 return Ok(D3DERR_INVALIDCALL);
             }
             let (w, h) = MODES[i / 2];
-            let fmt = if i % 2 == 0 { FMT_X8R8G8B8 } else { FMT_R5G6B5 };
+            let fmt = if i.is_multiple_of(2) { FMT_X8R8G8B8 } else { FMT_R5G6B5 };
             for (k, v) in [w, h, 60, fmt].iter().enumerate() {
                 e.mem.write(a[3] + 4 * k as u32, 4, *v)?;
             }
@@ -895,14 +894,13 @@ fn surface_method(method: &str) -> Handler {
                         o.pitch = s.pitch;
                     }
                 }
-                if s.kind == SurfaceKind::BackBuffer {
-                    if let Some(Some(())) = Some(with_device(e, |e, d| {
+                if s.kind == SurfaceKind::BackBuffer
+                    && let Some(Some(())) = Some(with_device(e, |e, d| {
                         for (i, px) in d.target.color.iter().enumerate() {
                             e.mem.write(s.ptr + 4 * i as u32, 4, *px)?;
                         }
                         Ok(())
                     })?) {}
-                }
             }
             let lv = Level { ptr: s.ptr, w: s.w, h: s.h, pitch: s.pitch };
             let rect = if a[2] != 0 { Some((e.mem.read(a[2], 4)? as i32, e.mem.read(a[2] + 4, 4)? as i32)) } else { None };
@@ -1260,11 +1258,10 @@ fn device_method(method: &str) -> Handler {
         },
         "SetTextureStageState" => |e, a| {
             with_device(e, |_, d| {
-                if let Some(stage) = d.ts.get_mut(a[1] as usize) {
-                    if let Some(slot) = stage.get_mut(a[2] as usize) {
+                if let Some(stage) = d.ts.get_mut(a[1] as usize)
+                    && let Some(slot) = stage.get_mut(a[2] as usize) {
                         *slot = a[3];
                     }
-                }
                 if let Some(rec) = d.recording.as_mut() {
                     rec.ts.push((a[1], a[2], a[3]));
                 }
@@ -1645,13 +1642,11 @@ fn clear(e: &mut Emu, a: &Args) -> Res<u32> {
 
 /// Bring the CPU copy of the back buffer up to date with what the GPU has drawn.
 fn sync_back_buffer(e: &mut Emu) {
-    if let Some(d) = e.win.d3d.dev.as_mut() {
-        if let Some(g) = d.gpu.as_mut() {
-            if d.target.color.len() == (g.w * g.h) as usize {
+    if let Some(d) = e.win.d3d.dev.as_mut()
+        && let Some(g) = d.gpu.as_mut()
+            && d.target.color.len() == (g.w * g.h) as usize {
                 g.read_color(&mut d.target.color);
             }
-        }
-    }
 }
 
 /// The texture a texture or one of its level surfaces belongs to has new contents.

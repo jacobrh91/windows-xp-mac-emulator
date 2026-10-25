@@ -352,11 +352,10 @@ impl Vfs {
             }
         } else {
             for dot in [".", ".."] {
-                if wildcard_match(pat, dot) {
-                    if let Some(e) = Self::entry(&host_dir, dot.to_string()) {
+                if wildcard_match(pat, dot)
+                    && let Some(e) = Self::entry(&host_dir, dot.to_string()) {
                         entries.push(e);
                     }
-                }
             }
             let mut found: Vec<FindEntry> = fs::read_dir(&host_dir)
                 .map_err(|_| ERROR_PATH_NOT_FOUND)?

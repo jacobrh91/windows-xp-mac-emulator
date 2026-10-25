@@ -129,7 +129,7 @@ impl Mp3Stream {
     }
 
     fn reset_decoder(&mut self) {
-        self.dec = Box::new(Decoder::new());
+        *self.dec = Decoder::new();
         self.pcm.clear();
         self.pcm_used = 0;
     }

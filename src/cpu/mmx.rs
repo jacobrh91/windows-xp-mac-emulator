@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn compares_and_logic() {
         assert_eq!(binary(0x74, 0x0102, 0x0102), Some(u64::MAX), "every byte lane equal");
-        assert_eq!(binary(0x74, 0x0102, 0x0103), Some(u64::MAX & !0xFF), "only the low byte differs");
+        assert_eq!(binary(0x74, 0x0102, 0x0103), Some(!0xFF), "only the low byte differs");
         assert_eq!(binary(0x64, 5, 3).unwrap() & 0xFF, 0xFF, "pcmpgtb: 5 > 3");
         assert_eq!(binary(0x64, 0x80, 0x01).unwrap() & 0xFF, 0, "pcmpgtb is signed: -128 > 1 is false");
         assert_eq!(binary(0xDF, 0xF0, 0xFF), Some(0x0F), "pandn: !dst & src");

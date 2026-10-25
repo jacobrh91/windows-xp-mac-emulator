@@ -371,13 +371,11 @@ impl Win32 {
         let exe_dir = self.exe_path.rsplit_once('\\').map_or(r"C:\", |(d, _)| d).to_ascii_lowercase();
         // A path (relative to the current directory, or absolute) is resolved through the
         // sandboxed file system the game sees.
-        if file.contains(['\\', '/', ':']) {
-            if let Ok(host) = self.vfs.resolve(&file) {
-                if host.is_file() {
+        if file.contains(['\\', '/', ':'])
+            && let Ok(host) = self.vfs.resolve(&file)
+                && host.is_file() {
                     return std::fs::read(host).ok().map(|b| (b, self.vfs.normalize(&file).to_ascii_lowercase()));
                 }
-            }
-        }
         let lower = file.rsplit(['\\', '/']).next().unwrap_or(&file).to_ascii_lowercase();
         let guest_path = format!("{exe_dir}\\{lower}");
         if let Some(b) = self.virtual_files.get(&lower) {
@@ -391,11 +389,10 @@ impl Win32 {
             }
         }
         // Finally, a bare name in the program's current directory.
-        if let Ok(host) = self.vfs.resolve(&lower) {
-            if host.is_file() {
+        if let Ok(host) = self.vfs.resolve(&lower)
+            && host.is_file() {
                 return std::fs::read(host).ok().map(|b| (b, self.vfs.normalize(&lower).to_ascii_lowercase()));
             }
-        }
         None
     }
 }

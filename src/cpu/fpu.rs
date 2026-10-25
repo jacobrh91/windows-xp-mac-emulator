@@ -161,7 +161,7 @@ impl Emu {
         }
     }
 
-    fn fpu_mem(&mut self, group: usize, op: usize, addr: u32, start: u32) -> Res<()> {
+    pub(crate) fn fpu_mem(&mut self, group: usize, op: usize, addr: u32, start: u32) -> Res<()> {
         match (group, op) {
             // arithmetic with a memory operand: float32 / float64 / int32 / int16
             (0, _) => {
@@ -275,7 +275,7 @@ impl Emu {
         self.eflags |= (zf as u32 * ZF) | (pf as u32 * PF) | (cf as u32 * CF);
     }
 
-    fn fpu_reg(&mut self, group: usize, op: usize, i: usize, start: u32) -> Res<()> {
+    pub(crate) fn fpu_reg(&mut self, group: usize, op: usize, i: usize, start: u32) -> Res<()> {
         match (group, op) {
             // D8: st0 = st0 op sti
             (0, _) => {
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn extended_precision_roundtrip() {
-        for v in [3.141592653589793, -0.5, 1e300, 1e-300, 0.0, 123456789.0] {
+        for v in [std::f64::consts::PI, -0.5, 1e300, 1e-300, 0.0, 123456789.0] {
             let e = run(
                 |e| write_f64(e, A, v),
                 &[

@@ -316,7 +316,7 @@ fn enum_display_settings(e: &mut Emu, a: &Args) -> Res<u32> {
         _ => return Ok(0),
     };
     let dm = a[2];
-    e.mem.write_bytes(dm, &vec![0; 156])?;
+    e.mem.write_bytes(dm, &[0; 156])?;
     e.mem.write(dm + 36, 2, 156)?; // dmSize
     e.mem.write(dm + 40, 4, 0x005C_0000)?; // dmFields: bpp, width, height, frequency
     e.mem.write(dm + 104, 4, 32)?;

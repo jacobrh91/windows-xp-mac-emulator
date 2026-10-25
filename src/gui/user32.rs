@@ -11,11 +11,10 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "GetMessage", "PeekMessage", "DispatchMessage", "PostMessage", "SendMessage",
         "DefWindowProc", "LoadCursor", "LoadIcon",
     ];
-    if let Some(base) = name.strip_suffix('W') {
-        if SAME_AS_A.contains(&base) {
+    if let Some(base) = name.strip_suffix('W')
+        && SAME_AS_A.contains(&base) {
             return lookup(dll, &format!("{base}A"));
         }
-    }
     let r: (usize, Handler) = match (dll, name) {
         // ---- window classes & lifetime ----
         ("user32", "RegisterClassA") => (1, |e, a| register_class(e, a[0], false, false)),
@@ -425,11 +424,10 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "IsDlgButtonChecked") => (2, |e, a| Ok(dlg_item(e, a[0], a[1]).and_then(|h| e.wm.window(h)).map_or(0, |w| w.check))),
         ("user32", "CheckRadioButton") => (4, |e, a| {
             for id in a[1]..=a[2] {
-                if let Some(h) = dlg_item(e, a[0], id) {
-                    if let Some(w) = e.wm.window_mut(h) {
+                if let Some(h) = dlg_item(e, a[0], id)
+                    && let Some(w) = e.wm.window_mut(h) {
                         w.check = (id == a[3]) as u32;
                     }
-                }
             }
             Ok(1)
         }),
@@ -590,13 +588,11 @@ fn create_window(e: &mut Emu, a: &Args, wide: bool) -> Res<u32> {
     let hwnd = e.wm.add_window(&class, &title, style, a[0], (a[4], a[5], a[6], a[7]), parent, id);
     if style & WS_CHILD == 0 {
         let mut menu = if e.wm.menus.contains_key(&a[9]) { a[9] } else { 0 };
-        if menu == 0 {
-            if let Some((name, wide)) = e.wm.classes.get(&class.to_ascii_lowercase()).map(|c| (c.menu_name, c.wide)).filter(|c| c.0 != 0) {
-                if let Some(bytes) = crate::win32::kernel32_extra::resource_bytes(e, a[10], RT_MENU, name, wide)? {
+        if menu == 0
+            && let Some((name, wide)) = e.wm.classes.get(&class.to_ascii_lowercase()).map(|c| (c.menu_name, c.wide)).filter(|c| c.0 != 0)
+                && let Some(bytes) = crate::win32::kernel32_extra::resource_bytes(e, a[10], RT_MENU, name, wide)? {
                     menu = e.wm.load_menu_template(&bytes).unwrap_or(0);
                 }
-            }
-        }
         e.wm.set_menu(hwnd, menu);
     }
 
@@ -723,13 +719,12 @@ fn show_window(e: &mut Emu, hwnd: u32, show: bool) -> Res<u32> {
     if was != show {
         send_message(e, hwnd, WM_SHOWWINDOW, show as u32, 0)?;
     }
-    if first_geometry {
-        if let (Some((cw, ch)), Some(w)) = (e.wm.client_size(hwnd), e.wm.window(hwnd)) {
+    if first_geometry
+        && let (Some((cw, ch)), Some(w)) = (e.wm.client_size(hwnd), e.wm.window(hwnd)) {
             let (x, y) = (w.x, w.y);
             send_message(e, hwnd, WM_SIZE, 0, ((ch as u32) << 16) | (cw as u32 & 0xffff))?;
             send_message(e, hwnd, WM_MOVE, 0, ((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff))?;
         }
-    }
     Ok(was as u32)
 }
 
@@ -737,11 +732,10 @@ fn move_window(e: &mut Emu, hwnd: u32, x: i32, y: i32, w: i32, h: i32) -> Res<()
     let Some(win) = e.wm.window(hwnd) else { return Ok(()) };
     let (moved, resized) = ((win.x, win.y) != (x, y), (win.w, win.h) != (w, h));
     e.wm.set_geometry(hwnd, x, y, w, h);
-    if resized {
-        if let Some((cw, ch)) = e.wm.client_size(hwnd) {
+    if resized
+        && let Some((cw, ch)) = e.wm.client_size(hwnd) {
             send_message(e, hwnd, WM_SIZE, 0, ((ch as u32) << 16) | cw as u32 & 0xffff)?;
         }
-    }
     if moved {
         send_message(e, hwnd, WM_MOVE, 0, ((y as u32 & 0xffff) << 16) | x as u32 & 0xffff)?;
     }
@@ -1150,11 +1144,10 @@ fn modal_dispatch(e: &mut Emu, dlg: u32, m: Msg) -> Res<()> {
         _ if m.hwnd == 0 => {}
         _ => {
             send_message(e, m.hwnd, m.message, m.wparam, m.lparam)?;
-            if m.message == WM_PAINT {
-                if let Some(win) = e.wm.window_mut(m.hwnd) {
+            if m.message == WM_PAINT
+                && let Some(win) = e.wm.window_mut(m.hwnd) {
                     win.needs_paint = false;
                 }
-            }
         }
     }
     Ok(())

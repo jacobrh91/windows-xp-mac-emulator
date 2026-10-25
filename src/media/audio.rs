@@ -412,12 +412,11 @@ fn wave_position(e: &mut Emu, a: &Args) -> Res<u32> {
     let now = e.win.now_ms();
     let Some(w) = e.win.audio.waves.get(&a[0]) else { return Ok(MMSYSERR_INVALHANDLE) };
     let mut bytes = w.played_bytes;
-    if let (Some(q), None) = (w.queue.front(), w.paused_at) {
-        if now > q.start_ms {
+    if let (Some(q), None) = (w.queue.front(), w.paused_at)
+        && now > q.start_ms {
             let (elapsed, total) = ((now - q.start_ms).min(q.done_ms - q.start_ms), (q.done_ms - q.start_ms).max(1));
             bytes += q.len as u64 * elapsed / total;
         }
-    }
     let f = w.format;
     let (kind, value) = match e.mem.read(a[1], 4)? {
         1 => (1, (bytes * 1000 / f.avg_bytes as u64) as u32),                     // TIME_MS

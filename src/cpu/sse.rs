@@ -167,7 +167,7 @@ impl Emu {
                 let m = self.modrm(p)?;
                 let to_int = |x: f32| -> u32 {
                     let x = if opc == 0x2C { x.trunc() } else { x.round_ties_even() };
-                    if x.is_nan() || x >= 2147483648.0 || x < -2147483648.0 { 0x8000_0000 } else { x as i32 as u32 }
+                    if x.is_nan() || !(-2147483648.0..2147483648.0).contains(&x) { 0x8000_0000 } else { x as i32 as u32 }
                 };
                 if scalar {
                     let v = f(self.read_scalar(m.rm)?);

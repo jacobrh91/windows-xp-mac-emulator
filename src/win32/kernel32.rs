@@ -795,13 +795,11 @@ pub fn ini_lookup(text: &str, app: &str, key: &str) -> Option<String> {
         }
         if let Some(sec) = line.strip_prefix('[').and_then(|l| l.split_once(']')) {
             in_section = sec.0.trim().eq_ignore_ascii_case(app);
-        } else if in_section {
-            if let Some((k, v)) = line.split_once('=') {
-                if k.trim().eq_ignore_ascii_case(key) {
+        } else if in_section
+            && let Some((k, v)) = line.split_once('=')
+                && k.trim().eq_ignore_ascii_case(key) {
                     return Some(v.trim().to_string());
                 }
-            }
-        }
     }
     None
 }

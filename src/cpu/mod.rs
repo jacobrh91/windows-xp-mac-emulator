@@ -2,6 +2,7 @@
 //! `mmx` and SSE in `sse`.
 
 pub mod fpu;
+pub(crate) mod icache;
 pub mod mmx;
 pub mod sse;
 
@@ -109,7 +110,7 @@ const PARITY: [u8; 256] = {
     let mut t = [0u8; 256];
     let mut i = 0;
     while i < 256 {
-        t[i] = ((i as u32).count_ones() % 2 == 0) as u8;
+        t[i] = (i as u32).count_ones().is_multiple_of(2) as u8;
         i += 1;
     }
     t
@@ -123,6 +124,9 @@ pub struct Emu {
     pub regs: [u32; 8],
     pub eip: u32,
     pub eflags: u32,
+    /// Decoded instructions (see `icache`), used unless XP_NO_ICACHE is set.
+    pub(crate) icache: icache::ICache,
+    pub(crate) icache_on: bool,
     pub fs_base: u32,
     pub mem: Memory,
     pub win: Win32,
@@ -165,6 +169,8 @@ impl Emu {
             regs: [0; 8],
             eip: 0,
             eflags: 2,
+            icache: icache::ICache::new(),
+            icache_on: std::env::var_os("XP_NO_ICACHE").is_none(),
             fs_base: 0,
             mem: Memory::new(),
             win,
@@ -240,13 +246,11 @@ impl Emu {
             // Timers and audio buffers are serviced every couple of thousand instructions.
             if self.steps.wrapping_sub(self.last_pump) >= 0x800 {
                 self.last_pump = self.steps;
-                if self.win.audio.active() {
-                    if let Err(stop) = self.pump_devices() {
-                        if let Some(stop) = self.route_stop(stop) {
+                if self.win.audio.active()
+                    && let Err(stop) = self.pump_devices()
+                        && let Some(stop) = self.route_stop(stop) {
                             return stop;
                         }
-                    }
-                }
             }
             // Run a batch of instructions; the bookkeeping above and below is per batch.
             let multi = self.threads.len() > 1;
@@ -410,14 +414,14 @@ impl Emu {
 
     #[inline(always)]
     fn set_szp(&mut self, r: u32, bits: u32) {
-        let f = ((r == 0) as u32) * ZF | ((r & sign_bit(bits) != 0) as u32) * SF | (PARITY[(r & 0xFF) as usize] as u32) * PF;
+        let f = (((r == 0) as u32) * ZF) | (((r & sign_bit(bits) != 0) as u32) * SF) | ((PARITY[(r & 0xFF) as usize] as u32) * PF);
         self.eflags = (self.eflags & !(ZF | SF | PF)) | f;
     }
 
     /// Set all of CF, OF, ZF, SF and PF at once (the arithmetic and logic instructions).
     #[inline(always)]
     fn set_arith_flags(&mut self, r: u32, bits: u32, cf: bool, of: bool) {
-        let f = (cf as u32) * CF | (of as u32) * OF | ((r == 0) as u32) * ZF | ((r & sign_bit(bits) != 0) as u32) * SF | (PARITY[(r & 0xFF) as usize] as u32) * PF;
+        let f = ((cf as u32) * CF) | ((of as u32) * OF) | (((r == 0) as u32) * ZF) | (((r & sign_bit(bits) != 0) as u32) * SF) | ((PARITY[(r & 0xFF) as usize] as u32) * PF);
         self.eflags = (self.eflags & !(CF | OF | ZF | SF | PF)) | f;
     }
 
@@ -554,7 +558,7 @@ impl Emu {
             }
         }
         let saved = (self.regs, self.eflags);
-        let r = self.step_decoded(start);
+        let r = if self.icache_on { self.step_cached(start) } else { self.step_decoded(start) };
         if self.mem.watch.is_some() {
             for (addr, n, val) in self.mem.take_watch_hits() {
                 let loc = self.win.locate(start).unwrap_or_else(|| format!("{start:#x}"));
@@ -1198,7 +1202,7 @@ impl Emu {
             0xA3 | 0xAB | 0xB3 | 0xBB => {
                 let m = self.modrm(&p)?;
                 let bit = self.get_reg(m.reg, bits);
-                self.bit_test(m.rm, bit, bits, ((opc >> 3) & 3) as u8, true)?;
+                self.bit_test(m.rm, bit, bits, (opc >> 3) & 3, true)?;
             }
             // group 8: bt/bts/btr/btc  r/m, imm8
             0xBA => {

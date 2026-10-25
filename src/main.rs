@@ -135,21 +135,27 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         }).collect())
         .unwrap_or_default();
     clicks.reverse();
+    // XP_KEYS=<secs>:<virtual key>,...  scripted key presses (27 is Esc).
+    let mut keys: Vec<(u64, u32)> = env::var("XP_KEYS")
+        .map(|v| v.split(',').filter_map(|k| {
+            let (t, vk) = k.split_once(':')?;
+            Some((t.trim().parse().ok()?, vk.trim().parse().ok()?))
+        }).collect())
+        .unwrap_or_default();
+    keys.reverse();
     let stop = loop {
         let stop = emu.run(1_000_000);
-        if let Some(s) = env::var("XP_STOP_AFTER").ok().and_then(|v| v.parse::<u64>().ok()) {
-            if started.elapsed().as_secs() >= s {
+        if let Some(s) = env::var("XP_STOP_AFTER").ok().and_then(|v| v.parse::<u64>().ok())
+            && started.elapsed().as_secs() >= s {
                 break stop;
             }
-        }
         // XP_TAP=<vk>: tap that key every two seconds (headless way to skip intro movies).
-        if let Some(vk) = env::var("XP_TAP").ok().and_then(|v| v.parse::<u32>().ok()) {
-            if started.elapsed().as_millis() / 2000 != tapped {
+        if let Some(vk) = env::var("XP_TAP").ok().and_then(|v| v.parse::<u32>().ok())
+            && started.elapsed().as_millis() / 2000 != tapped {
                 tapped = started.elapsed().as_millis() / 2000;
                 emu.wm.post_key(vk, true);
                 emu.wm.post_key(vk, false);
             }
-        }
         if profile_from.is_some_and(|t| started.elapsed().as_secs() >= t) && emu.profile.is_none() {
             emu.profile = Some(Default::default());
         }
@@ -173,18 +179,22 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             fps_mark = (std::time::Instant::now(), frames, emu.steps);
             idle = std::time::Duration::ZERO;
         }
+        while keys.last().is_some_and(|k| started.elapsed().as_secs() >= k.0) {
+            let (_, vk) = keys.pop().unwrap();
+            emu.wm.post_key(vk, true);
+            emu.wm.post_key(vk, false);
+        }
         while clicks.last().is_some_and(|c| started.elapsed().as_secs() >= c.0) {
             let (_, x, y) = clicks.pop().unwrap();
             emu.wm.post_mouse(0x0200, x, y); // WM_MOUSEMOVE
             emu.wm.post_mouse(0x0201, x, y); // WM_LBUTTONDOWN
             emu.wm.post_mouse(0x0202, x, y); // WM_LBUTTONUP
         }
-        if let Some(d) = dump_after {
-            if !dumped && started.elapsed() >= d {
+        if let Some(d) = dump_after
+            && !dumped && started.elapsed() >= d {
                 dumped = true;
                 emu.dump_threads();
             }
-        }
         match (&stop, presenter.as_mut()) {
             (cpu::Stop::StepLimit, None) if emu.steps < max_steps => {}
             // Every thread is waiting for a time: let it pass.
@@ -219,7 +229,7 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         let mut ops: Vec<(u32, u32)> = p.iter().filter(|(k, _)| **k & 0x8000_0000 != 0).map(|(k, v)| (*k & 0xFFFF, *v)).collect();
         ops.sort_by(|a, b| b.1.cmp(&a.1));
         let all: u64 = ops.iter().map(|o| o.1 as u64).sum();
-        for (op, n) in ops.iter().take(20) {
+        for (op, n) in ops.iter().take(60) {
             eprintln!("[opcodes] {:5.1}% {}{:02x}", *n as f64 * 100.0 / all as f64, if *op >= 0x100 { "0f " } else { "" }, op & 0xFF);
         }
         let mut rows: Vec<_> = p.into_iter().filter(|(k, _)| *k & 0x8000_0000 == 0).collect();
@@ -235,7 +245,8 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         for (m, n) in mods.iter().take(8) {
             eprintln!("[module] {:5.1}% {m}", *n as f64 * 100.0 / total as f64);
         }
-        for (addr, n) in rows.iter().take(45) {
+        let top = env::var("XP_PROFILE_TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(45);
+        for (addr, n) in rows.iter().take(top) {
             eprintln!("[profile] {:5.1}% {}", *n as f64 * 100.0 / total as f64, emu.win.locate(*addr).unwrap_or_else(|| format!("{addr:#x}")));
         }
     }

@@ -309,7 +309,7 @@ pub fn window_to_game_stretch(mx: f32, my: f32, win: (f32, f32), game: (u32, u32
         return None;
     }
     let (x, y) = (mx * game.0 as f32 / win.0, my * game.1 as f32 / win.1);
-    (x >= 0.0 && y >= 0.0 && x < game.0 as f32 && y < game.1 as f32).then(|| (x as i32, y as i32))
+    (x >= 0.0 && y >= 0.0 && x < game.0 as f32 && y < game.1 as f32).then_some((x as i32, y as i32))
 }
 
 pub struct Presenter {
@@ -365,12 +365,11 @@ impl Presenter {
         }
         // Follow the game window's size by making a fresh host window; never while in
         // fullscreen, where the system owns the size.
-        if resized && !was_fullscreen {
-            if let Ok(w) = open(&self.title, (want.2, want.3), &self.chars) {
+        if resized && !was_fullscreen
+            && let Ok(w) = open(&self.title, (want.2, want.3), &self.chars) {
                 self.window = w;
                 self.fitted = false;
             }
-        }
         let (rx, ry, rw, rh) = self.region;
 
         // Lay the drawing view out over what AppKit really shows (see `cocoa::layout`).
@@ -467,27 +466,6 @@ impl Presenter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::window_to_game_stretch;
-
-    #[test]
-    fn stretch_mapping_fills_the_window() {
-        assert_eq!(window_to_game_stretch(0.0, 0.0, (1182.0, 818.0), (591, 409)), Some((0, 0)));
-        assert_eq!(window_to_game_stretch(1181.0, 817.0, (1182.0, 818.0), (591, 409)), Some((590, 408)));
-        assert_eq!(window_to_game_stretch(591.0, 409.0, (1182.0, 818.0), (591, 409)), Some((295, 204)));
-        assert_eq!(window_to_game_stretch(1182.0, 10.0, (1182.0, 818.0), (591, 409)), None);
-        assert_eq!(window_to_game_stretch(-1.0, 10.0, (1182.0, 818.0), (591, 409)), None);
-        assert_eq!(window_to_game_stretch(1.0, 1.0, (0.0, 0.0), (591, 409)), None);
-    }
-
-    #[test]
-    fn unscaled_window_maps_one_to_one() {
-        assert_eq!(window_to_game_stretch(10.0, 20.0, (640.0, 480.0), (640, 480)), Some((10, 20)));
-        assert_eq!(window_to_game_stretch(640.0, 0.0, (640.0, 480.0), (640, 480)), None);
-    }
-}
-
 /// Windows virtual-key code for a host key.
 pub fn virtual_key(key: Key) -> Option<u32> {
     use Key::*;
@@ -517,4 +495,25 @@ pub fn virtual_key(key: Key) -> Option<u32> {
         LeftAlt | RightAlt => 0x12,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_to_game_stretch;
+
+    #[test]
+    fn stretch_mapping_fills_the_window() {
+        assert_eq!(window_to_game_stretch(0.0, 0.0, (1182.0, 818.0), (591, 409)), Some((0, 0)));
+        assert_eq!(window_to_game_stretch(1181.0, 817.0, (1182.0, 818.0), (591, 409)), Some((590, 408)));
+        assert_eq!(window_to_game_stretch(591.0, 409.0, (1182.0, 818.0), (591, 409)), Some((295, 204)));
+        assert_eq!(window_to_game_stretch(1182.0, 10.0, (1182.0, 818.0), (591, 409)), None);
+        assert_eq!(window_to_game_stretch(-1.0, 10.0, (1182.0, 818.0), (591, 409)), None);
+        assert_eq!(window_to_game_stretch(1.0, 1.0, (0.0, 0.0), (591, 409)), None);
+    }
+
+    #[test]
+    fn unscaled_window_maps_one_to_one() {
+        assert_eq!(window_to_game_stretch(10.0, 20.0, (640.0, 480.0), (640, 480)), Some((10, 20)));
+        assert_eq!(window_to_game_stretch(640.0, 0.0, (640.0, 480.0), (640, 480)), None);
+    }
 }
