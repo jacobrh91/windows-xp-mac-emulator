@@ -350,22 +350,56 @@ mod cocoa {
         }
     }
 
+    /// The modifier keys held right now, left and right: [shift, shift, ctrl, ctrl, alt, alt]
+    /// as a PC sees them (Command and Control are both Ctrl, Option is Alt).
+    pub fn modifiers() -> Option<[bool; 6]> {
+        // SAFETY: see module docs; +[NSEvent modifierFlags] takes no arguments.
+        let f = unsafe { send_usize(send_class(c"NSEvent"), sel(c"modifierFlags")) };
+        // Device-dependent bits say which side (IOKit's NX_DEVICE*KEYMASK); the generic ones
+        // (Shift 1<<17, Control 1<<18, Option 1<<19, Command 1<<20) back them up.
+        let side = |bit: usize| f & bit != 0;
+        let (shift, control, option, command) = (f & 1 << 17 != 0, f & 1 << 18 != 0, f & 1 << 19 != 0, f & 1 << 20 != 0);
+        let (ls, rs) = (side(0x02), side(0x04));
+        let (lc, rc) = (side(0x01) || side(0x08), side(0x2000) || side(0x10));
+        let (la, ra) = (side(0x20), side(0x40));
+        Some([
+            ls || (shift && !rs),
+            rs,
+            lc || ((control || command) && !rc),
+            rc,
+            la || (option && !ra),
+            ra,
+        ])
+    }
+
+    /// Is the window the one receiving the keyboard?
+    pub fn is_key_window(window: &Window) -> bool {
+        // SAFETY: see module docs.
+        handles(window).is_some_and(|(_, win)| unsafe { send_usize(win, sel(c"isKeyWindow")) } & 0xFF != 0)
+    }
+
     /// Is the window in macOS's own fullscreen?
     pub fn in_native_fullscreen(window: &Window) -> bool {
         // SAFETY: see module docs.
         handles(window).is_some_and(|(_, win)| unsafe { send_usize(win, sel(c"styleMask")) } & (1 << 14) != 0)
     }
 
-    /// (the options we asked for, the options in force, the window's style mask) — debugging.
-    pub fn presentation_state(window: &Window) -> Option<(usize, usize, usize)> {
+    /// Debugging: the presentation options asked for and in force, the window's style mask,
+    /// and whether the window is key and main and the app active.
+    pub fn presentation_state(window: &Window) -> Option<String> {
         let (_, win) = handles(window)?;
         // SAFETY: see module docs.
         unsafe {
             let app = send_id(send_class(c"NSApplication"), sel(c"sharedApplication"));
-            Some((
+            let flag = |obj: Id, s: &std::ffi::CStr| send_usize(obj, sel(s)) & 0xFF != 0;
+            Some(format!(
+                "options asked {:#x} in force {:#x} style {:#x} key {} main {} app active {}",
                 send_usize(app, sel(c"presentationOptions")),
                 send_usize(app, sel(c"currentSystemPresentationOptions")),
                 send_usize(win, sel(c"styleMask")),
+                flag(win, c"isKeyWindow"),
+                flag(win, c"isMainWindow"),
+                flag(app, c"isActive"),
             ))
         }
     }
@@ -437,7 +471,13 @@ mod cocoa {
         false
     }
     pub fn toggle_native_fullscreen(_: &Window) {}
-    pub fn presentation_state(_: &Window) -> Option<(usize, usize, usize)> {
+    pub fn modifiers() -> Option<[bool; 6]> {
+        None
+    }
+    pub fn is_key_window(_: &Window) -> bool {
+        true
+    }
+    pub fn presentation_state(_: &Window) -> Option<String> {
         None
     }
     pub fn debug_resize(_: &Window, _: f64, _: f64) {}
@@ -486,6 +526,8 @@ pub struct Presenter {
     window: Window,
     chars: Arc<Mutex<Vec<u32>>>,
     left_down: bool,
+    /// The right and middle buttons, as last sent to the game.
+    other_down: [bool; 2],
     /// The Windows modifier keys (VK_LSHIFT..VK_RMENU) as last sent to the game.
     modifiers: [bool; 6],
     last_pos: (i32, i32),
@@ -511,6 +553,7 @@ impl Presenter {
             window,
             chars,
             left_down: false,
+            other_down: [false; 2],
             modifiers: [false; 6],
             last_pos: (-1, -1),
             region,
@@ -619,6 +662,14 @@ impl Presenter {
                     pos.1,
                 );
             }
+            // Right and middle buttons (WM_RBUTTONDOWN/UP, WM_MBUTTONDOWN/UP).
+            for (i, button, msg) in [(0, MouseButton::Right, 0x0204), (1, MouseButton::Middle, 0x0207)] {
+                let down = self.window.get_mouse_down(button);
+                if down != self.other_down[i] {
+                    self.other_down[i] = down;
+                    emu.wm.post_mouse(if down { msg } else { msg + 1 }, pos.0, pos.1);
+                }
+            }
         } else if self.left_down && !self.window.get_mouse_down(MouseButton::Left) {
             self.left_down = false; // released outside the picture: don't leave a drag stuck
             emu.wm
@@ -646,7 +697,7 @@ impl Presenter {
             cocoa::toggle_native_fullscreen(&self.window);
         }
         if std::env::var_os("XP_FS_DEBUG").is_some() && self.frames % 120 == 0 {
-            eprintln!("[present] frame {} fullscreen={} presentation (asked, in force, style) = {:x?}", self.frames, was_fullscreen, cocoa::presentation_state(&self.window));
+            eprintln!("[present] frame {} fullscreen={} {:?} modifiers {:?} game ctrl/alt/shift {} {} {}", self.frames, was_fullscreen, cocoa::presentation_state(&self.window), cocoa::modifiers(), emu.wm.key_down[0x11], emu.wm.key_down[0x12], emu.wm.key_down[0x10]);
         }
         if debug && self.frames == 360 {
             cocoa::debug_resize(&self.window, 900.0, 618.0);
@@ -662,16 +713,24 @@ impl Presenter {
             );
         }
         // Modifiers, Mac to PC: Command and Control are Ctrl, Option is Alt. They are read
-        // from the keys' state, so two Mac keys on one Windows key do not fight.
-        let held = |keys: &[Key]| keys.iter().any(|&k| self.window.is_key_down(k));
-        let now = [
-            held(&[Key::LeftShift]),
-            held(&[Key::RightShift]),
-            held(&[Key::LeftSuper, Key::LeftCtrl]),
-            held(&[Key::RightSuper, Key::RightCtrl]),
-            held(&[Key::LeftAlt]),
-            held(&[Key::RightAlt]),
-        ];
+        // from the keyboard's state as macOS reports it right now, not from key events: a
+        // release can go missing (a fullscreen switch, Command-Tab), and a modifier left held
+        // turns every key into a shortcut. Nothing is held while the window is not in front.
+        let now = if self.window.is_active() || cocoa::is_key_window(&self.window) {
+            cocoa::modifiers().unwrap_or_else(|| {
+                let held = |keys: &[Key]| keys.iter().any(|&k| self.window.is_key_down(k));
+                [
+                    held(&[Key::LeftShift]),
+                    held(&[Key::RightShift]),
+                    held(&[Key::LeftSuper, Key::LeftCtrl]),
+                    held(&[Key::RightSuper, Key::RightCtrl]),
+                    held(&[Key::LeftAlt]),
+                    held(&[Key::RightAlt]),
+                ]
+            })
+        } else {
+            [false; 6]
+        };
         for (i, (&was, &is)) in self.modifiers.iter().zip(&now).enumerate() {
             if was != is {
                 // (generic key, sided key, extended): VK_SHIFT/VK_LSHIFT, ... right Ctrl and

@@ -234,6 +234,8 @@ pub struct WindowManager {
     pub open_menu: Option<OpenMenu>,
     pub accels: HashMap<u32, Vec<Accel>>,
     pub key_down: [bool; 256],
+    /// Mouse buttons held, as MK_LBUTTON / MK_RBUTTON / MK_MBUTTON bits.
+    pub buttons: u32,
     pub modal: Option<Modal>,
     /// The last left-button press: (time ms, x, y, window), for double-click detection.
     last_click: Option<(u64, i32, i32, u32)>,
@@ -313,6 +315,7 @@ impl WindowManager {
             open_menu: None,
             accels: HashMap::new(),
             key_down: [false; 256],
+            buttons: 0,
             modal: None,
             last_click: None,
         }
@@ -680,7 +683,19 @@ impl WindowManager {
                     }
                 }
             }
-            let wparam = (message == WM_LBUTTONDOWN) as u32; // MK_LBUTTON
+            // Which buttons are held, for this message's MK_* flags.
+            match message {
+                0x0201 | 0x0203 => self.buttons |= 1,  // left down / double click
+                0x0202 => self.buttons &= !1,
+                0x0204 | 0x0206 => self.buttons |= 2,  // right
+                0x0205 => self.buttons &= !2,
+                0x0207 | 0x0209 => self.buttons |= 0x10, // middle
+                0x0208 => self.buttons &= !0x10,
+                _ => {}
+            }
+            let wparam = self.buttons
+                | if self.key_down[0x10] { 4 } else { 0 } // MK_SHIFT
+                | if self.key_down[0x11] { 8 } else { 0 }; // MK_CONTROL
             self.post(
                 hwnd,
                 message,
