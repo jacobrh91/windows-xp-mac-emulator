@@ -15,7 +15,7 @@ pub struct Fpu {
     pub(crate) st: [f64; 8],
     pub(crate) top: usize,
     /// Condition code bits C0..C3 as they appear in the status word.
-    cc: u16,
+    pub(crate) cc: u16,
     pub cw: u16,
     /// MMX registers (kept apart from `st`: well-behaved code never mixes the two without `emms`).
     pub mm: [u64; 8],

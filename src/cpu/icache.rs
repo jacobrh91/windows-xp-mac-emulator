@@ -723,7 +723,24 @@ mod tests {
                     4 => out.extend([0xD9, 0xC0 | (r.next() % 8) as u8]), // fld st(i)
                     5 => out.extend([0xD9, 0xC8 | (r.next() % 8) as u8]), // fxch
                     6 => out.extend([0xDD, r.pick(&[0xD0u8, 0xD8]) | (r.next() % 8) as u8]), // fst/fstp st(i)
-                    7 => out.extend([0xD9, r.pick(&[0xE0u8, 0xE1, 0xE8, 0xEE])]),
+                    7 => match r.next() % 4 {
+                        0 => out.extend([0xD9, r.pick(&[0xE0u8, 0xE1, 0xE8, 0xEE])]),
+                        1 => {
+                            // fcom / fcomp m32 / m64, then fnstsw ax
+                            out.push(r.pick(&[0xD8u8, 0xDC]));
+                            let op = r.pick(&[2u8, 3]);
+                            out.extend(mem(r, op));
+                            out.extend([0xDF, 0xE0]);
+                        }
+                        2 => {
+                            out.extend([0xD8, r.pick(&[0xD0u8, 0xD8]) | (r.next() % 8) as u8]);
+                            out.extend([0xDF, 0xE0]);
+                        }
+                        _ => {
+                            out.push(r.pick(&[0xDBu8, 0xDF])); // fild m32 / m16
+                            out.extend(mem(r, 0));
+                        }
+                    },
                     _ => {
                         // a value to work with: fild-free, so load a float from memory
                         out.push(0xDD);
