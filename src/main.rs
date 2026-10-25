@@ -179,6 +179,18 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             if env::var_os("XP_BLOCK_STATS").is_some() {
                 eprintln!("[blocks] {} built, {} runs ({:.1} instructions per run), {} flushes", emu.icache.built, emu.icache.runs, (emu.steps - fps_mark.2) as f64 / emu.icache.runs.max(1) as f64, emu.icache.flushes);
                 emu.icache.flushes = 0;
+                let mut kinds: Vec<_> = emu.jit.helper_kinds.drain().collect();
+                kinds.sort_by(|a, b| b.1.cmp(&a.1));
+                let total = (emu.steps - fps_mark.2).max(1) as f64;
+                eprintln!(
+                    "[jit] {} compiled, {} block runs, {:.1}% of instructions via the interpreter: {}",
+                    emu.jit.compiled,
+                    emu.jit.runs,
+                    emu.jit.helper_calls as f64 * 100.0 / total,
+                    kinds.iter().map(|(k, n)| format!("{k} {:.1}%", *n as f64 * 100.0 / total)).collect::<Vec<_>>().join(", ")
+                );
+                emu.jit.helper_calls = 0;
+                emu.jit.runs = 0;
                 emu.icache.built = 0;
                 emu.icache.runs = 0;
             }

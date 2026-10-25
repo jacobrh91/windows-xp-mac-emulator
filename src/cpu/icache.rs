@@ -91,9 +91,9 @@ const MAX_BLOCK: usize = 32;
 /// One instruction of a block: the operation, where it starts and where the next one starts.
 #[derive(Clone, Copy)]
 pub(crate) struct BlockOp {
-    op: Dop,
-    start: u32,
-    next: u32,
+    pub(crate) op: Dop,
+    pub(crate) start: u32,
+    pub(crate) next: u32,
 }
 
 /// A run of decoded instructions starting at `start`. Empty when the first one is not
@@ -102,6 +102,10 @@ pub(crate) struct BlockOp {
 pub(crate) struct Block {
     start: u32,
     ops: Rc<[BlockOp]>,
+    /// Times run since built, and compiled code (0: none) from JIT generation `gen`.
+    hits: u32,
+    code: usize,
+    jit_gen: u32,
 }
 
 pub struct ICache {
@@ -118,7 +122,7 @@ impl ICache {
         let empty: Rc<[BlockOp]> = Rc::new([]);
         ICache {
             entries: vec![Entry { eip: EMPTY, len: 0, op: Dop::Unsupported }; SLOTS],
-            blocks: vec![Block { start: EMPTY, ops: empty }; BLOCK_SLOTS],
+            blocks: vec![Block { start: EMPTY, ops: empty, hits: 0, code: 0, jit_gen: 0 }; BLOCK_SLOTS],
             built: 0,
             runs: 0,
             flushes: 0,
@@ -364,6 +368,7 @@ impl Emu {
         if self.mem.code_dirty {
             self.icache.clear();
             self.mem.forget_code_pages();
+            self.jit.reset();
         }
         let i = block_slot(start);
         if self.icache.blocks[i].start != start {
@@ -375,6 +380,11 @@ impl Emu {
         }
         self.icache.runs += 1;
         let n = ops.len().min(limit as usize);
+        if self.jit.enabled && n == ops.len() {
+            if let Some(r) = self.run_compiled(i, start) {
+                return Some(r);
+            }
+        }
         for (k, b) in ops[..n].iter().enumerate() {
             self.steps += 1;
             self.recent[(self.steps & 15) as usize] = b.start;
@@ -393,6 +403,47 @@ impl Emu {
             }
         }
         Some((n as u64, Ok(())))
+    }
+
+    /// Run block `i` as compiled code, compiling it once it is hot. None: not compiled (yet).
+    #[inline(always)]
+    fn run_compiled(&mut self, i: usize, start: u32) -> Option<(u64, Res<()>)> {
+        let current = self.jit.generation;
+        let b = &mut self.icache.blocks[i];
+        if b.jit_gen != current || b.code == 0 {
+            b.hits += 1;
+            if b.hits < super::jit::HOT {
+                return None;
+            }
+            b.hits = 0;
+            let ops = b.ops.clone();
+            let f = match self.jit.compile(&ops) {
+                Some(f) => f,
+                None => {
+                    // The code area is full: start it afresh (later blocks compile again).
+                    self.jit.reset();
+                    return None;
+                }
+            };
+            let b = &mut self.icache.blocks[i];
+            b.code = f as usize;
+            b.jit_gen = self.jit.generation;
+        }
+        let code = self.icache.blocks[i].code;
+        (self.jit_pages, self.jit_code_pages) = self.mem.page_table();
+        // SAFETY: `code` was produced by `jit.compile` for this block in the current
+        // generation; it only touches this emulator through the pointer it is given.
+        let f: super::jit::BlockFn = unsafe { std::mem::transmute::<usize, super::jit::BlockFn>(code) };
+        let r = unsafe { f(self) };
+        self.jit.runs += 1;
+        let count = r & 0xFFFF_FFFF;
+        self.steps += count;
+        self.recent[(self.steps & 15) as usize] = start;
+        if r >> 32 != 0 {
+            let stop = self.jit_stop.take().unwrap_or(Stop::Halt);
+            return Some((count, Err(stop)));
+        }
+        Some((count, Ok(())))
     }
 
     #[cold]
@@ -420,7 +471,7 @@ impl Emu {
             at = next;
         }
         self.icache.built += 1;
-        self.icache.blocks[i] = Block { start, ops: ops.into() };
+        self.icache.blocks[i] = Block { start, ops: ops.into(), hits: 0, code: 0, jit_gen: 0 };
     }
 
     /// Run the instruction at `start` through the cache: decoded once, then reused.
@@ -468,7 +519,7 @@ impl Emu {
     /// Execute a decoded instruction (at `start`; `next` is the address after it), exactly as
     /// `exec` would.
     #[inline(always)]
-    fn exec_dop(&mut self, op: Dop, start: u32, next: u32) -> Res<()> {
+    pub(crate) fn exec_dop(&mut self, op: Dop, start: u32, next: u32) -> Res<()> {
         self.eip = next;
         match op {
             Dop::AluRmR { op, rm, reg, bits } => {
@@ -648,7 +699,37 @@ mod tests {
                 vec![0x40 | (reg << 3) | base, (r.next() % 0x7C) as u8 & !3]
             }
         };
-        match r.next() % 12 {
+        match r.next() % 15 {
+            12 => {
+                // 8-bit mov in either direction
+                out.push(r.pick(&[0x88u8, 0x8A]));
+                let reg = r.pick(&[0u8, 1, 2, 4, 5, 6]); // al cl dl ah ch dh
+                out.extend(modrm_dst(r, reg));
+            }
+            13 => {
+                // 8-bit alu with an immediate, or test r/m8, r8
+                if r.next() % 2 == 0 {
+                    out.push(0x80);
+                    let op = (r.next() % 8) as u8;
+                    out.extend(modrm_dst(r, op));
+                    out.push(r.next() as u8);
+                } else {
+                    out.push(0x84);
+                    let reg = r.pick(&[0u8, 1, 2, 3, 4, 5, 6, 7]);
+                    out.extend(modrm_dst(r, reg));
+                }
+            }
+            14 => {
+                // al, imm8 forms and imul with an immediate
+                if r.next() % 2 == 0 {
+                    out.extend([((r.next() % 8) as u8) << 3 | 4, r.next() as u8]);
+                } else {
+                    out.push(0x6B);
+                    let reg = dst_reg(r);
+                    out.extend(modrm_reg_mem(r, reg));
+                    out.push(r.next() as u8);
+                }
+            }
             0 => {
                 // alu r/m, r (dst may be memory)
                 let op = (r.next() % 8) as u8;
@@ -769,6 +850,39 @@ mod tests {
             assert_eq!(a.mem.read_bytes(0x10000, 0x400).unwrap(), b.mem.read_bytes(0x10000, 0x400).unwrap(), "memory (seed {seed})");
             assert_eq!(a.mem.read_bytes(0x17F00, 0x100).unwrap(), b.mem.read_bytes(0x17F00, 0x100).unwrap(), "stack (seed {seed})");
         }
+    }
+
+    /// The same random code, run often enough for its blocks to be compiled, with the JIT
+    /// against the plain interpreter.
+    #[test]
+    fn compiled_blocks_match_the_interpreter_on_random_code() {
+        let mut compiled = 0;
+        for seed in 1..=40u64 {
+            let mut r = Rng(seed * 104_729);
+            let mut code = Vec::new();
+            for _ in 0..120 {
+                random_insn(&mut r, &mut code);
+            }
+            let mut a = machine(&code, seed, false);
+            a.jit.enabled = false;
+            let mut b = machine(&code, seed, true);
+            if !b.jit.enabled {
+                return; // not an Apple Silicon Mac
+            }
+            for pass in 0..40 {
+                a.eip = 0x1000;
+                b.eip = 0x1000;
+                assert_eq!(a.run(100_000), Stop::Halt);
+                assert_eq!(b.run(100_000), Stop::Halt);
+                assert_eq!(a.regs, b.regs, "registers (seed {seed}, pass {pass})");
+                assert_eq!(a.eflags, b.eflags, "flags (seed {seed}, pass {pass})");
+            }
+            assert_eq!(a.steps, b.steps, "instruction count (seed {seed})");
+            assert_eq!(a.mem.read_bytes(0x10000, 0x400).unwrap(), b.mem.read_bytes(0x10000, 0x400).unwrap(), "memory (seed {seed})");
+            assert_eq!(a.mem.read_bytes(0x17F00, 0x100).unwrap(), b.mem.read_bytes(0x17F00, 0x100).unwrap(), "stack (seed {seed})");
+            compiled += b.jit.compiled;
+        }
+        assert!(compiled > 0, "blocks were actually compiled");
     }
 
     #[test]

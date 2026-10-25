@@ -3,6 +3,7 @@
 
 pub mod fpu;
 pub mod icache;
+pub mod jit;
 pub mod mmx;
 pub mod sse;
 
@@ -120,10 +121,18 @@ fn sext(v: u32, bits: u32) -> i32 {
     ((v << (32 - bits)) as i32) >> (32 - bits)
 }
 
+/// `repr(C)` so that compiled code (`jit`) finds the registers at fixed offsets.
+#[repr(C)]
 pub struct Emu {
     pub regs: [u32; 8],
     pub eip: u32,
     pub eflags: u32,
+    /// The memory page table and code-page map, for compiled code (set before it runs).
+    pub(crate) jit_pages: *const usize,
+    pub(crate) jit_code_pages: *const u8,
+    pub jit: jit::Jit,
+    /// Why a compiled block stopped, when it stopped with an error.
+    pub(crate) jit_stop: Option<Stop>,
     /// Decoded instructions (see `icache`), used unless XP_NO_ICACHE is set.
     pub icache: icache::ICache,
     pub(crate) icache_on: bool,
@@ -169,6 +178,10 @@ impl Emu {
             regs: [0; 8],
             eip: 0,
             eflags: 2,
+            jit_pages: std::ptr::null(),
+            jit_code_pages: std::ptr::null(),
+            jit: jit::Jit::new(),
+            jit_stop: None,
             icache: icache::ICache::new(),
             icache_on: std::env::var_os("XP_NO_ICACHE").is_none(),
             fs_base: 0,

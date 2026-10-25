@@ -1,0 +1,771 @@
+//! x86 -> ARM64 translator for hot blocks.
+//!
+//! Blocks from the instruction cache (`icache`) that have run a few times are compiled to
+//! native code. Guest registers live in host registers for the whole block (EAX..EDI in
+//! w19..w26, EFLAGS in w27, the `Emu` pointer in x28), and guest memory is reached through
+//! the same page table the interpreter uses (x15), with a check for pages holding cached code
+//! (x14).
+//!
+//! Correctness rules, so that compiled and interpreted execution are indistinguishable:
+//! - Each instruction does all its memory accesses before it changes any register or flag.
+//!   If an access cannot take the fast path (unmapped page, crossing a page, a page holding
+//!   cached code), the instruction is redone by `jit_step`, the interpreter's implementation,
+//!   which also turns faults into Windows exceptions exactly as before.
+//! - Flags are computed bit for bit as `Emu::alu` does.
+//! - Instructions without a native translation call `jit_step` too, so any block compiles.
+//!
+//! `XP_NO_JIT=1` turns it off.
+
+use std::ffi::c_void;
+
+use super::icache::{BlockOp, Dop, Ea};
+use super::{Emu, Stop};
+
+/// Compile a block once it has run this many times.
+pub(crate) const HOT: u32 = 16;
+/// Executable memory reserved for compiled code.
+const CODE_BYTES: usize = 128 << 20;
+
+/// Compiled block: `fn(emu) -> instructions run | (1 << 32 if emu.jit_stop holds a Stop)`.
+pub(crate) type BlockFn = unsafe extern "C" fn(*mut Emu) -> u64;
+
+pub struct Jit {
+    pub(crate) enabled: bool,
+    mem: *mut u8,
+    used: usize,
+    /// Bumped whenever compiled code is thrown away (blocks compare it to their own).
+    pub(crate) generation: u32,
+    pub compiled: u64,
+    /// Instructions compiled blocks handed to the interpreter, and compiled-block runs.
+    pub helper_calls: u64,
+    pub runs: u64,
+    /// Helper calls by operation kind (statistics).
+    pub helper_kinds: std::collections::HashMap<&'static str, u64>,
+    pub(crate) stats: bool,
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
+    fn pthread_jit_write_protect_np(enabled: i32);
+    fn sys_icache_invalidate(start: *mut c_void, len: usize);
+}
+
+impl Jit {
+    pub(crate) fn new() -> Jit {
+        let enabled = cfg!(all(target_arch = "aarch64", target_os = "macos")) && std::env::var_os("XP_NO_JIT").is_none();
+        Jit { enabled, mem: std::ptr::null_mut(), used: 0, generation: 1, compiled: 0, helper_calls: 0, runs: 0, helper_kinds: Default::default(), stats: std::env::var_os("XP_BLOCK_STATS").is_some() }
+    }
+
+    /// Forget all compiled code (the block cache was flushed, or the code area is full).
+    pub(crate) fn reset(&mut self) {
+        self.used = 0;
+        self.generation = self.generation.wrapping_add(1).max(1);
+    }
+
+    /// Copy machine code into executable memory.
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    fn install(&mut self, code: &[u8]) -> Option<BlockFn> {
+        const PROT_RWX: i32 = 1 | 2 | 4;
+        const MAP_PRIVATE_ANON_JIT: i32 = 0x2 | 0x1000 | 0x800;
+        if self.mem.is_null() {
+            // SAFETY: an anonymous private mapping; checked for failure below.
+            let p = unsafe { mmap(std::ptr::null_mut(), CODE_BYTES, PROT_RWX, MAP_PRIVATE_ANON_JIT, -1, 0) };
+            if p as isize == -1 {
+                self.enabled = false;
+                return None;
+            }
+            self.mem = p as *mut u8;
+        }
+        if self.used + code.len() > CODE_BYTES {
+            return None; // the caller resets and tries later
+        }
+        // SAFETY: within the mapping; W^X is toggled for this thread around the copy.
+        unsafe {
+            let at = self.mem.add(self.used);
+            pthread_jit_write_protect_np(0);
+            std::ptr::copy_nonoverlapping(code.as_ptr(), at, code.len());
+            pthread_jit_write_protect_np(1);
+            sys_icache_invalidate(at as *mut c_void, code.len());
+            self.used += (code.len() + 15) & !15;
+            self.compiled += 1;
+            Some(std::mem::transmute::<*mut u8, BlockFn>(at))
+        }
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
+    fn install(&mut self, _: &[u8]) -> Option<BlockFn> {
+        None
+    }
+
+    /// Compile a block. None if it cannot be (then it keeps running in the interpreter).
+    pub(crate) fn compile(&mut self, ops: &[BlockOp]) -> Option<BlockFn> {
+        if !self.enabled || ops.is_empty() {
+            return None;
+        }
+        let code = codegen::block(ops)?;
+        self.install(&code)
+    }
+}
+
+/// Run one instruction of a compiled block in the interpreter (no native translation, or the
+/// fast path could not be used). Returns 0: carry on with the next instruction; 1: leave the
+/// block (control went elsewhere, or cached code was written); 2: leave with `emu.jit_stop`.
+pub(crate) unsafe extern "C" fn jit_step(emu: *mut Emu, op: *const BlockOp) -> u64 {
+    // SAFETY: called from compiled code with the emulator that is running it, and a pointer
+    // into that block's operation list, which outlives the compiled code.
+    let (emu, b) = unsafe { (&mut *emu, &*op) };
+    emu.jit.helper_calls += 1;
+    if emu.jit.stats {
+        let kind: &'static str = match b.op {
+            Dop::Fpu { .. } => "x87",
+            Dop::AluRmR { bits: 8, .. } | Dop::AluRRm { bits: 8, .. } | Dop::AluRmI { bits: 8, .. } | Dop::Test { bits: 8, .. } | Dop::TestI { bits: 8, .. } => "8-bit alu",
+            Dop::MovRmR { bits: 8, .. } | Dop::MovRRm { bits: 8, .. } => "8-bit mov",
+            Dop::Shift { .. } => "shift",
+            Dop::Imul { .. } | Dop::ImulI { .. } => "imul",
+            Dop::CallInd(_) | Dop::JmpInd(_) => "indirect call/jmp",
+            Dop::AluRmR { .. } | Dop::AluRRm { .. } | Dop::AluRmI { .. } => "adc/sbb",
+            _ => "fast path missed",
+        };
+        *emu.jit.helper_kinds.entry(kind).or_insert(0) += 1;
+    }
+    let saved = (emu.regs, emu.eflags);
+    match emu.exec_dop(b.op, b.start, b.next) {
+        Ok(()) => (emu.eip != b.next || emu.mem.code_dirty) as u64,
+        Err(e) => {
+            let r = match e {
+                stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. }) => emu.raise_hardware(stop, b.start, saved),
+                other => Err(other),
+            };
+            match r {
+                Ok(()) => 1,
+                Err(stop) => {
+                    emu.jit_stop = Some(stop);
+                    2
+                }
+            }
+        }
+    }
+}
+
+/// Byte offsets of what compiled code touches in `Emu` (which is `repr(C)`).
+pub(crate) const OFF_REGS: u32 = std::mem::offset_of!(Emu, regs) as u32;
+pub(crate) const OFF_EIP: u32 = std::mem::offset_of!(Emu, eip) as u32;
+pub(crate) const OFF_EFLAGS: u32 = std::mem::offset_of!(Emu, eflags) as u32;
+pub(crate) const OFF_PAGES: u32 = std::mem::offset_of!(Emu, jit_pages) as u32;
+pub(crate) const OFF_CODE_PAGES: u32 = std::mem::offset_of!(Emu, jit_code_pages) as u32;
+const _: () = assert!(OFF_REGS == 0 && OFF_EIP == 32 && OFF_EFLAGS == 36 && OFF_PAGES == 40 && OFF_CODE_PAGES == 48);
+
+#[cfg(target_arch = "aarch64")]
+mod codegen {
+    use dynasmrt::aarch64::Aarch64Relocation;
+    use dynasmrt::{dynasm, DynamicLabel, DynasmApi, DynasmLabelApi, VecAssembler};
+
+    use super::*;
+
+    type Asm = VecAssembler<Aarch64Relocation>;
+
+    const ESP: u8 = 4;
+    const EBP: u8 = 5;
+    /// The flags `alu` writes: CF PF ZF SF OF.
+    const ARITH_FLAGS: u32 = 0x8C5;
+
+    /// Host register holding guest register `r`.
+    fn g(r: u8) -> u8 {
+        19 + r
+    }
+
+    fn mov32(a: &mut Asm, reg: u8, v: u32) {
+        let (lo, hi) = (v & 0xFFFF, v >> 16);
+        dynasm!(a ; .arch aarch64 ; movz W(reg), #lo);
+        if hi != 0 {
+            dynasm!(a ; .arch aarch64 ; movk W(reg), #hi, lsl #16);
+        }
+    }
+
+    fn mov64(a: &mut Asm, reg: u8, v: u64) {
+        dynasm!(a ; .arch aarch64 ; movz X(reg), #(v & 0xFFFF) as u32);
+        for s in [16u32, 32, 48] {
+            let part = ((v >> s) & 0xFFFF) as u32;
+            if part != 0 {
+                dynasm!(a ; .arch aarch64 ; movk X(reg), #part, lsl #s);
+            }
+        }
+    }
+
+    /// Effective address of a memory operand into w0.
+    fn ea(a: &mut Asm, base: u8, index: u8, scale: u8, disp: u32) {
+        mov32(a, 0, disp);
+        if base != 8 {
+            dynasm!(a ; .arch aarch64 ; add w0, w0, W(g(base)));
+        }
+        if index != 8 {
+            let s = scale as u32;
+            dynasm!(a ; .arch aarch64 ; add w0, w0, W(g(index)), lsl #s);
+        }
+    }
+
+    /// x10 = host address of the page holding w0, or go to `slow`; w11 = offset in the page.
+    /// `size` bytes must not cross into the next page.
+    fn page(a: &mut Asm, size: u32, slow: DynamicLabel) {
+        let limit = 4096 - size;
+        dynasm!(a ; .arch aarch64
+            ; lsr w9, w0, #12
+            ; ldr x10, [x15, x9, lsl #3]
+            ; cbz x10, =>slow
+            ; and w11, w0, #0xFFF
+            ; cmp w11, #limit
+            ; b.hi =>slow
+        );
+    }
+
+    /// Load `size` (1, 2, 4) bytes at w0 into W(dst), zero-extended.
+    fn load(a: &mut Asm, size: u32, dst: u8, slow: DynamicLabel) {
+        page(a, size, slow);
+        match size {
+            1 => dynasm!(a ; .arch aarch64 ; ldrb W(dst), [x10, x11]),
+            2 => dynasm!(a ; .arch aarch64 ; ldrh W(dst), [x10, x11]),
+            _ => dynasm!(a ; .arch aarch64 ; ldr W(dst), [x10, x11]),
+        }
+    }
+
+    /// Store W(src) (32 bits) at w0. Pages holding cached code take the slow path.
+    fn store32(a: &mut Asm, src: u8, slow: DynamicLabel) {
+        dynasm!(a ; .arch aarch64
+            ; lsr w9, w0, #12
+            ; ldrb w12, [x14, x9]
+            ; cbnz w12, =>slow
+        );
+        page(a, 4, slow);
+        dynasm!(a ; .arch aarch64 ; str W(src), [x10, x11]);
+    }
+
+    /// After an arithmetic/logic instruction set NZCV for result w2: put the new EFLAGS value
+    /// (CF PF ZF SF OF as `alu` computes them) in w3. `borrow`: CF is ARM's C inverted (sub).
+    /// `keep_cf`: inc/dec, which leave CF alone.
+    /// `byte_high`: an 8-bit operation done in the top byte of w2 (see `alu8`).
+    fn flags(a: &mut Asm, borrow: bool, keep_cf: bool) {
+        flags_of(a, borrow, keep_cf, false);
+    }
+
+    fn flags_of(a: &mut Asm, borrow: bool, keep_cf: bool, byte_high: bool) {
+        if borrow {
+            dynasm!(a ; .arch aarch64 ; cset w4, cc);
+        } else {
+            dynasm!(a ; .arch aarch64 ; cset w4, cs);
+        }
+        dynasm!(a ; .arch aarch64
+            ; cset w5, eq
+            ; cset w6, mi
+            ; cset w7, vs
+        );
+        parity(a, byte_high);
+        compose(a, keep_cf);
+    }
+
+    /// w8 = PF for the low byte of w2 (or its top byte, for 8-bit operations done up there).
+    fn parity(a: &mut Asm, byte_high: bool) {
+        if byte_high {
+            dynasm!(a ; .arch aarch64 ; lsr w8, w2, #24);
+        } else {
+            dynasm!(a ; .arch aarch64 ; and w8, w2, #0xFF);
+        }
+        dynasm!(a ; .arch aarch64
+            ; eor w8, w8, w8, lsr #4
+            ; eor w8, w8, w8, lsr #2
+            ; eor w8, w8, w8, lsr #1
+            ; and w8, w8, #1
+            ; eor w8, w8, #1
+        );
+    }
+
+    /// w3 = EFLAGS with CF (w4, unless kept), PF (w8), ZF (w5), SF (w6) and OF (w7) replaced.
+    fn compose(a: &mut Asm, keep_cf: bool) {
+        let clear = if keep_cf { ARITH_FLAGS & !1 } else { ARITH_FLAGS };
+        mov32(a, 9, clear);
+        dynasm!(a ; .arch aarch64
+            ; bic w3, w27, w9
+            ; orr w3, w3, w8, lsl #2
+            ; orr w3, w3, w5, lsl #6
+            ; orr w3, w3, w6, lsl #7
+            ; orr w3, w3, w7, lsl #11
+        );
+        if !keep_cf {
+            dynasm!(a ; .arch aarch64 ; orr w3, w3, w4);
+        }
+    }
+
+    /// result w2 = w1 op w4 (op as in `alu`), setting NZCV. None for adc/sbb (need CF in).
+    fn alu(a: &mut Asm, op: u8) -> Option<bool> {
+        let borrow = match op {
+            0 => {
+                dynasm!(a ; .arch aarch64 ; adds w2, w1, w4);
+                false
+            }
+            5 | 7 => {
+                dynasm!(a ; .arch aarch64 ; subs w2, w1, w4);
+                true
+            }
+            1 => {
+                dynasm!(a ; .arch aarch64 ; orr w2, w1, w4 ; tst w2, w2);
+                false
+            }
+            4 => {
+                dynasm!(a ; .arch aarch64 ; ands w2, w1, w4);
+                false
+            }
+            6 => {
+                dynasm!(a ; .arch aarch64 ; eor w2, w1, w4 ; tst w2, w2);
+                false
+            }
+            _ => return None,
+        };
+        Some(borrow)
+    }
+
+    /// Write all guest state held in host registers back to `Emu`.
+    fn sync_out(a: &mut Asm) {
+        for r in 0..8u8 {
+            let off = OFF_REGS + 4 * r as u32;
+            dynasm!(a ; .arch aarch64 ; str W(19 + r), [x28, #off]);
+        }
+        dynasm!(a ; .arch aarch64 ; str w27, [x28, #OFF_EFLAGS]);
+    }
+
+    /// Reload guest state (and the page-table pointers) from `Emu`.
+    fn sync_in(a: &mut Asm) {
+        for r in 0..8u8 {
+            let off = OFF_REGS + 4 * r as u32;
+            dynasm!(a ; .arch aarch64 ; ldr W(19 + r), [x28, #off]);
+        }
+        dynasm!(a ; .arch aarch64
+            ; ldr w27, [x28, #OFF_EFLAGS]
+            ; ldr x15, [x28, #OFF_PAGES]
+            ; ldr x14, [x28, #OFF_CODE_PAGES]
+        );
+    }
+
+    /// x86 condition `cc` from the flags in w27, as 0/1 in w0.
+    fn cond(a: &mut Asm, cc: u8) {
+        match cc >> 1 {
+            0 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #11, #1),
+            1 => dynasm!(a ; .arch aarch64 ; and w0, w27, #1),
+            2 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #6, #1),
+            3 => dynasm!(a ; .arch aarch64 ; and w0, w27, #1 ; ubfx w1, w27, #6, #1 ; orr w0, w0, w1),
+            4 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #7, #1),
+            5 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #2, #1),
+            6 => dynasm!(a ; .arch aarch64 ; ubfx w1, w27, #7, #1 ; ubfx w2, w27, #11, #1 ; eor w0, w1, w2),
+            _ => dynasm!(a ; .arch aarch64
+                ; ubfx w1, w27, #7, #1 ; ubfx w2, w27, #11, #1 ; eor w0, w1, w2
+                ; ubfx w1, w27, #6, #1 ; orr w0, w0, w1),
+        }
+        if cc & 1 != 0 {
+            dynasm!(a ; .arch aarch64 ; eor w0, w0, #1);
+        }
+    }
+
+    /// Read an 8-bit operand into W(dst), zero-extended. Registers 4..7 are AH, CH, DH, BH.
+    fn read8(a: &mut Asm, rm: Ea, dst: u8, slow: DynamicLabel) {
+        match rm {
+            Ea::Reg(r) if r < 4 => dynasm!(a ; .arch aarch64 ; uxtb W(dst), W(g(r))),
+            Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; ubfx W(dst), W(g(r - 4)), #8, #8),
+            Ea::Mem { base, index, scale, disp } => {
+                ea(a, base, index, scale, disp);
+                load(a, 1, dst, slow);
+            }
+        }
+    }
+
+    /// The low byte of W(src) into an 8-bit operand (w0 holds a memory operand's address).
+    fn write8(a: &mut Asm, rm: Ea, src: u8, slow: DynamicLabel) {
+        match rm {
+            Ea::Reg(r) if r < 4 => dynasm!(a ; .arch aarch64 ; bfi W(g(r)), W(src), #0, #8),
+            Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; bfi W(g(r - 4)), W(src), #8, #8),
+            Ea::Mem { .. } => {
+                dynasm!(a ; .arch aarch64
+                    ; lsr w9, w0, #12
+                    ; ldrb w12, [x14, x9]
+                    ; cbnz w12, =>slow
+                );
+                page(a, 1, slow);
+                dynasm!(a ; .arch aarch64 ; strb W(src), [x10, x11]);
+            }
+        }
+    }
+
+    /// 8-bit `rm = rm op src`: the operands go in the top byte so ARM's flags are x86's.
+    fn alu8(a: &mut Asm, o: u8, rm: Ea, src: AluSrc, test: bool, slow: DynamicLabel) {
+        read8(a, rm, 1, slow);
+        match src {
+            AluSrc::Reg(r) if r < 4 => dynasm!(a ; .arch aarch64 ; uxtb w4, W(g(r))),
+            AluSrc::Reg(r) => dynasm!(a ; .arch aarch64 ; ubfx w4, W(g(r - 4)), #8, #8),
+            AluSrc::Imm(v) => mov32(a, 4, v & 0xFF),
+        }
+        dynasm!(a ; .arch aarch64 ; lsl w1, w1, #24 ; lsl w4, w4, #24);
+        let borrow = alu(a, o).unwrap();
+        flags_of(a, borrow, false, true);
+        if o != 7 && !test {
+            dynasm!(a ; .arch aarch64 ; lsr w2, w2, #24);
+            write8(a, rm, 2, slow);
+        }
+        dynasm!(a ; .arch aarch64 ; mov w27, w3);
+    }
+
+    /// The 8-bit form of `reg = reg op rm`.
+    fn alu8_reg(a: &mut Asm, o: u8, reg: u8, rm: Ea, slow: DynamicLabel) {
+        read8(a, rm, 4, slow);
+        read8(a, Ea::Reg(reg), 1, slow);
+        dynasm!(a ; .arch aarch64 ; lsl w1, w1, #24 ; lsl w4, w4, #24);
+        let borrow = alu(a, o).unwrap();
+        flags_of(a, borrow, false, true);
+        if o != 7 {
+            dynasm!(a ; .arch aarch64 ; lsr w2, w2, #24);
+            write8(a, Ea::Reg(reg), 2, slow);
+        }
+        dynasm!(a ; .arch aarch64 ; mov w27, w3);
+    }
+
+    /// shl/shr/sar by a constant 1..=31, with the interpreter's flag rules.
+    fn shift_imm(a: &mut Asm, op: u8, rm: Ea, c: u32, slow: DynamicLabel) {
+        read_rm(a, rm, 1, slow);
+        match op {
+            4 | 6 => {
+                let out = 32 - c;
+                dynasm!(a ; .arch aarch64
+                    ; lsl w2, w1, #c
+                    ; ubfx w4, w1, #out, #1
+                    ; lsr w7, w2, #31
+                    ; eor w7, w7, w4
+                );
+            }
+            5 => {
+                let last = c - 1;
+                dynasm!(a ; .arch aarch64 ; lsr w2, w1, #c ; ubfx w4, w1, #last, #1 ; lsr w7, w1, #31);
+            }
+            _ => {
+                let last = c - 1;
+                dynasm!(a ; .arch aarch64 ; asr w2, w1, #c ; ubfx w4, w1, #last, #1 ; movz w7, #0);
+            }
+        }
+        dynasm!(a ; .arch aarch64 ; cmp w2, #0 ; cset w5, eq ; lsr w6, w2, #31);
+        parity(a, false);
+        compose(a, false);
+        match rm {
+            Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(g(r)), w2),
+            Ea::Mem { .. } => store32(a, 2, slow),
+        }
+        dynasm!(a ; .arch aarch64 ; mov w27, w3);
+    }
+
+    /// Signed 32x32 multiply of w1 and w4 into W(g(reg)); CF = OF = "did not fit".
+    fn imul(a: &mut Asm, reg: u8) {
+        dynasm!(a ; .arch aarch64
+            ; smull x2, w1, w4
+            ; sxtw x5, w2
+            ; cmp x2, x5
+            ; cset w6, ne
+        );
+        mov32(a, 9, 0x801);
+        dynasm!(a ; .arch aarch64
+            ; bic w3, w27, w9
+            ; orr w3, w3, w6
+            ; orr w3, w3, w6, lsl #11
+            ; mov W(g(reg)), w2
+            ; mov w27, w3
+        );
+    }
+
+    /// Read a 32-bit operand into W(dst): a register or memory (w0 holds the address after).
+    fn read_rm(a: &mut Asm, rm: Ea, dst: u8, slow: DynamicLabel) {
+        match rm {
+            Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(dst), W(g(r))),
+            Ea::Mem { base, index, scale, disp } => {
+                ea(a, base, index, scale, disp);
+                load(a, 4, dst, slow);
+            }
+        }
+    }
+
+    enum AluSrc {
+        Reg(u8),
+        Imm(u32),
+    }
+
+    /// `rm = rm op src` (or just the flags, for cmp and test).
+    fn alu_rm(a: &mut Asm, o: u8, rm: Ea, src: AluSrc, test: bool, slow: DynamicLabel) {
+        read_rm(a, rm, 1, slow);
+        match src {
+            AluSrc::Reg(r) => dynasm!(a ; .arch aarch64 ; mov w4, W(g(r))),
+            AluSrc::Imm(v) => mov32(a, 4, v),
+        }
+        let borrow = alu(a, o).unwrap();
+        flags(a, borrow, false);
+        if o != 7 && !test {
+            match rm {
+                Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(g(r)), w2),
+                Ea::Mem { .. } => store32(a, 2, slow),
+            }
+        }
+        dynasm!(a ; .arch aarch64 ; mov w27, w3);
+    }
+
+    /// Emit the native form of `op`. Returns false (emitting nothing) if there is none.
+    /// `next` is the following instruction's address. Control transfers set eip (in w0) and
+    /// jump to `exit`.
+    fn native(a: &mut Asm, op: &BlockOp, slow: DynamicLabel, exit: DynamicLabel) -> bool {
+        match op.op {
+            Dop::MovRRm { reg, rm, bits: 32 } => {
+                read_rm(a, rm, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov W(g(reg)), w1);
+            }
+            Dop::MovRmR { rm, reg, bits: 32 } => match rm {
+                Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(g(r)), W(g(reg))),
+                Ea::Mem { base, index, scale, disp } => {
+                    ea(a, base, index, scale, disp);
+                    store32(a, g(reg), slow);
+                }
+            },
+            Dop::MovRmI { rm, imm } => match rm {
+                Ea::Reg(r) => mov32(a, g(r), imm),
+                Ea::Mem { base, index, scale, disp } => {
+                    ea(a, base, index, scale, disp);
+                    mov32(a, 1, imm);
+                    store32(a, 1, slow);
+                }
+            },
+            Dop::Lea { reg, ea: Ea::Mem { base, index, scale, disp } } => {
+                ea(a, base, index, scale, disp);
+                dynasm!(a ; .arch aarch64 ; mov W(g(reg)), w0);
+            }
+            Dop::AluRRm { op: o, reg, rm, bits: 32 } if o != 2 && o != 3 => {
+                read_rm(a, rm, 4, slow);
+                dynasm!(a ; .arch aarch64 ; mov w1, W(g(reg)));
+                let borrow = alu(a, o).unwrap();
+                flags(a, borrow, false);
+                if o != 7 {
+                    dynasm!(a ; .arch aarch64 ; mov W(g(reg)), w2);
+                }
+                dynasm!(a ; .arch aarch64 ; mov w27, w3);
+            }
+            Dop::AluRmR { op: o, rm, reg, bits: 32 } if o != 2 && o != 3 => alu_rm(a, o, rm, AluSrc::Reg(reg), false, slow),
+            Dop::Test { rm, reg, bits: 32 } => alu_rm(a, 4, rm, AluSrc::Reg(reg), true, slow),
+            Dop::AluRmI { op: o, rm, imm, bits: 32 } if o != 2 && o != 3 => alu_rm(a, o, rm, AluSrc::Imm(imm), false, slow),
+            Dop::TestI { rm, imm, bits: 32 } => alu_rm(a, 4, rm, AluSrc::Imm(imm), true, slow),
+            Dop::IncDec { rm, dec } => {
+                read_rm(a, rm, 1, slow);
+                dynasm!(a ; .arch aarch64 ; movz w4, #1);
+                if dec {
+                    dynasm!(a ; .arch aarch64 ; subs w2, w1, w4);
+                } else {
+                    dynasm!(a ; .arch aarch64 ; adds w2, w1, w4);
+                }
+                flags(a, dec, true);
+                match rm {
+                    Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(g(r)), w2),
+                    Ea::Mem { .. } => store32(a, 2, slow),
+                }
+                dynasm!(a ; .arch aarch64 ; mov w27, w3);
+            }
+            Dop::Push(src) => {
+                read_rm(a, src, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(ESP)) ; sub w0, w0, #4);
+                store32(a, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov W(g(ESP)), w0);
+            }
+            Dop::PushI(v) => {
+                mov32(a, 1, v);
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(ESP)) ; sub w0, w0, #4);
+                store32(a, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov W(g(ESP)), w0);
+            }
+            Dop::Pop(r) => {
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(ESP)));
+                load(a, 4, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov w2, W(g(ESP)) ; add w2, w2, #4 ; mov W(g(ESP)), w2 ; mov W(g(r)), w1);
+            }
+            Dop::Leave => {
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(EBP)));
+                load(a, 4, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov w2, W(g(EBP)) ; add w2, w2, #4 ; mov W(g(ESP)), w2 ; mov W(g(EBP)), w1);
+            }
+            Dop::Movx { reg, rm, bits, signed } => {
+                match rm {
+                    Ea::Reg(r) => {
+                        if bits == 16 {
+                            dynasm!(a ; .arch aarch64 ; mov w1, W(g(r)));
+                        } else if r < 4 {
+                            dynasm!(a ; .arch aarch64 ; and w1, W(g(r)), #0xFF);
+                        } else {
+                            dynasm!(a ; .arch aarch64 ; ubfx w1, W(g(r - 4)), #8, #8);
+                        }
+                    }
+                    Ea::Mem { base, index, scale, disp } => {
+                        ea(a, base, index, scale, disp);
+                        load(a, bits as u32 / 8, 1, slow);
+                    }
+                }
+                match (bits, signed) {
+                    (8, false) => dynasm!(a ; .arch aarch64 ; uxtb W(g(reg)), w1),
+                    (8, true) => dynasm!(a ; .arch aarch64 ; sxtb W(g(reg)), w1),
+                    (_, false) => dynasm!(a ; .arch aarch64 ; uxth W(g(reg)), w1),
+                    (_, true) => dynasm!(a ; .arch aarch64 ; sxth W(g(reg)), w1),
+                }
+            }
+            Dop::Nop => {}
+            Dop::MovRRm { reg, rm, bits: 8 } => {
+                read8(a, rm, 1, slow);
+                write8(a, Ea::Reg(reg), 1, slow);
+            }
+            Dop::MovRmR { rm, reg, bits: 8 } => {
+                if let Ea::Mem { base, index, scale, disp } = rm {
+                    ea(a, base, index, scale, disp);
+                }
+                read8(a, Ea::Reg(reg), 1, slow);
+                write8(a, rm, 1, slow);
+            }
+            Dop::AluRmR { op: o, rm, reg, bits: 8 } if o != 2 && o != 3 => alu8(a, o, rm, AluSrc::Reg(reg), false, slow),
+            Dop::AluRmI { op: o, rm, imm, bits: 8 } if o != 2 && o != 3 => alu8(a, o, rm, AluSrc::Imm(imm), false, slow),
+            Dop::Test { rm, reg, bits: 8 } => alu8(a, 4, rm, AluSrc::Reg(reg), true, slow),
+            Dop::TestI { rm, imm, bits: 8 } => alu8(a, 4, rm, AluSrc::Imm(imm), true, slow),
+            Dop::AluRRm { op: o, reg, rm, bits: 8 } if o != 2 && o != 3 => alu8_reg(a, o, reg, rm, slow),
+            Dop::Shift { op: o @ (4..=7), rm, count, by_cl: false } if count & 31 != 0 => shift_imm(a, o, rm, count as u32 & 31, slow),
+            Dop::Imul { reg, rm } => {
+                read_rm(a, rm, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov w4, W(g(reg)));
+                imul(a, reg);
+            }
+            Dop::ImulI { reg, rm, imm } => {
+                read_rm(a, rm, 1, slow);
+                mov32(a, 4, imm);
+                imul(a, reg);
+            }
+            Dop::CallInd(rm) => {
+                read_rm(a, rm, 1, slow);
+                mov32(a, 2, op.next);
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(ESP)) ; sub w0, w0, #4);
+                store32(a, 2, slow);
+                dynasm!(a ; .arch aarch64 ; mov W(g(ESP)), w0 ; mov w0, w1 ; b =>exit);
+            }
+            Dop::JmpInd(rm) => {
+                read_rm(a, rm, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov w0, w1 ; b =>exit);
+            }
+            // ---- control transfers: eip into w0, then leave the block ----
+            Dop::Jcc { cc, target } => {
+                cond(a, cc);
+                mov32(a, 1, target);
+                mov32(a, 2, op.next);
+                dynasm!(a ; .arch aarch64 ; cmp w0, #0 ; csel w0, w1, w2, ne ; b =>exit);
+            }
+            Dop::Jmp(t) => {
+                mov32(a, 0, t);
+                dynasm!(a ; .arch aarch64 ; b =>exit);
+            }
+            Dop::Call(t) => {
+                mov32(a, 1, op.next);
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(ESP)) ; sub w0, w0, #4);
+                store32(a, 1, slow);
+                dynasm!(a ; .arch aarch64 ; mov W(g(ESP)), w0);
+                mov32(a, 0, t);
+                dynasm!(a ; .arch aarch64 ; b =>exit);
+            }
+            Dop::Ret(n) => {
+                let n = n as u32 + 4;
+                dynasm!(a ; .arch aarch64 ; mov w0, W(g(ESP)));
+                load(a, 4, 1, slow);
+                mov32(a, 2, n);
+                dynasm!(a ; .arch aarch64 ; add W(g(ESP)), W(g(ESP)), w2 ; mov w0, w1 ; b =>exit);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Machine code for a block.
+    pub(super) fn block(ops: &[BlockOp]) -> Option<Vec<u8>> {
+        let mut a = Asm::new(0);
+        let exit = a.new_dynamic_label(); // w0 = eip, x13 = instructions run
+        let ret_only = a.new_dynamic_label(); // x0 = return value, Emu already up to date
+        dynasm!(a ; .arch aarch64
+            ; stp x29, x30, [sp, #-96]!
+            ; stp x19, x20, [sp, #16]
+            ; stp x21, x22, [sp, #32]
+            ; stp x23, x24, [sp, #48]
+            ; stp x25, x26, [sp, #64]
+            ; stp x27, x28, [sp, #80]
+            ; mov x28, x0
+        );
+        sync_in(&mut a);
+        let mut slows = Vec::new();
+        let mut ended = false;
+        for (i, op) in ops.iter().enumerate() {
+            let slow = a.new_dynamic_label();
+            let after = a.new_dynamic_label();
+            let count = i as u64 + 1;
+            // Control transfers read the count from x13 at the exit.
+            mov64(&mut a, 13, count);
+            if !native(&mut a, op, slow, exit) {
+                dynasm!(a ; .arch aarch64 ; b =>slow);
+            }
+            dynasm!(a ; .arch aarch64 ; =>after);
+            slows.push((slow, after, op as *const BlockOp, count));
+            if matches!(op.op, Dop::Jcc { .. } | Dop::Jmp(_) | Dop::Call(_) | Dop::Ret(_) | Dop::CallInd(_) | Dop::JmpInd(_)) {
+                ended = true;
+                // If the transfer went through the slow path it has left (see below); the
+                // native path has already jumped to `exit`.
+                break;
+            }
+        }
+        // Fell off the end of the block (or a final transfer went through the slow path and
+        // carried on to the next instruction): continue there.
+        let _ = ended;
+        let last = ops.len().min(slows.len());
+        mov32(&mut a, 0, ops[last - 1].next);
+        mov64(&mut a, 13, last as u64);
+        dynasm!(a ; .arch aarch64 ; b =>exit);
+        // Slow paths: run the instruction in the interpreter.
+        for (slow, after, op_ptr, count) in slows {
+            dynasm!(a ; .arch aarch64 ; =>slow);
+            sync_out(&mut a);
+            dynasm!(a ; .arch aarch64 ; mov x0, x28);
+            mov64(&mut a, 1, op_ptr as u64);
+            mov64(&mut a, 9, jit_step as usize as u64);
+            dynasm!(a ; .arch aarch64
+                ; blr x9
+                ; cbnz x0, >leave
+            );
+            sync_in(&mut a);
+            dynasm!(a ; .arch aarch64 ; b =>after ; leave:);
+            // status 1: leave normally; 2: leave flagging emu.jit_stop
+            mov64(&mut a, 2, count);
+            dynasm!(a ; .arch aarch64
+                ; cmp x0, #2
+                ; b.ne >plain
+                ; orr x2, x2, #0x100000000
+                ; plain:
+                ; mov x0, x2
+                ; b =>ret_only
+            );
+        }
+        // Normal exit: eip in w0, count in x13.
+        dynasm!(a ; .arch aarch64 ; =>exit ; str w0, [x28, #OFF_EIP]);
+        sync_out(&mut a);
+        dynasm!(a ; .arch aarch64 ; mov x0, x13 ; =>ret_only
+            ; ldp x19, x20, [sp, #16]
+            ; ldp x21, x22, [sp, #32]
+            ; ldp x23, x24, [sp, #48]
+            ; ldp x25, x26, [sp, #64]
+            ; ldp x27, x28, [sp, #80]
+            ; ldp x29, x30, [sp], #96
+            ; ret
+        );
+        a.finalize().ok()
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+mod codegen {
+    pub(super) fn block(_: &[super::BlockOp]) -> Option<Vec<u8>> {
+        None
+    }
+}

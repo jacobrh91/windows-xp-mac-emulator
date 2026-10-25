@@ -30,6 +30,12 @@ impl Memory {
         Memory { pages, watch: None, fault_write: std::cell::Cell::new(false), watch_hits: Vec::new(), code_pages: vec![0; PAGE_COUNT], code_dirty: false }
     }
 
+    /// The page table (one pointer per page, null when unmapped) and the code-page map, for
+    /// compiled code. Both stay where they are for the life of the `Memory`.
+    pub fn page_table(&self) -> (*const usize, *const u8) {
+        (self.pages.as_ptr() as *const usize, self.code_pages.as_ptr())
+    }
+
     /// Remember that `[addr, addr + len)` holds cached instructions.
     pub fn note_code(&mut self, addr: u32, len: u32) {
         self.code_pages[(addr >> PAGE_BITS) as usize] = 1;
