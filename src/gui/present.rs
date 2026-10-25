@@ -275,6 +275,45 @@ mod cocoa {
         }
     }
 
+    /// minifb's window answers `contentView` with its inner view, while the real content view
+    /// is the frame view around it, which is where mouse clicks are caught. Changing the
+    /// style mask makes AppKit rebuild the window frame and re-install "the content view",
+    /// so the frame view falls out and clicks go nowhere. These put it back.
+    unsafe fn frame_view_of(win: Id) -> (Id, Id) {
+        unsafe {
+            let inner = send_id(win, sel(c"contentView"));
+            let frame_view = send_id(inner, sel(c"superview"));
+            // Kept alive across the style change (AppKit lets go of it).
+            send_id(frame_view, sel(c"retain"));
+            (frame_view, inner)
+        }
+    }
+
+    unsafe fn restore_frame_view(win: Id, frame_view: Id, inner: Id) {
+        #[repr(C)]
+        struct Super {
+            receiver: Id,
+            class: Id,
+        }
+        #[link(name = "objc")]
+        unsafe extern "C" {
+            fn objc_msgSendSuper();
+        }
+        unsafe {
+            if frame_view.is_null() || send_id(inner, sel(c"superview")) == frame_view {
+                return;
+            }
+            // NSWindow's own setContentView:, not minifb's override (which would nest it).
+            let sup = Super { receiver: win, class: send_class(c"NSWindow") };
+            std::mem::transmute::<*const (), unsafe extern "C" fn(*const Super, *mut c_void, Id)>(
+                objc_msgSendSuper as *const (),
+            )(&sup, sel(c"setContentView:"), frame_view);
+            if send_id(inner, sel(c"superview")) != frame_view {
+                send_id_arg(frame_view, sel(c"addSubview:"), inner);
+            }
+        }
+    }
+
     // NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar
     const HIDE_DOCK_AND_MENU_BAR: usize = (1 << 1) | (1 << 3);
     // Above the menu bar (NSMainMenuWindowLevel is 24).
@@ -298,7 +337,9 @@ mod cocoa {
             }
             let screen_frame = send_rect(screen, sel(c"frame"));
             set_presentation_options(HIDE_DOCK_AND_MENU_BAR);
+            let (frame_view, inner) = frame_view_of(win);
             send_usize_arg(win, sel(c"setStyleMask:"), 0); // NSWindowStyleMaskBorderless
+            restore_frame_view(win, frame_view, inner);
             send_usize_arg(win, sel(c"setLevel:"), COVER_LEVEL);
             send_set_frame_display(win, screen_frame, true);
             Some(saved)
@@ -381,6 +422,43 @@ mod cocoa {
         handles(window).is_some_and(|(_, win)| unsafe { send_usize(win, sel(c"isKeyWindow")) } & 0xFF != 0)
     }
 
+    /// Debugging: which view a click at the window's centre would go to, and the frames of
+    /// the views on the way.
+    pub fn describe_hit(window: &Window) -> String {
+        #[link(name = "objc")]
+        unsafe extern "C" {
+            fn object_getClassName(obj: Id) -> *const c_char;
+        }
+        let Some((view, win)) = handles(window) else { return "not attached".into() };
+        // SAFETY: see module docs.
+        unsafe {
+            let name = |o: Id| if o.is_null() { "nil".to_string() } else { std::ffi::CStr::from_ptr(object_getClassName(o)).to_string_lossy().into_owned() };
+            let content = send_id(win, sel(c"contentView"));
+            let frame_view = send_id(content, sel(c"superview"));
+            let top = send_id(frame_view, sel(c"superview"));
+            let wf = send_rect(win, sel(c"frame"));
+            let hit = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, f64, f64) -> Id>(objc_msgSend as *const ())(
+                if top.is_null() { frame_view } else { top },
+                sel(c"hitTest:"),
+                wf.w / 2.0,
+                wf.h / 2.0,
+            );
+            format!(
+                "hit at centre: {} | window {:?} | top {} {:?} | frameView {} {:?} | content {} {:?} | view {} {:?}",
+                name(hit),
+                wf,
+                name(top),
+                if top.is_null() { None } else { Some(send_rect(top, sel(c"frame"))) },
+                name(frame_view),
+                send_rect(frame_view, sel(c"frame")),
+                name(content),
+                send_rect(content, sel(c"frame")),
+                name(view),
+                send_rect(view, sel(c"frame")),
+            )
+        }
+    }
+
     /// Is the window in macOS's own fullscreen?
     pub fn in_native_fullscreen(window: &Window) -> bool {
         // SAFETY: see module docs.
@@ -414,7 +492,9 @@ mod cocoa {
         // SAFETY: see module docs.
         unsafe {
             send_usize_arg(win, sel(c"setLevel:"), 0);
+            let (frame_view, inner) = frame_view_of(win);
             send_usize_arg(win, sel(c"setStyleMask:"), saved.style_mask);
+            restore_frame_view(win, frame_view, inner);
             send_set_frame_display(win, saved.frame, true);
             set_presentation_options(0);
         }
@@ -474,6 +554,9 @@ mod cocoa {
         false
     }
     pub fn toggle_native_fullscreen(_: &Window) {}
+    pub fn describe_hit(_: &Window) -> String {
+        String::new()
+    }
     pub fn modifiers() -> Option<([bool; 6], bool)> {
         None
     }
@@ -535,6 +618,7 @@ pub struct Presenter {
     ctrl_click: bool,
     /// Ctrl is hidden from the game after a Control-click, until Control is released.
     ctrl_click_hold: bool,
+    logged_buttons: [bool; 3],
     /// The Windows modifier keys (VK_LSHIFT..VK_RMENU) as last sent to the game.
     modifiers: [bool; 6],
     last_pos: (i32, i32),
@@ -563,6 +647,7 @@ impl Presenter {
             other_down: [false; 2],
             ctrl_click: false,
             ctrl_click_hold: false,
+            logged_buttons: [false; 3],
             modifiers: [false; 6],
             last_pos: (-1, -1),
             region,
@@ -703,6 +788,20 @@ impl Presenter {
             now[3] = false;
         }
 
+        // XP_INPUT_LOG=1: the mouse buttons as minifb sees them, and where the mouse is.
+        if std::env::var_os("XP_INPUT_LOG").is_some() {
+            if self.frames % 240 == 0 {
+                eprintln!("[input] {}", cocoa::describe_hit(&self.window));
+            }
+            let b = [MouseButton::Left, MouseButton::Right, MouseButton::Middle].map(|m| self.window.get_mouse_down(m));
+            if b != self.logged_buttons {
+                self.logged_buttons = b;
+                eprintln!(
+                    "[input] buttons {b:?} game pos {mouse:?} view {:?} fullscreen {was_fullscreen}",
+                    cocoa::mouse_in_view(&self.window).map(|((x, y), (w, h))| (x as i32, y as i32, w as i32, h as i32))
+                );
+            }
+        }
         if let Some((mx, my)) = mouse {
             let pos = (mx + rx, my + ry);
             if pos != self.last_pos {
