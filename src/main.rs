@@ -235,7 +235,7 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         for (m, n) in mods.iter().take(8) {
             eprintln!("[module] {:5.1}% {m}", *n as f64 * 100.0 / total as f64);
         }
-        for (addr, n) in rows.iter().take(25) {
+        for (addr, n) in rows.iter().take(45) {
             eprintln!("[profile] {:5.1}% {}", *n as f64 * 100.0 / total as f64, emu.win.locate(*addr).unwrap_or_else(|| format!("{addr:#x}")));
         }
     }
