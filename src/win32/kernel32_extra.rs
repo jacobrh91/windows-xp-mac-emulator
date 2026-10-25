@@ -63,7 +63,7 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "GlobalAlloc") | ("kernel32", "LocalAlloc") => (2, |e, a| {
             let p = e.heap_alloc(a[1])?;
             if a[0] & 0x40 != 0 {
-                e.mem.write_bytes(p, &vec![0; a[1] as usize])?; // GMEM_ZEROINIT / LMEM_ZEROINIT
+                e.mem.fill(p, a[1], 0)?; // GMEM_ZEROINIT / LMEM_ZEROINIT
             }
             Ok(p)
         }),

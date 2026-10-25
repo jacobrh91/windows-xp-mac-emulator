@@ -194,7 +194,7 @@ fn core_api(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "HeapAlloc") => (3, |e, a| {
             let p = e.heap_alloc(a[2])?;
             if a[1] & 8 != 0 {
-                e.mem.write_bytes(p, &vec![0; a[2] as usize])?; // HEAP_ZERO_MEMORY
+                e.mem.fill(p, a[2], 0)?; // HEAP_ZERO_MEMORY
             }
             Ok(p)
         }),
@@ -616,6 +616,10 @@ impl Emu {
                 } else {
                     self.mem.write(block + 4, 4, found)?;
                 }
+                // A reused block is cleared. Fresh heap memory is zero on Windows, and some
+                // programs count on it: Miles queues its first sound buffers without mixing
+                // into them, and stale data there played as a loud pop.
+                self.mem.fill(block + 16, size, 0)?;
                 block
             }
             None => {
@@ -813,6 +817,17 @@ fn k32_get_version_ex(e: &mut Emu, a: &Args) -> Res<u32> {
 #[cfg(test)]
 mod heap_tests {
     use crate::cpu::Emu;
+
+    #[test]
+    fn reused_blocks_come_back_zeroed() {
+        let mut e = Emu::new();
+        let a = e.heap_alloc(64).unwrap();
+        e.mem.write_bytes(a, &[0xAB; 64]).unwrap();
+        assert!(e.heap_free(a));
+        let b = e.heap_alloc(64).unwrap();
+        assert_eq!(b, a);
+        assert_eq!(e.mem.read_bytes(b, 64).unwrap(), vec![0; 64], "no stale data, as with fresh memory");
+    }
 
     #[test]
     fn freed_blocks_are_reused_and_split() {

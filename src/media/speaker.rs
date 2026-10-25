@@ -34,6 +34,12 @@ struct Voice {
     played: u64,
 }
 
+/// `XP_SOUND_LOG=1`: every block queued to a voice (with its peak level) and every removal.
+fn sound_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("XP_SOUND_LOG").is_some())
+}
+
 #[derive(Default)]
 struct Mixer {
     voices: HashMap<u32, Voice>,
@@ -108,6 +114,10 @@ impl SpeakerHandle {
 
     /// Append frames (stereo, at `self.rate`) to voice `id`.
     pub fn queue(&self, id: u32, frames: &[[f32; 2]]) {
+        if sound_log() {
+            let peak = frames.iter().flatten().fold(0.0f32, |m, &x| m.max(x.abs()));
+            eprintln!("[sound] {:?} voice {id:#x} +{} frames, peak {peak:.3}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64() % 1000.0, frames.len());
+        }
         let cap = (self.rate as f32 * MAX_QUEUED_SECS) as usize;
         self.with_voice(id, |v| {
             v.frames.extend(frames.iter().copied());
@@ -167,6 +177,9 @@ impl SpeakerHandle {
     }
 
     pub fn remove(&self, id: u32) {
+        if sound_log() {
+            eprintln!("[sound] voice {id:#x} removed");
+        }
         self.mixer.lock().unwrap().voices.remove(&id);
     }
 

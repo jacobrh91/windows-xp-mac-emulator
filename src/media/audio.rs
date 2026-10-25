@@ -435,6 +435,15 @@ fn wave_write(e: &mut Emu, a: &Args) -> Res<u32> {
     // And to the speakers.
     if let Some(s) = e.speaker() {
         let data = e.mem.read(hdr, 4)?;
+        if std::env::var_os("XP_SOUND_LOG").is_some() {
+            let head: Vec<String> = e.mem.read_bytes(data, 16.min(len))?.iter().map(|b| format!("{b:02x}")).collect();
+            eprintln!(
+                "[sound] waveOutWrite {hwo:#x} data {data:#x} len {len} heap-tag {:#x} size {:#x} starts {}",
+                e.mem.read(data.wrapping_sub(8), 4).unwrap_or(0),
+                e.mem.read(data.wrapping_sub(16), 4).unwrap_or(0),
+                head.join(" ")
+            );
+        }
         let pcm = decode_pcm(&e.mem.read_bytes(data, len)?, format.bits, format.channels);
         let mut out = Vec::with_capacity(pcm.len() * 2);
         if let Some(w) = e.win.audio.waves.get_mut(&hwo) {

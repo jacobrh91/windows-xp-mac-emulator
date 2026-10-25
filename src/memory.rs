@@ -279,6 +279,28 @@ impl Memory {
         Ok(out)
     }
 
+    /// Set `len` bytes from `addr` to `value`, a page at a time.
+    pub fn fill(&mut self, addr: u32, len: u32, value: u8) -> Result<(), Fault> {
+        if len == 0 {
+            return Ok(());
+        }
+        if self.watch.is_some() {
+            return self.write_bytes(addr, &vec![value; len as usize]);
+        }
+        for p in (addr >> PAGE_BITS)..=(addr.wrapping_add(len - 1) >> PAGE_BITS) {
+            self.check_code(p << PAGE_BITS, 1);
+        }
+        let mut done = 0u32;
+        while done < len {
+            let a = addr.wrapping_add(done);
+            let off = (a as usize) & (PAGE_SIZE - 1);
+            let n = (PAGE_SIZE - off).min((len - done) as usize);
+            self.page_mut(a)?[off..off + n].fill(value);
+            done += n as u32;
+        }
+        Ok(())
+    }
+
     pub fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
         if !data.is_empty() {
             for p in (addr >> PAGE_BITS)..=(addr.wrapping_add(data.len() as u32 - 1) >> PAGE_BITS) {
