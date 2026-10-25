@@ -8,10 +8,12 @@ const C2: u16 = 0x0400;
 const C3: u16 = 0x4000;
 const CC_MASK: u16 = 0x4700;
 
+/// `repr(C)` with the register stack first, for compiled code (`jit`).
 #[derive(Clone)]
+#[repr(C)]
 pub struct Fpu {
-    st: [f64; 8],
-    top: usize,
+    pub(crate) st: [f64; 8],
+    pub(crate) top: usize,
     /// Condition code bits C0..C3 as they appear in the status word.
     cc: u16,
     pub cw: u16,

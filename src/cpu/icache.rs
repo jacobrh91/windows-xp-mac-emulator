@@ -381,7 +381,7 @@ impl Emu {
         self.icache.runs += 1;
         let n = ops.len().min(limit as usize);
         if self.jit.enabled && n == ops.len() {
-            if let Some(r) = self.run_compiled(i, start) {
+            if let Some(r) = self.run_compiled(i, start, limit) {
                 return Some(r);
             }
         }
@@ -407,7 +407,7 @@ impl Emu {
 
     /// Run block `i` as compiled code, compiling it once it is hot. None: not compiled (yet).
     #[inline(always)]
-    fn run_compiled(&mut self, i: usize, start: u32) -> Option<(u64, Res<()>)> {
+    fn run_compiled(&mut self, i: usize, start: u32, limit: u64) -> Option<(u64, Res<()>)> {
         let current = self.jit.generation;
         let b = &mut self.icache.blocks[i];
         if b.jit_gen != current || b.code == 0 {
@@ -417,7 +417,7 @@ impl Emu {
             }
             b.hits = 0;
             let ops = b.ops.clone();
-            let f = match self.jit.compile(&ops) {
+            let f = match self.jit.compile(ops) {
                 Some(f) => f,
                 None => {
                     // The code area is full: start it afresh (later blocks compile again).
@@ -431,10 +431,11 @@ impl Emu {
         }
         let code = self.icache.blocks[i].code;
         (self.jit_pages, self.jit_code_pages) = self.mem.page_table();
+        self.jit_chain = self.jit.chain.as_ptr();
         // SAFETY: `code` was produced by `jit.compile` for this block in the current
         // generation; it only touches this emulator through the pointer it is given.
         let f: super::jit::BlockFn = unsafe { std::mem::transmute::<usize, super::jit::BlockFn>(code) };
-        let r = unsafe { f(self) };
+        let r = unsafe { f(self, limit) };
         self.jit.runs += 1;
         let count = r & 0xFFFF_FFFF;
         self.steps += count;
@@ -699,7 +700,37 @@ mod tests {
                 vec![0x40 | (reg << 3) | base, (r.next() % 0x7C) as u8 & !3]
             }
         };
-        match r.next() % 15 {
+        match r.next() % 18 {
+            15..=17 => {
+                // x87: memory forms at [ebx/esi + d8] and register forms
+                let mem = |r: &mut Rng, op: u8| vec![0x40 | (op << 3) | r.pick(&[3u8, 6]), (r.next() % 0x78) as u8 & !7];
+                match r.next() % 9 {
+                    0 => {
+                        out.push(r.pick(&[0xD9u8, 0xDD]));
+                        let op = r.pick(&[0u8, 2, 3]);
+                        out.extend(mem(r, op));
+                    }
+                    1 => {
+                        out.push(r.pick(&[0xD8u8, 0xDC]));
+                        let op = r.pick(&[0u8, 1, 4, 5, 6, 7]);
+                        out.extend(mem(r, op));
+                    }
+                    2 | 3 => {
+                        let opc = r.pick(&[0xD8u8, 0xDC, 0xDE]);
+                        let op = r.pick(&[0u8, 1, 4, 5, 6, 7]);
+                        out.extend([opc, 0xC0 | (op << 3) | (r.next() % 8) as u8]);
+                    }
+                    4 => out.extend([0xD9, 0xC0 | (r.next() % 8) as u8]), // fld st(i)
+                    5 => out.extend([0xD9, 0xC8 | (r.next() % 8) as u8]), // fxch
+                    6 => out.extend([0xDD, r.pick(&[0xD0u8, 0xD8]) | (r.next() % 8) as u8]), // fst/fstp st(i)
+                    7 => out.extend([0xD9, r.pick(&[0xE0u8, 0xE1, 0xE8, 0xEE])]),
+                    _ => {
+                        // a value to work with: fild-free, so load a float from memory
+                        out.push(0xDD);
+                        out.extend(mem(r, 0));
+                    }
+                }
+            }
             12 => {
                 // 8-bit mov in either direction
                 out.push(r.pick(&[0x88u8, 0x8A]));
@@ -876,6 +907,8 @@ mod tests {
                 assert_eq!(b.run(100_000), Stop::Halt);
                 assert_eq!(a.regs, b.regs, "registers (seed {seed}, pass {pass})");
                 assert_eq!(a.eflags, b.eflags, "flags (seed {seed}, pass {pass})");
+                assert_eq!(a.fpu.top, b.fpu.top, "x87 stack top (seed {seed}, pass {pass})");
+                assert_eq!(a.fpu.st.map(f64::to_bits), b.fpu.st.map(f64::to_bits), "x87 registers (seed {seed}, pass {pass})");
             }
             assert_eq!(a.steps, b.steps, "instruction count (seed {seed})");
             assert_eq!(a.mem.read_bytes(0x10000, 0x400).unwrap(), b.mem.read_bytes(0x10000, 0x400).unwrap(), "memory (seed {seed})");

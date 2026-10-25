@@ -26,8 +26,23 @@ pub(crate) const HOT: u32 = 16;
 /// Executable memory reserved for compiled code.
 const CODE_BYTES: usize = 128 << 20;
 
-/// Compiled block: `fn(emu) -> instructions run | (1 << 32 if emu.jit_stop holds a Stop)`.
-pub(crate) type BlockFn = unsafe extern "C" fn(*mut Emu) -> u64;
+/// Compiled block: `fn(emu, budget) -> instructions run | (1 << 32 if emu.jit_stop holds a
+/// Stop)`. It may continue into further compiled blocks (chaining) while the instructions run
+/// stay within `budget`.
+pub(crate) type BlockFn = unsafe extern "C" fn(*mut Emu, u64) -> u64;
+
+/// Slots in the chaining table.
+const CHAIN_SLOTS: usize = 1 << 16;
+
+/// Where compiled code continues into another compiled block: its guest address, length and
+/// the address of its body (just after its register loading).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct ChainEntry {
+    eip: u32,
+    len: u32,
+    body: u64,
+}
 
 pub struct Jit {
     pub(crate) enabled: bool,
@@ -42,6 +57,10 @@ pub struct Jit {
     /// Helper calls by operation kind (statistics).
     pub helper_kinds: std::collections::HashMap<&'static str, u64>,
     pub(crate) stats: bool,
+    /// Chaining table, read by compiled code (see `codegen::block`).
+    pub(crate) chain: Vec<ChainEntry>,
+    /// Operation lists that compiled code points into: kept until the code is thrown away.
+    keep: Vec<std::rc::Rc<[BlockOp]>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -54,13 +73,17 @@ unsafe extern "C" {
 impl Jit {
     pub(crate) fn new() -> Jit {
         let enabled = cfg!(all(target_arch = "aarch64", target_os = "macos")) && std::env::var_os("XP_NO_JIT").is_none();
-        Jit { enabled, mem: std::ptr::null_mut(), used: 0, generation: 1, compiled: 0, helper_calls: 0, runs: 0, helper_kinds: Default::default(), stats: std::env::var_os("XP_BLOCK_STATS").is_some() }
+        Jit { enabled, mem: std::ptr::null_mut(), used: 0, generation: 1, compiled: 0, helper_calls: 0, runs: 0, helper_kinds: Default::default(), stats: std::env::var_os("XP_BLOCK_STATS").is_some(), chain: vec![ChainEntry { eip: u32::MAX, len: 0, body: 0 }; CHAIN_SLOTS], keep: Vec::new() }
     }
 
     /// Forget all compiled code (the block cache was flushed, or the code area is full).
     pub(crate) fn reset(&mut self) {
         self.used = 0;
         self.generation = self.generation.wrapping_add(1).max(1);
+        for c in self.chain.iter_mut() {
+            c.eip = u32::MAX;
+        }
+        self.keep.clear();
     }
 
     /// Copy machine code into executable memory.
@@ -99,12 +122,16 @@ impl Jit {
     }
 
     /// Compile a block. None if it cannot be (then it keeps running in the interpreter).
-    pub(crate) fn compile(&mut self, ops: &[BlockOp]) -> Option<BlockFn> {
+    pub(crate) fn compile(&mut self, ops: std::rc::Rc<[BlockOp]>) -> Option<BlockFn> {
         if !self.enabled || ops.is_empty() {
             return None;
         }
-        let code = codegen::block(ops)?;
-        self.install(&code)
+        let (code, body) = codegen::block(&ops)?;
+        let f = self.install(&code)?;
+        let start = ops[0].start;
+        self.chain[chain_slot(start)] = ChainEntry { eip: start, len: ops.len() as u32, body: f as usize as u64 + body as u64 };
+        self.keep.push(ops);
+        Some(f)
     }
 }
 
@@ -148,13 +175,20 @@ pub(crate) unsafe extern "C" fn jit_step(emu: *mut Emu, op: *const BlockOp) -> u
     }
 }
 
+fn chain_slot(eip: u32) -> usize {
+    ((eip ^ (eip >> 16)) as usize) & (CHAIN_SLOTS - 1)
+}
+
 /// Byte offsets of what compiled code touches in `Emu` (which is `repr(C)`).
 pub(crate) const OFF_REGS: u32 = std::mem::offset_of!(Emu, regs) as u32;
 pub(crate) const OFF_EIP: u32 = std::mem::offset_of!(Emu, eip) as u32;
 pub(crate) const OFF_EFLAGS: u32 = std::mem::offset_of!(Emu, eflags) as u32;
 pub(crate) const OFF_PAGES: u32 = std::mem::offset_of!(Emu, jit_pages) as u32;
 pub(crate) const OFF_CODE_PAGES: u32 = std::mem::offset_of!(Emu, jit_code_pages) as u32;
-const _: () = assert!(OFF_REGS == 0 && OFF_EIP == 32 && OFF_EFLAGS == 36 && OFF_PAGES == 40 && OFF_CODE_PAGES == 48);
+pub(crate) const OFF_CHAIN: u32 = std::mem::offset_of!(Emu, jit_chain) as u32;
+pub(crate) const OFF_FPU: u32 = std::mem::offset_of!(Emu, fpu) as u32;
+const _: () = assert!(OFF_REGS == 0 && OFF_EIP == 32 && OFF_EFLAGS == 36 && OFF_PAGES == 40 && OFF_CODE_PAGES == 48 && OFF_CHAIN == 56);
+const _: () = assert!(OFF_FPU < 4096 && std::mem::offset_of!(super::fpu::Fpu, st) == 0 && std::mem::offset_of!(super::fpu::Fpu, top) == 64);
 
 #[cfg(target_arch = "aarch64")]
 mod codegen {
@@ -217,6 +251,194 @@ mod codegen {
             ; cmp w11, #limit
             ; b.hi =>slow
         );
+    }
+
+    /// Load 8 bytes at w0 into x1.
+    fn load64(a: &mut Asm, slow: DynamicLabel) {
+        page(a, 8, slow);
+        dynasm!(a ; .arch aarch64 ; ldr x1, [x10, x11]);
+    }
+
+    /// Store x1 (8 bytes) at w0.
+    fn store64(a: &mut Asm, slow: DynamicLabel) {
+        dynasm!(a ; .arch aarch64
+            ; lsr w9, w0, #12
+            ; ldrb w12, [x14, x9]
+            ; cbnz w12, =>slow
+        );
+        page(a, 8, slow);
+        dynasm!(a ; .arch aarch64 ; str x1, [x10, x11]);
+    }
+
+    // ---- x87: the register stack lives in emu.fpu (x16 = &st[0], x17 = top) ----
+
+    fn fpu_base(a: &mut Asm) {
+        dynasm!(a ; .arch aarch64 ; add x16, x28, #OFF_FPU ; ldr x17, [x16, #64]);
+    }
+
+    /// d0 = st(i)
+    fn fget(a: &mut Asm, i: u32, d: u8) {
+        dynasm!(a ; .arch aarch64 ; add x9, x17, #i ; and x9, x9, #7);
+        match d {
+            0 => dynasm!(a ; .arch aarch64 ; ldr d0, [x16, x9, lsl #3]),
+            _ => dynasm!(a ; .arch aarch64 ; ldr d1, [x16, x9, lsl #3]),
+        }
+    }
+
+    /// st(i) = d0
+    fn fset(a: &mut Asm, i: u32) {
+        dynasm!(a ; .arch aarch64 ; add x9, x17, #i ; and x9, x9, #7 ; str d0, [x16, x9, lsl #3]);
+    }
+
+    /// push d0
+    fn fpush(a: &mut Asm) {
+        dynasm!(a ; .arch aarch64
+            ; sub x17, x17, #1
+            ; and x17, x17, #7
+            ; str d0, [x16, x17, lsl #3]
+            ; str x17, [x16, #64]
+        );
+    }
+
+    fn fpop(a: &mut Asm) {
+        dynasm!(a ; .arch aarch64 ; add x17, x17, #1 ; and x17, x17, #7 ; str x17, [x16, #64]);
+    }
+
+    /// d0 = arith(op, d0, d1) as `Fpu::arith` (0 add, 1 mul, 4 sub, 5 subr, 6 div, 7 divr).
+    fn farith(a: &mut Asm, op: u8) {
+        match op {
+            0 => dynasm!(a ; .arch aarch64 ; fadd d0, d0, d1),
+            1 => dynasm!(a ; .arch aarch64 ; fmul d0, d0, d1),
+            4 => dynasm!(a ; .arch aarch64 ; fsub d0, d0, d1),
+            5 => dynasm!(a ; .arch aarch64 ; fsub d0, d1, d0),
+            6 => dynasm!(a ; .arch aarch64 ; fdiv d0, d0, d1),
+            _ => dynasm!(a ; .arch aarch64 ; fdiv d0, d1, d0),
+        }
+    }
+
+    /// The common x87 instructions. false: leave it to the interpreter.
+    fn fpu(a: &mut Asm, opc: u8, reg: u8, rm: Ea, slow: DynamicLabel) -> bool {
+        let arith = |o: u8| matches!(o, 0 | 1 | 4..=7);
+        match (opc, reg, rm) {
+            // fld m32 / m64
+            (0xD9, 0, Ea::Mem { base, index, scale, disp }) | (0xDD, 0, Ea::Mem { base, index, scale, disp }) => {
+                ea(a, base, index, scale, disp);
+                if opc == 0xD9 {
+                    load(a, 4, 1, slow);
+                    dynasm!(a ; .arch aarch64 ; fmov s0, w1 ; fcvt d0, s0);
+                } else {
+                    load64(a, slow);
+                    dynasm!(a ; .arch aarch64 ; fmov d0, x1);
+                }
+                fpu_base(a);
+                fpush(a);
+            }
+            // fst / fstp m32 / m64
+            (0xD9 | 0xDD, 2 | 3, Ea::Mem { base, index, scale, disp }) => {
+                fpu_base(a);
+                fget(a, 0, 0);
+                ea(a, base, index, scale, disp);
+                if opc == 0xD9 {
+                    dynasm!(a ; .arch aarch64 ; fcvt s0, d0 ; fmov w1, s0);
+                    store32(a, 1, slow);
+                } else {
+                    dynasm!(a ; .arch aarch64 ; fmov x1, d0);
+                    store64(a, slow);
+                }
+                if reg == 3 {
+                    fpop(a);
+                }
+            }
+            // st0 = st0 op m32 / m64
+            (0xD8 | 0xDC, o, Ea::Mem { base, index, scale, disp }) if arith(o) => {
+                ea(a, base, index, scale, disp);
+                if opc == 0xD8 {
+                    load(a, 4, 1, slow);
+                    dynasm!(a ; .arch aarch64 ; fmov s1, w1 ; fcvt d1, s1);
+                } else {
+                    load64(a, slow);
+                    dynasm!(a ; .arch aarch64 ; fmov d1, x1);
+                }
+                fpu_base(a);
+                fget(a, 0, 0);
+                farith(a, o);
+                fset(a, 0);
+            }
+            // st0 = st0 op st(i)
+            (0xD8, o, Ea::Reg(i)) if arith(o) => {
+                fpu_base(a);
+                fget(a, 0, 0);
+                fget(a, i as u32, 1);
+                farith(a, o);
+                fset(a, 0);
+            }
+            // st(i) = st(i) op st0, sub/div encodings swapped; DE pops
+            (0xDC | 0xDE, o, Ea::Reg(i)) if arith(o) => {
+                let eff = match o {
+                    4 => 5,
+                    5 => 4,
+                    6 => 7,
+                    7 => 6,
+                    o => o,
+                };
+                fpu_base(a);
+                fget(a, i as u32, 0);
+                fget(a, 0, 1);
+                farith(a, eff);
+                fset(a, i as u32);
+                if opc == 0xDE {
+                    fpop(a);
+                }
+            }
+            // fld st(i)
+            (0xD9, 0, Ea::Reg(i)) => {
+                fpu_base(a);
+                fget(a, i as u32, 0);
+                fpush(a);
+            }
+            // fxch st(i)
+            (0xD9, 1, Ea::Reg(i)) => {
+                fpu_base(a);
+                fget(a, 0, 0);
+                fget(a, i as u32, 1);
+                dynasm!(a ; .arch aarch64 ; fmov d2, d0 ; fmov d0, d1);
+                fset(a, 0);
+                dynasm!(a ; .arch aarch64 ; fmov d0, d2);
+                fset(a, i as u32);
+            }
+            // fst / fstp st(i)
+            (0xDD, 2 | 3, Ea::Reg(i)) => {
+                fpu_base(a);
+                fget(a, 0, 0);
+                fset(a, i as u32);
+                if reg == 3 {
+                    fpop(a);
+                }
+            }
+            // fchs, fabs
+            (0xD9, 4, Ea::Reg(i @ (0 | 1))) => {
+                fpu_base(a);
+                fget(a, 0, 0);
+                if i == 0 {
+                    dynasm!(a ; .arch aarch64 ; fneg d0, d0);
+                } else {
+                    dynasm!(a ; .arch aarch64 ; fabs d0, d0);
+                }
+                fset(a, 0);
+            }
+            // fld1, fldz
+            (0xD9, 5, Ea::Reg(i @ (0 | 6))) => {
+                fpu_base(a);
+                if i == 0 {
+                    dynasm!(a ; .arch aarch64 ; fmov d0, 1.0);
+                } else {
+                    dynasm!(a ; .arch aarch64 ; fmov d0, xzr);
+                }
+                fpush(a);
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Load `size` (1, 2, 4) bytes at w0 into W(dst), zero-extended.
@@ -612,6 +834,7 @@ mod codegen {
                 }
             }
             Dop::Nop => {}
+            Dop::Fpu { opc, reg, rm } => return fpu(a, opc, reg, rm, slow),
             Dop::MovRRm { reg, rm, bits: 8 } => {
                 read8(a, rm, 1, slow);
                 write8(a, Ea::Reg(reg), 1, slow);
@@ -681,21 +904,27 @@ mod codegen {
         true
     }
 
-    /// Machine code for a block.
-    pub(super) fn block(ops: &[BlockOp]) -> Option<Vec<u8>> {
+    /// Machine code for a block, and the offset of its body (where chained blocks enter, with
+    /// the guest state already in registers and the frame already set up).
+    ///
+    /// Frame: callee-saved registers, then [sp+96] instructions run so far (all chained blocks)
+    /// and [sp+104] the budget.
+    pub(super) fn block(ops: &[BlockOp]) -> Option<(Vec<u8>, usize)> {
         let mut a = Asm::new(0);
-        let exit = a.new_dynamic_label(); // w0 = eip, x13 = instructions run
+        let exit = a.new_dynamic_label(); // w0 = eip, x13 = instructions run in this block
         let ret_only = a.new_dynamic_label(); // x0 = return value, Emu already up to date
         dynasm!(a ; .arch aarch64
-            ; stp x29, x30, [sp, #-96]!
+            ; stp x29, x30, [sp, #-112]!
             ; stp x19, x20, [sp, #16]
             ; stp x21, x22, [sp, #32]
             ; stp x23, x24, [sp, #48]
             ; stp x25, x26, [sp, #64]
             ; stp x27, x28, [sp, #80]
             ; mov x28, x0
+            ; stp xzr, x1, [sp, #96]
         );
         sync_in(&mut a);
+        let body = a.offset().0;
         let mut slows = Vec::new();
         let mut ended = false;
         for (i, op) in ops.iter().enumerate() {
@@ -739,6 +968,8 @@ mod codegen {
             // status 1: leave normally; 2: leave flagging emu.jit_stop
             mov64(&mut a, 2, count);
             dynasm!(a ; .arch aarch64
+                ; ldr x12, [sp, #96]
+                ; add x2, x2, x12
                 ; cmp x0, #2
                 ; b.ne >plain
                 ; orr x2, x2, #0x100000000
@@ -747,25 +978,47 @@ mod codegen {
                 ; b =>ret_only
             );
         }
-        // Normal exit: eip in w0, count in x13.
-        dynasm!(a ; .arch aarch64 ; =>exit ; str w0, [x28, #OFF_EIP]);
+        // Normal exit: eip in w0, this block's count in x13. Continue straight into the next
+        // compiled block if there is one and the budget allows its whole length.
+        dynasm!(a ; .arch aarch64
+            ; =>exit
+            ; ldr x12, [sp, #96]
+            ; add x12, x12, x13
+            ; str x12, [sp, #96]
+            ; eor w9, w0, w0, lsr #16
+            ; and w9, w9, #0xFFFF
+            ; ldr x10, [x28, #OFF_CHAIN]
+            ; add x10, x10, x9, lsl #4
+            ; ldr w11, [x10]
+            ; cmp w11, w0
+            ; b.ne >nochain
+            ; ldr w11, [x10, #4]
+            ; add x11, x12, x11
+            ; ldr x9, [sp, #104]
+            ; cmp x11, x9
+            ; b.hi >nochain
+            ; ldr x9, [x10, #8]
+            ; br x9
+            ; nochain:
+            ; str w0, [x28, #OFF_EIP]
+        );
         sync_out(&mut a);
-        dynasm!(a ; .arch aarch64 ; mov x0, x13 ; =>ret_only
+        dynasm!(a ; .arch aarch64 ; mov x0, x12 ; =>ret_only
             ; ldp x19, x20, [sp, #16]
             ; ldp x21, x22, [sp, #32]
             ; ldp x23, x24, [sp, #48]
             ; ldp x25, x26, [sp, #64]
             ; ldp x27, x28, [sp, #80]
-            ; ldp x29, x30, [sp], #96
+            ; ldp x29, x30, [sp], #112
             ; ret
         );
-        a.finalize().ok()
+        a.finalize().ok().map(|code| (code, body))
     }
 }
 
 #[cfg(not(target_arch = "aarch64"))]
 mod codegen {
-    pub(super) fn block(_: &[super::BlockOp]) -> Option<Vec<u8>> {
+    pub(super) fn block(_: &[super::BlockOp]) -> Option<(Vec<u8>, usize)> {
         None
     }
 }

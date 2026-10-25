@@ -130,6 +130,9 @@ pub struct Emu {
     /// The memory page table and code-page map, for compiled code (set before it runs).
     pub(crate) jit_pages: *const usize,
     pub(crate) jit_code_pages: *const u8,
+    pub(crate) jit_chain: *const jit::ChainEntry,
+    /// x87, MMX and SSE state (here near the start: compiled code addresses it).
+    pub fpu: Fpu,
     pub jit: jit::Jit,
     /// Why a compiled block stopped, when it stopped with an error.
     pub(crate) jit_stop: Option<Stop>,
@@ -139,7 +142,6 @@ pub struct Emu {
     pub fs_base: u32,
     pub mem: Memory,
     pub win: Win32,
-    pub fpu: Fpu,
     pub wm: crate::gui::wm::WindowManager,
     pub steps: u64,
     last_pump: u64,
@@ -180,6 +182,7 @@ impl Emu {
             eflags: 2,
             jit_pages: std::ptr::null(),
             jit_code_pages: std::ptr::null(),
+            jit_chain: std::ptr::null(),
             jit: jit::Jit::new(),
             jit_stop: None,
             icache: icache::ICache::new(),
