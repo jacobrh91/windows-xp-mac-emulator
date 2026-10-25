@@ -195,6 +195,15 @@ mod codegen {
 
     type Asm = VecAssembler<Aarch64Relocation>;
 
+    thread_local! {
+        /// Whether the instruction being compiled must produce its flags (see `flag_needs`).
+        static NEED_FLAGS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    }
+
+    fn need_flags() -> bool {
+        NEED_FLAGS.with(|n| n.get())
+    }
+
     const ESP: u8 = 4;
     const EBP: u8 = 5;
     /// The flags `alu` writes: CF PF ZF SF OF.
@@ -541,6 +550,11 @@ mod codegen {
     }
 
     fn flags_of(a: &mut Asm, borrow: bool, keep_cf: bool, byte_high: bool) {
+        if !need_flags() {
+            // Overwritten before anything reads them: keep the old flags (w3 = w27).
+            dynasm!(a ; .arch aarch64 ; mov w3, w27);
+            return;
+        }
         if borrow {
             dynasm!(a ; .arch aarch64 ; cset w4, cc);
         } else {
@@ -557,6 +571,9 @@ mod codegen {
 
     /// w8 = PF for the low byte of w2 (or its top byte, for 8-bit operations done up there).
     fn parity(a: &mut Asm, byte_high: bool) {
+        if !need_flags() {
+            return;
+        }
         if byte_high {
             dynasm!(a ; .arch aarch64 ; lsr w8, w2, #24);
         } else {
@@ -573,6 +590,10 @@ mod codegen {
 
     /// w3 = EFLAGS with CF (w4, unless kept), PF (w8), ZF (w5), SF (w6) and OF (w7) replaced.
     fn compose(a: &mut Asm, keep_cf: bool) {
+        if !need_flags() {
+            dynasm!(a ; .arch aarch64 ; mov w3, w27);
+            return;
+        }
         let clear = if keep_cf { ARITH_FLAGS & !1 } else { ARITH_FLAGS };
         mov32(a, 9, clear);
         dynasm!(a ; .arch aarch64
@@ -1011,6 +1032,39 @@ mod codegen {
         true
     }
 
+    /// For each instruction: must it produce its flags? Not if a later instruction in the
+    /// block overwrites all of CF PF ZF SF OF before anything reads them. Flags are live at the
+    /// end of the block, and an instruction run by the interpreter counts as reading them.
+    fn flag_needs(ops: &[BlockOp], exit: DynamicLabel) -> Vec<bool> {
+        // Which instructions are compiled natively: try them in a scratch assembler.
+        let mut scratch = Asm::new(0);
+        let (slow, _) = (scratch.new_dynamic_label(), exit);
+        let scratch_exit = scratch.new_dynamic_label();
+        let native_ok: Vec<bool> = ops.iter().map(|op| native(&mut scratch, op, slow, scratch_exit)).collect();
+        let mut need = vec![true; ops.len()];
+        let mut live = true;
+        for (i, op) in ops.iter().enumerate().rev() {
+            need[i] = live;
+            let (reads, writes_all) = if !native_ok[i] {
+                (true, false)
+            } else {
+                match op.op {
+                    Dop::AluRmR { op: o, .. } | Dop::AluRRm { op: o, .. } | Dop::AluRmI { op: o, .. } => (o == 2 || o == 3, true),
+                    Dop::Test { .. } | Dop::TestI { .. } => (false, true),
+                    Dop::Shift { by_cl: false, .. } => (false, true),
+                    Dop::Shift { .. } | Dop::IncDec { .. } | Dop::Imul { .. } | Dop::ImulI { .. } | Dop::Jcc { .. } => (true, false),
+                    _ => (false, false),
+                }
+            };
+            if reads {
+                live = true;
+            } else if writes_all {
+                live = false;
+            }
+        }
+        need
+    }
+
     /// Machine code for a block, and the offset of its body (where chained blocks enter, with
     /// the guest state already in registers and the frame already set up).
     ///
@@ -1032,15 +1086,22 @@ mod codegen {
         );
         sync_in(&mut a);
         let body = a.offset().0;
+        let need = flag_needs(ops, exit);
         let mut slows = Vec::new();
         let mut ended = false;
         for (i, op) in ops.iter().enumerate() {
             let slow = a.new_dynamic_label();
             let after = a.new_dynamic_label();
             let count = i as u64 + 1;
-            // Control transfers read the count from x13 at the exit.
-            mov64(&mut a, 13, count);
-            if !native(&mut a, op, slow, exit) {
+            let transfer = matches!(op.op, Dop::Jcc { .. } | Dop::Jmp(_) | Dop::Call(_) | Dop::Ret(_) | Dop::CallInd(_) | Dop::JmpInd(_));
+            if transfer {
+                // The exit reads this block's instruction count from x13.
+                mov64(&mut a, 13, count);
+            }
+            NEED_FLAGS.with(|n| n.set(need[i]));
+            let done = native(&mut a, op, slow, exit);
+            NEED_FLAGS.with(|n| n.set(true));
+            if !done {
                 dynasm!(a ; .arch aarch64 ; b =>slow);
             }
             dynasm!(a ; .arch aarch64 ; =>after);
