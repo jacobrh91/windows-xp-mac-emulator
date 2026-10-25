@@ -14,6 +14,9 @@
 //! - `ASI_stream_seek(stream, offset)`: restart decoding from a byte offset (-2: just reset).
 //! - `ASI_stream_attribute(stream, token)` and `ASI_stream_set_preference(stream, token, *v)`.
 //! - `ASI_stream_close(stream)`.
+//!
+//! `XP_MP3_LOG=1` reports streams as they open; `XP_MP3_LOG=2` also every fetch, process call,
+//! attribute query and close, with timestamps.
 
 use std::collections::HashMap;
 
@@ -22,10 +25,10 @@ use nanomp3_core::{DecodeError, Decoder, MAX_SAMPLES_PER_FRAME};
 use crate::cpu::{Emu, Res};
 use crate::win32::Args;
 
-/// How much compressed data the plugin asks for at a time (its "Minimum input block size").
+/// The most compressed data asked for at once (the plugin's "Minimum input block size").
 const FETCH_BYTES: u32 = 4096;
-/// Keep this much compressed input buffered: frames are only accepted once the next one is seen.
-const INPUT_AHEAD: usize = 16 * 1024;
+/// For free-format streams, whose frame length the header does not give: read this far ahead.
+const INPUT_AHEAD: usize = FETCH_BYTES as usize;
 
 // Attribute tokens, as the plugin registers them.
 const INPUT_BIT_RATE: u32 = 4;
@@ -44,6 +47,49 @@ const MPEG_LAYER: u32 = 16;
 /// Preferences 17..=19 are stored and read back.
 const FIRST_PREFERENCE: u32 = 17;
 
+/// The length in bytes of the MPEG audio frame whose header is `h`: 0 for free format, None if
+/// `h` is not a frame header.
+fn frame_length(h: &[u8]) -> Option<usize> {
+    if h[0] != 0xFF || h[1] & 0xE0 != 0xE0 {
+        return None;
+    }
+    let version = h[1] >> 3 & 3; // 3: MPEG-1, 2: MPEG-2, 0: MPEG-2.5
+    let layer = h[1] >> 1 & 3; // 3: I, 2: II, 1: III
+    let (br_index, sr_index, pad) = ((h[2] >> 4) as usize, (h[2] >> 2 & 3) as usize, (h[2] >> 1 & 1) as usize);
+    if version == 1 || layer == 0 || br_index == 15 || sr_index == 3 {
+        return None;
+    }
+    if br_index == 0 {
+        return Some(0);
+    }
+    const KBPS: [[u16; 15]; 5] = [
+        [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448], // MPEG-1 I
+        [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384],    // MPEG-1 II
+        [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],     // MPEG-1 III
+        [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256],    // MPEG-2 I
+        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],         // MPEG-2 II, III
+    ];
+    let mpeg1 = version == 3;
+    let table = match (mpeg1, layer) {
+        (true, 3) => 0,
+        (true, 2) => 1,
+        (true, _) => 2,
+        (false, 3) => 3,
+        (false, _) => 4,
+    };
+    let bitrate = KBPS[table][br_index] as usize * 1000;
+    let rate = [44100, 48000, 32000][sr_index] >> match version {
+        3 => 0,
+        2 => 1,
+        _ => 2,
+    };
+    Some(match layer {
+        3 => (12 * bitrate / rate + pad) * 4,
+        1 if !mpeg1 => 72 * bitrate / rate + pad,
+        _ => 144 * bitrate / rate + pad,
+    })
+}
+
 pub struct Mp3Stream {
     user: u32,
     fetch: u32,
@@ -58,7 +104,7 @@ pub struct Mp3Stream {
     eof: bool,
     /// Offset for the next fetch (-1: continue).
     next_offset: i32,
-    /// Compressed bytes received so far (the "Position" attribute).
+    /// Compressed bytes received so far.
     position: u32,
     /// Decoded PCM (little-endian 16-bit, interleaved) waiting to be handed out.
     pcm: Vec<u8>,
@@ -72,18 +118,28 @@ pub struct Mp3Stream {
 }
 
 impl Mp3Stream {
-    /// Ask the guest for more compressed data. Returns false at the end of the stream.
-    fn fetch_more(&mut self, e: &mut Emu) -> Res<bool> {
+    /// Ask the guest for up to `bytes` more compressed bytes. Returns false at the end of the
+    /// stream.
+    fn fetch_more(&mut self, e: &mut Emu, bytes: u32) -> Res<bool> {
         let got = e.call_function(
             self.fetch,
             &[
                 self.user,
                 self.scratch,
-                FETCH_BYTES,
+                bytes.clamp(1, FETCH_BYTES),
                 self.next_offset as u32,
             ],
         )? as i32;
         self.next_offset = -1;
+        if std::env::var_os("XP_MP3_LOG").is_some_and(|v| v == "2") {
+            eprintln!(
+                "[mp3] {:.3} fetch for user {:#x} -> {got} (position {} of {})",
+                e.win.elapsed_ms() as f64 / 1000.0,
+                self.user,
+                self.position,
+                self.total
+            );
+        }
         if got <= 0 {
             self.eof = true;
             return Ok(false);
@@ -98,12 +154,68 @@ impl Mp3Stream {
         Ok(true)
     }
 
+    /// Compressed bytes buffered and not yet decoded.
+    fn buffered(&self) -> usize {
+        self.input.len() - self.used
+    }
+
+    /// Have at least `n` bytes buffered, unless the data runs out first. False if it did.
+    fn fill(&mut self, e: &mut Emu, n: usize) -> Res<bool> {
+        while self.buffered() < n {
+            if self.eof || !self.fetch_more(e, (n - self.buffered()) as u32)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Bring the next frame in, and no more than the header of the one after (the decoder
+    /// accepts a frame once it sees the next one). Miles ends a stream once its file has been
+    /// read to the end, so reading further ahead than this cut off the end of every sound:
+    /// half a second of each speech line.
+    fn fill_frame(&mut self, e: &mut Emu) -> Res<()> {
+        loop {
+            if !self.fill(e, 4)? {
+                return Ok(());
+            }
+            let h = &self.input[self.used..self.used + 4];
+            if h[..3] == *b"ID3" {
+                // An ID3v2 tag: skip it (10-byte header, then a "synchsafe" size).
+                if !self.fill(e, 10)? {
+                    return Ok(());
+                }
+                let t = &self.input[self.used..self.used + 10];
+                let size = t[6..10].iter().fold(0usize, |a, &b| a << 7 | (b & 0x7F) as usize);
+                let mut skip = 10 + size + if t[5] & 0x10 != 0 { 10 } else { 0 };
+                while skip > 0 {
+                    if self.buffered() == 0 && !self.fill(e, skip.min(FETCH_BYTES as usize))? {
+                        return Ok(());
+                    }
+                    let n = skip.min(self.buffered());
+                    self.used += n;
+                    skip -= n;
+                }
+                continue;
+            }
+            match frame_length(h) {
+                Some(0) => {
+                    self.fill(e, INPUT_AHEAD)?;
+                    return Ok(());
+                }
+                Some(len) => {
+                    self.fill(e, len + 4)?;
+                    return Ok(());
+                }
+                // Not a frame header: skip a byte and look again.
+                None => self.used += 1,
+            }
+        }
+    }
+
     /// Decode one more frame into `pcm`. Returns false when nothing more will come.
     fn decode_frame(&mut self, e: &mut Emu) -> Res<bool> {
         loop {
-            while !self.eof && self.input.len() - self.used < INPUT_AHEAD {
-                self.fetch_more(e)?;
-            }
+            self.fill_frame(e)?;
             if self.used >= self.input.len() {
                 return Ok(false);
             }
@@ -135,6 +247,13 @@ impl Mp3Stream {
                 Err(_) => {}
             }
         }
+    }
+
+    /// How far into the compressed data decoding has got (the "Position" attribute). Miles
+    /// judges from this when a stream is over, so it must not count input that is only
+    /// buffered: reporting the read-ahead cut the end off every speech line.
+    fn decoded_position(&self) -> u32 {
+        self.position.saturating_sub((self.input.len() - self.used) as u32)
     }
 
     fn reset_decoder(&mut self) {
@@ -200,7 +319,9 @@ pub fn stream_open(e: &mut Emu, a: &Args) -> Res<u32> {
     }
     if std::env::var_os("XP_MP3_LOG").is_some() {
         eprintln!(
-            "[mp3] stream {handle:#x} opened: {} Hz, {} channels, {} kbit/s",
+            "[mp3] stream {handle:#x} opened (user {:#x}, {} bytes): {} Hz, {} channels, {} kbit/s",
+            s.user,
+            s.total,
             s.rate,
             s.channels,
             s.bitrate / 1000
@@ -229,6 +350,14 @@ pub fn stream_process(e: &mut Emu, a: &Args) -> Res<u32> {
         e.mem
             .write_bytes(buffer, &s.pcm[s.pcm_used..s.pcm_used + n])?;
         s.pcm_used += n;
+        if std::env::var_os("XP_MP3_LOG").is_some_and(|v| v == "2") {
+            eprintln!(
+                "[mp3] {:.3} {h:#x} want {want} made {n} input {} eof {}",
+                e.win.elapsed_ms() as f64 / 1000.0,
+                s.input.len() - s.used,
+                s.eof
+            );
+        }
         if n < want {
             // Out of data: silence for the rest, as the original does.
             e.mem.write_bytes(buffer + n as u32, &vec![0; want - n])?;
@@ -257,6 +386,9 @@ pub fn stream_seek(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 pub fn stream_close(e: &mut Emu, a: &Args) -> Res<u32> {
+    if std::env::var_os("XP_MP3_LOG").is_some_and(|v| v == "2") {
+        eprintln!("[mp3] {:.3} {:#x} closed", e.win.elapsed_ms() as f64 / 1000.0, a[0]);
+    }
     if let Some(s) = e.win.mp3.streams.remove(&a[0]) {
         e.heap_free(s.scratch);
         e.heap_free(a[0]);
@@ -268,7 +400,11 @@ pub fn stream_attribute(e: &mut Emu, a: &Args) -> Res<u32> {
     let Some(s) = e.win.mp3.streams.get(&a[0]) else {
         return Ok(u32::MAX);
     };
-    Ok(attribute(s, a[1]))
+    let v = attribute(s, a[1]);
+    if std::env::var_os("XP_MP3_LOG").is_some_and(|v| v == "2") {
+        eprintln!("[mp3] {:.3} {:#x} attribute {} -> {v:#x}", e.win.elapsed_ms() as f64 / 1000.0, a[0], a[1]);
+    }
+    Ok(v)
 }
 
 fn attribute(s: &Mp3Stream, token: u32) -> u32 {
@@ -286,12 +422,12 @@ fn attribute(s: &Mp3Stream, token: u32) -> u32 {
         INPUT_CHANNELS | OUTPUT_CHANNELS => s.channels,
         OUTPUT_BIT_RATE => s.rate * s.channels * 16,
         OUTPUT_SAMPLE_WIDTH => 16,
-        POSITION => s.position,
+        POSITION => s.decoded_position(),
         PERCENT_DONE => {
             if s.total == 0 {
                 0
             } else {
-                (s.position as f32 * 100.0 / s.total as f32).to_bits()
+                (s.decoded_position() as f32 * 100.0 / s.total as f32).to_bits()
             }
         }
         MIN_INPUT_BLOCK => FETCH_BYTES,
@@ -435,9 +571,54 @@ mod tests {
         );
         // Seek back to the start and decode again.
         call(&mut e, stream_seek, &[h, 0]);
+        call(&mut e, stream_process, &[h, buf, 4096]);
+        let s = &e.win.mp3.streams[&h];
+        assert!(
+            attribute(s, POSITION) < mp3.len() as u32 / 4,
+            "a little decoded: the position counts what was decoded, not what was read ahead ({} of {})",
+            attribute(s, POSITION),
+            mp3.len()
+        );
+        call(&mut e, stream_seek, &[h, 0]);
         assert_eq!(call(&mut e, stream_process, &[h, buf, 4096]), 4096);
         assert_eq!(call(&mut e, stream_close, &[h]), 0);
         assert!(e.win.mp3.streams.is_empty());
+    }
+
+    #[test]
+    fn frame_lengths_follow_the_header() {
+        assert_eq!(frame_length(&[0xFF, 0xFB, 0x90, 0]), Some(417), "MPEG-1 III 128 kbit/s 44.1 kHz");
+        assert_eq!(frame_length(&[0xFF, 0xFB, 0x92, 0]), Some(418), "padded");
+        assert_eq!(frame_length(&[0xFF, 0xF3, 0x80, 0]), Some(208), "MPEG-2 III 64 kbit/s 22.05 kHz");
+        assert_eq!(frame_length(&[0xFF, 0xFB, 0x00, 0]), Some(0), "free format");
+        assert_eq!(frame_length(&[0x49, 0x44, 0x33, 3]), None);
+    }
+
+    /// The decoder reads only as far as the frame it is decoding: Miles ends a stream as soon
+    /// as its file has been read, so read-ahead cut the end off every sound.
+    #[test]
+    fn input_is_read_a_frame_at_a_time() {
+        let Some(mp3) = sample_mp3() else { return };
+        let mut e = Emu::new();
+        let fetch = install_fetch(&mut e, &mp3);
+        let h = call(&mut e, stream_open, &[7, fetch, mp3.len() as u32]);
+        let buf = 0x60000;
+        let mut total = 0;
+        loop {
+            let n = call(&mut e, stream_process, &[h, buf, 1024]);
+            total += n;
+            let s = &e.win.mp3.streams[&h];
+            assert!(s.buffered() <= 1441 + 4, "{} bytes read ahead", s.buffered());
+            let read = e.mem.read(0x3FFFC, 4).unwrap() as usize;
+            if read == mp3.len() {
+                // The file is read to its end only for its last frame or two.
+                let left = (s.pcm.len() - s.pcm_used) as u32 + 2 * 1152 * 2 * 2;
+                let whole = 22050 * 2 * 2;
+                assert!(total + left >= whole * 95 / 100, "end of file reached early: {total} bytes out");
+                break;
+            }
+            assert_eq!(n, 1024);
+        }
     }
 
     #[test]
