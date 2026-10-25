@@ -5,15 +5,20 @@
 //! they match, overwritten with a jump to an emulator stub. The stub does the same job in
 //! Rust, on the same guest data structures.
 //!
+//! Hooked so far: zlib's inflate in Impossible Creatures' `Filesystem.dll`, and the stream
+//! functions of Miles' MP3 codec plugin (`mssmp3.asi`, see `media::miles_mp3`).
+//!
 //! Impossible Creatures' `Filesystem.dll` carries zlib 1.1.3 and inflates every compressed
 //! file in the game's archives through it; under the interpreter that made loading take
-//! minutes. The replacement uses the Mac's own zlib, which behaves exactly like the game's copy. `XP_NO_HOOKS=1` turns all hooks off.
+//! minutes. The replacement uses the Mac's own zlib, which behaves exactly like the game's copy.
+//! `XP_NO_HOOKS=1` turns all hooks off; `XP_NO_HOOKS=mssmp3.asi` (say) just one module's.
 
 use std::collections::HashMap;
 
 use flate2::{Decompress, FlushDecompress, Status};
 
 use crate::cpu::{Emu, Res};
+use crate::media::miles_mp3 as mp3;
 use crate::win32::{Args, Handler};
 
 struct Hook {
@@ -28,6 +33,13 @@ const HOOKS: &[Hook] = &[
     Hook { module: "filesystem", rva: 0xbc1c, expect: &[0xFF, 0x74, 0x24, 0x0C, 0xFF, 0x74, 0x24, 0x0C, 0x6A, 0x0F, 0xFF, 0x74, 0x24, 0x10], name: "inflateInit_" },
     Hook { module: "filesystem", rva: 0xbc32, expect: &[0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10, 0x33, 0xDB, 0x3B, 0xF3, 0x57], name: "inflate" },
     Hook { module: "filesystem", rva: 0xbb01, expect: &[0x56, 0x8B, 0x74, 0x24, 0x08, 0x85, 0xF6, 0x74, 0x2C, 0x8B, 0x46, 0x1C], name: "inflateEnd" },
+    // Miles' MP3 codec plugin: its ASI stream functions (see `media::miles_mp3`).
+    Hook { module: "mssmp3.asi", rva: 0x1c90, expect: &[0x53, 0x56, 0x57, 0x68, 0x30, 0xAA, 0x00, 0x00], name: "ASI_stream_open" },
+    Hook { module: "mssmp3.asi", rva: 0x1dd0, expect: &[0x51, 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x18, 0x56], name: "ASI_stream_process" },
+    Hook { module: "mssmp3.asi", rva: 0x1ec0, expect: &[0x8B, 0x54, 0x24, 0x04, 0x8B, 0x44, 0x24, 0x08], name: "ASI_stream_seek" },
+    Hook { module: "mssmp3.asi", rva: 0x1da0, expect: &[0x56, 0x8B, 0x74, 0x24, 0x08, 0x8B, 0x86, 0x70], name: "ASI_stream_close" },
+    Hook { module: "mssmp3.asi", rva: 0x1f30, expect: &[0x83, 0xEC, 0x48, 0xB8, 0x22, 0x56, 0x00, 0x00], name: "ASI_stream_attribute" },
+    Hook { module: "mssmp3.asi", rva: 0x21c0, expect: &[0x8B, 0x4C, 0x24, 0x08, 0x83, 0xC8, 0xFF, 0x83], name: "ASI_stream_set_preference" },
 ];
 
 #[derive(Default)]
@@ -38,7 +50,9 @@ pub struct HookState {
 
 /// Patch the hooked functions of a just-loaded module. Returns how many were patched.
 pub fn apply(emu: &mut Emu, module: &str, base: u32) -> usize {
-    if std::env::var_os("XP_NO_HOOKS").is_some() {
+    // XP_NO_HOOKS=1 turns every hook off; XP_NO_HOOKS=<module>[,<module>] just those modules'.
+    let off = std::env::var("XP_NO_HOOKS").ok();
+    if off.as_deref().is_some_and(|v| v.is_empty() || v == "1" || v.split(',').any(|m| m.eq_ignore_ascii_case(module))) {
         return 0;
     }
     let mut n = 0;
@@ -86,6 +100,12 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "inflateInit_" => (3, inflate_init),
         "inflate" => (2, inflate_call),
         "inflateEnd" => (1, inflate_end),
+        "ASI_stream_open" => (3, mp3::stream_open),
+        "ASI_stream_process" => (3, mp3::stream_process),
+        "ASI_stream_seek" => (2, mp3::stream_seek),
+        "ASI_stream_close" => (1, mp3::stream_close),
+        "ASI_stream_attribute" => (2, mp3::stream_attribute),
+        "ASI_stream_set_preference" => (3, mp3::stream_set_preference),
         _ => return None,
     })
 }

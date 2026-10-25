@@ -1151,7 +1151,9 @@ impl Emu {
                         self.regs[EAX] = 0x0000_0673; // family 6, model 7 (Katmai), stepping 3
                         self.regs[EBX] = 0;
                         self.regs[ECX] = 0;
-                        self.regs[EDX] = 1 | 1 << 4 | 1 << 8 | 1 << 23 | 1 << 25;
+                        // XP_NO_SSE=1 reports a Pentium II instead (MMX only), for comparison.
+                        let sse = if std::env::var_os("XP_NO_SSE").is_some() { 0 } else { 1 << 25 };
+                        self.regs[EDX] = 1 | 1 << 4 | 1 << 8 | 1 << 23 | sse;
                     }
                     _ => {
                         self.regs[EAX] = 0;

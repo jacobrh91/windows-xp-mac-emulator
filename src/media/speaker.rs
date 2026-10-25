@@ -25,6 +25,9 @@ struct Voice {
     volume: [f32; 2],
     /// Enough is queued to play; cleared when the queue runs dry.
     primed: bool,
+    /// Output frames spent waiting to prime with something queued: a short sound (or the
+    /// tail of one) plays after one prebuffer period even if no more arrives.
+    waited: usize,
     /// Frames ever queued, and frames already sent to the speakers (or discarded): the
     /// difference is what is still waiting.
     total_queued: u64,
@@ -46,10 +49,14 @@ impl Mixer {
                 continue;
             }
             if !v.primed {
-                if v.frames.len() < self.prebuffer {
+                if v.frames.len() < self.prebuffer && (v.frames.is_empty() || v.waited < self.prebuffer) {
+                    if !v.frames.is_empty() {
+                        v.waited += 1;
+                    }
                     continue;
                 }
                 v.primed = true;
+                v.waited = 0;
             }
             match v.frames.pop_front() {
                 Some(f) => {
@@ -110,6 +117,11 @@ impl SpeakerHandle {
     #[cfg(test)]
     pub fn queued(&self, id: u32) -> usize {
         self.mixer.lock().unwrap().voices.get(&id).map_or(0, |v| v.frames.len())
+    }
+
+    /// Is voice `id` holding back audio while it builds up its prebuffer?
+    pub fn buffering(&self, id: u32) -> bool {
+        self.mixer.lock().unwrap().voices.get(&id).is_some_and(|v| !v.primed && !v.frames.is_empty())
     }
 
     /// Drop everything queued (it counts as played).
@@ -341,6 +353,8 @@ mod tests {
         assert_eq!(s.drain(4), vec![[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.0, 0.0]]);
         s.queue(1, &[[0.25, 0.25]; 1]);
         assert_eq!(s.drain(1), vec![[0.0, 0.0]], "ran dry, so it buffers up again");
+        assert!(s.buffering(1));
+        assert_eq!(s.drain(3), vec![[0.0, 0.0], [0.0, 0.0], [0.25, 0.25]], "but a lone short sound still plays after one prebuffer period");
     }
 
     #[test]

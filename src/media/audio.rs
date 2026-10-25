@@ -180,12 +180,15 @@ impl Emu {
         handles.sort();
         for h in handles {
             let played = speaker.as_ref().map(|s| s.progress(h).1);
+            let buffering = speaker.as_ref().is_some_and(|s| s.buffering(h));
             loop {
                 let Some(w) = self.win.audio.waves.get_mut(&h) else { break };
                 // With speakers, a buffer is done when they have played it: their clock, not
                 // ours, so the two cannot drift apart. (If they stall, time decides after all.)
+                // While they are still building up their prebuffer (a lone short buffer, such as
+                // the probe Miles writes at start-up), the emulated clock decides.
                 let finished = |q: &Queued| match (q.end_frame, played) {
-                    (Some(end), Some(p)) => p >= end || now >= q.done_ms + SPEAKER_GRACE_MS,
+                    (Some(end), Some(p)) => p >= end || (buffering && now >= q.done_ms) || now >= q.done_ms + SPEAKER_GRACE_MS,
                     _ => q.done_ms <= now,
                 };
                 if w.paused_at.is_some() || w.queue.front().is_none_or(|q| !finished(q)) {
