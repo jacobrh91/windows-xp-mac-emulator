@@ -117,6 +117,7 @@ pub struct Win32 {
     pub d3d: crate::d3d::d3d8::D3d8,
     pub bink: crate::media::bink::BinkState,
     pub hooks: crate::hooks::HookState,
+    pub games: crate::game_optimizations::GameState,
     pub mp3: crate::media::miles_mp3::Mp3State,
     /// The process-wide handler set by SetUnhandledExceptionFilter (0 = none).
     pub unhandled_filter: u32,
@@ -271,6 +272,7 @@ impl Win32 {
             d3d: Default::default(),
             bink: Default::default(),
             hooks: Default::default(),
+            games: Default::default(),
             mp3: Default::default(),
             unhandled_filter: 0,
             vfs: crate::win32::vfs::Vfs::new(),

@@ -1,5 +1,6 @@
 mod cpu;
 mod d3d;
+mod game_optimizations;
 mod gui;
 mod hooks;
 mod loader;
