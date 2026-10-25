@@ -182,7 +182,8 @@ impl SpeakerHandle {
 pub struct Speaker {
     _stream: cpal::Stream,
     pub handle: SpeakerHandle,
-    /// `XP_SOUND_WAV=<file>`: everything played, saved as a WAV file at the end (debugging).
+    /// `XP_SOUND_WAV=<file>`: everything played (before the master volume), saved as a WAV file
+    /// at the end (debugging).
     recording: Option<(String, Arc<Mutex<Vec<[f32; 2]>>>)>,
 }
 
@@ -257,10 +258,12 @@ impl Speaker {
                     let mut m = mixer.lock().unwrap();
                     for frame in out.chunks_mut(channels) {
                         let [l, r] = m.next_frame();
-                        let (l, r) = (l * master, r * master);
+                        // The recording is of the mix itself, before the volume, so a silent
+                        // run (XP_VOLUME=0) still records everything.
                         if let Some(t) = &tape {
                             t.lock().unwrap().push([l, r]);
                         }
+                        let (l, r) = (l * master, r * master);
                         match frame.len() {
                             1 => frame[0] = (l + r) * 0.5,
                             _ => {

@@ -386,7 +386,10 @@ fn open(
         ..WindowOptions::default()
     };
     let mut window = Window::new(title, size.0 as usize, size.1 as usize, options)?;
-    window.set_target_fps(60);
+    // No frame cap inside minifb: it would sleep in every update, and the emulator would sit
+    // idle half the time (the game's own sound mixer then falls behind). `Presenter::due`
+    // paces the updates instead.
+    window.set_target_fps(0);
     window.set_input_callback(Box::new(Chars(chars.clone())));
     Ok(window)
 }
@@ -417,6 +420,7 @@ pub struct Presenter {
     buf: Vec<u32>,
     title: String,
     frames: u64,
+    last_pump: std::time::Instant,
     /// Whether the content area / drawing view have been sized for the current window.
     fitted: bool,
     /// Set while fullscreen: the window's windowed style and frame, to restore on exit.
@@ -439,6 +443,7 @@ impl Presenter {
             buf: Vec::new(),
             title: title.to_string(),
             frames: 0,
+            last_pump: std::time::Instant::now(),
             fitted: false,
             fs: None,
             start_fullscreen: fullscreen,
@@ -448,7 +453,13 @@ impl Presenter {
     /// Draw the emulated windows and forward pending input. The picture is exactly the
     /// emulated windows' content (no emulated frame), filling the host window. Returns
     /// false once the host window has been closed.
+    /// Is it time to show a new frame and read input (60 times a second)?
+    pub fn due(&self) -> bool {
+        self.last_pump.elapsed() >= std::time::Duration::from_micros(16_667)
+    }
+
     pub fn pump(&mut self, emu: &mut Emu) -> bool {
+        self.last_pump = std::time::Instant::now();
         self.frames += 1;
         let debug = std::env::var_os("XP_DEBUG_TOGGLE").is_some();
         let was_fullscreen = self.fs.is_some();

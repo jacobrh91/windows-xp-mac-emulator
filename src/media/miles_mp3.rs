@@ -115,6 +115,8 @@ pub struct Mp3Stream {
     bitrate: u32,
     layer: u32,
     prefs: [u32; 3],
+    /// XP_MP3_DUMP: every compressed byte fetched, written out when the stream closes.
+    dump: Option<Vec<u8>>,
 }
 
 impl Mp3Stream {
@@ -146,6 +148,9 @@ impl Mp3Stream {
         }
         let got = (got as u32).min(FETCH_BYTES);
         let bytes = e.mem.read_bytes(self.scratch, got)?;
+        if let Some(d) = self.dump.as_mut() {
+            d.extend_from_slice(&bytes);
+        }
         // Drop what has been decoded before appending, so the buffer stays small.
         self.input.drain(..self.used);
         self.used = 0;
@@ -303,6 +308,7 @@ pub fn stream_open(e: &mut Emu, a: &Args) -> Res<u32> {
         bitrate: 0,
         layer: 3,
         prefs: [u32::MAX; 3],
+        dump: std::env::var_os("XP_MP3_DUMP").map(|_| Vec::new()),
     };
     // Like the original, read the first frame now: Miles asks for the format straight away,
     // and data that is not MP3 is refused here.
@@ -390,6 +396,11 @@ pub fn stream_close(e: &mut Emu, a: &Args) -> Res<u32> {
         eprintln!("[mp3] {:.3} {:#x} closed", e.win.elapsed_ms() as f64 / 1000.0, a[0]);
     }
     if let Some(s) = e.win.mp3.streams.remove(&a[0]) {
+        // XP_MP3_DUMP=<dir>: the stream's compressed data, as <dir>/<seconds>-<stream>.mp3.
+        if let (Some(d), Some(dir)) = (&s.dump, std::env::var_os("XP_MP3_DUMP")) {
+            let name = format!("{:07.3}-{:x}.mp3", e.win.elapsed_ms() as f64 / 1000.0, a[0]);
+            let _ = std::fs::write(std::path::Path::new(&dir).join(name), d);
+        }
         e.heap_free(s.scratch);
         e.heap_free(a[0]);
     }

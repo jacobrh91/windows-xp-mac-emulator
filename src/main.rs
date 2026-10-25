@@ -307,6 +307,8 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
                 idle += std::time::Duration::from_millis(ms);
                 std::thread::sleep(std::time::Duration::from_millis(ms));
             }
+            // Busy: keep running until the window is due for a new frame.
+            (cpu::Stop::StepLimit, Some(p)) if !p.due() => {}
             (cpu::Stop::StepLimit | cpu::Stop::WaitForInput | cpu::Stop::Sleeping, Some(p)) => {
                 if !p.pump(&mut emu) {
                     // Host window closed: ask the app to quit, but don't wait forever.
