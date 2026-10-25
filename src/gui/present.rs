@@ -305,6 +305,71 @@ mod cocoa {
         }
     }
 
+    /// Make macOS's own fullscreen (the green button, Control-Command-F) completely full
+    /// screen: by default it only auto-hides the menu bar, which then drops down whenever the
+    /// mouse reaches the top, where the game scrolls its map. The window gets a delegate that
+    /// asks for the menu bar and Dock to be hidden outright.
+    pub fn hide_menu_bar_in_fullscreen(window: &Window) {
+        #[link(name = "objc")]
+        unsafe extern "C" {
+            fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+            fn objc_registerClassPair(cls: Id);
+            fn class_addMethod(cls: Id, name: *mut c_void, imp: *const (), types: *const c_char) -> bool;
+        }
+        // NSApplicationPresentationFullScreen | HideDock | HideMenuBar
+        extern "C" fn options(_: Id, _: *mut c_void, _: Id, _: usize) -> usize {
+            (1 << 10) | (1 << 1) | (1 << 3)
+        }
+        static DELEGATE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        let Some((_, win)) = handles(window) else { return };
+        // SAFETY: see module docs; the class is made once, with a method of the signature
+        // AppKit calls (NSApplicationPresentationOptions from (NSWindow*, options)).
+        unsafe {
+            let delegate = *DELEGATE.get_or_init(|| {
+                let cls = objc_allocateClassPair(send_class(c"NSObject"), c"XPWindowDelegate".as_ptr(), 0);
+                class_addMethod(
+                    cls,
+                    sel(c"window:willUseFullScreenPresentationOptions:"),
+                    options as *const (),
+                    c"Q@:@Q".as_ptr(),
+                );
+                objc_registerClassPair(cls);
+                // One instance for every window, alive for the whole run (windows do not
+                // retain their delegates).
+                send_id(send_id(cls, sel(c"alloc")), sel(c"init")) as usize
+            });
+            send_id_arg(win, sel(c"setDelegate:"), delegate as Id);
+        }
+    }
+
+    /// Debug: press the green button (macOS's own fullscreen).
+    pub fn toggle_native_fullscreen(window: &Window) {
+        if let Some((_, win)) = handles(window) {
+            // SAFETY: see module docs.
+            unsafe { send_id_arg(win, sel(c"toggleFullScreen:"), std::ptr::null_mut()) }
+        }
+    }
+
+    /// Is the window in macOS's own fullscreen?
+    pub fn in_native_fullscreen(window: &Window) -> bool {
+        // SAFETY: see module docs.
+        handles(window).is_some_and(|(_, win)| unsafe { send_usize(win, sel(c"styleMask")) } & (1 << 14) != 0)
+    }
+
+    /// (the options we asked for, the options in force, the window's style mask) — debugging.
+    pub fn presentation_state(window: &Window) -> Option<(usize, usize, usize)> {
+        let (_, win) = handles(window)?;
+        // SAFETY: see module docs.
+        unsafe {
+            let app = send_id(send_class(c"NSApplication"), sel(c"sharedApplication"));
+            Some((
+                send_usize(app, sel(c"presentationOptions")),
+                send_usize(app, sel(c"currentSystemPresentationOptions")),
+                send_usize(win, sel(c"styleMask")),
+            ))
+        }
+    }
+
     pub fn exit_fullscreen(window: &Window, saved: &Saved) {
         let Some((_, win)) = handles(window) else {
             return;
@@ -367,6 +432,14 @@ mod cocoa {
         None
     }
     pub fn exit_fullscreen(_: &Window, _: &Saved) {}
+    pub fn hide_menu_bar_in_fullscreen(_: &Window) {}
+    pub fn in_native_fullscreen(_: &Window) -> bool {
+        false
+    }
+    pub fn toggle_native_fullscreen(_: &Window) {}
+    pub fn presentation_state(_: &Window) -> Option<(usize, usize, usize)> {
+        None
+    }
     pub fn debug_resize(_: &Window, _: f64, _: f64) {}
     pub fn describe(_: &Window) -> String {
         String::new()
@@ -391,6 +464,7 @@ fn open(
     // paces the updates instead.
     window.set_target_fps(0);
     window.set_input_callback(Box::new(Chars(chars.clone())));
+    cocoa::hide_menu_bar_in_fullscreen(&window);
     Ok(window)
 }
 
@@ -462,7 +536,8 @@ impl Presenter {
         self.last_pump = std::time::Instant::now();
         self.frames += 1;
         let debug = std::env::var_os("XP_DEBUG_TOGGLE").is_some();
-        let was_fullscreen = self.fs.is_some();
+        // Our instant fullscreen, or macOS's own (green button).
+        let was_fullscreen = self.fs.is_some() || cocoa::in_native_fullscreen(&self.window);
 
         let want = emu
             .wm
@@ -510,6 +585,14 @@ impl Presenter {
         // minifb's where that is unavailable.
         let mouse = match cocoa::mouse_in_view(&self.window) {
             Some(((mx, my), (vw, vh))) => {
+                // Fullscreen, the whole screen belongs to the game: the mouse over the black
+                // bars beside the picture is at the picture's edge, so edge scrolling works on
+                // every side.
+                let (mx, my) = if was_fullscreen {
+                    (mx.clamp(0.0, vw - 1.0), my.clamp(0.0, vh - 1.0))
+                } else {
+                    (mx, my)
+                };
                 window_to_game_stretch(mx as f32, my as f32, (vw as f32, vh as f32), (rw, rh))
             }
             None => {
@@ -556,6 +639,14 @@ impl Presenter {
                 Some(saved) => cocoa::exit_fullscreen(&self.window, &saved),
                 None => self.fs = cocoa::enter_fullscreen(&self.window),
             }
+        }
+        // XP_FS_DEBUG=1 reports the presentation options; =native also presses the green
+        // button early on.
+        if std::env::var_os("XP_FS_DEBUG").is_some_and(|v| v == "native") && self.frames == 60 {
+            cocoa::toggle_native_fullscreen(&self.window);
+        }
+        if std::env::var_os("XP_FS_DEBUG").is_some() && self.frames % 120 == 0 {
+            eprintln!("[present] frame {} fullscreen={} presentation (asked, in force, style) = {:x?}", self.frames, was_fullscreen, cocoa::presentation_state(&self.window));
         }
         if debug && self.frames == 360 {
             cocoa::debug_resize(&self.window, 900.0, 618.0);
