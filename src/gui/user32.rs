@@ -38,7 +38,14 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             destroy_window(e, a[0])?;
             Ok(1)
         }),
-        ("user32", "ShowWindow") => (2, |e, a| show_window(e, a[0], a[1] != 0)),
+        ("user32", "ShowWindow") => (2, |e, a| {
+            let was = show_window(e, a[0], a[1] != 0)?;
+            // Showing activates, except SW_SHOWMINNOACTIVE, SW_SHOWNA and SW_SHOWNOACTIVATE.
+            if a[1] != 0 && !matches!(a[1], 4 | 7 | 8) {
+                activate_top_level(e, a[0])?;
+            }
+            Ok(was)
+        }),
         ("user32", "UpdateWindow") => (1, |e, a| {
             let due = e.wm.window(a[0]).is_some_and(|w| w.needs_paint) && e.wm.is_visible(a[0]);
             if due {
@@ -786,8 +793,17 @@ fn create_window(e: &mut Emu, a: &Args, wide: bool) -> Res<u32> {
     // yet. They go out the first time the window is shown (see show_window).
     if style & WS_VISIBLE != 0 {
         show_window(e, hwnd, true)?;
+        activate_top_level(e, hwnd)?;
     }
     Ok(hwnd)
+}
+
+/// A top-level window that appears becomes the active one, as on Windows.
+fn activate_top_level(e: &mut Emu, hwnd: u32) -> Res<()> {
+    if e.wm.window(hwnd).is_some_and(|w| w.parent == 0 && w.style & WS_CHILD == 0) {
+        activate(e, hwnd)?;
+    }
+    Ok(())
 }
 
 /// Deliver a message synchronously, to guest code or to the built-in handler.
@@ -874,7 +890,8 @@ pub fn destroy_window(e: &mut Emu, hwnd: u32) -> Res<()> {
     Ok(())
 }
 
-/// Make `hwnd`'s top-level window the active one, telling it so (WM_ACTIVATEAPP, WM_ACTIVATE).
+/// Make `hwnd`'s top-level window the active one, telling it so at once, as Windows does
+/// (WM_ACTIVATEAPP, WM_ACTIVATE, WM_SETFOCUS are sent, not posted).
 fn activate(e: &mut Emu, hwnd: u32) -> Res<()> {
     if e.wm.window(hwnd).is_none() || e.wm.active == hwnd {
         return Ok(());
@@ -882,12 +899,12 @@ fn activate(e: &mut Emu, hwnd: u32) -> Res<()> {
     let first = e.wm.active == 0;
     e.wm.active = hwnd;
     if first {
-        e.wm.post(hwnd, 0x1C, 1, 0); // WM_ACTIVATEAPP: the application is now active
+        send_message(e, hwnd, 0x1C, 1, 0)?; // WM_ACTIVATEAPP: the application is now active
     }
-    e.wm.post(hwnd, 6, 1, 0); // WM_ACTIVATE, WA_ACTIVE
+    send_message(e, hwnd, 6, 1, 0)?; // WM_ACTIVATE, WA_ACTIVE
     if e.wm.focus == 0 {
         e.wm.focus = hwnd;
-        e.wm.post(hwnd, 7, 0, 0); // WM_SETFOCUS
+        send_message(e, hwnd, 7, 0, 0)?; // WM_SETFOCUS
     }
     Ok(())
 }
@@ -924,7 +941,7 @@ fn show_window(e: &mut Emu, hwnd: u32, show: bool) -> Res<u32> {
     Ok(was as u32)
 }
 
-fn move_window(e: &mut Emu, hwnd: u32, x: i32, y: i32, w: i32, h: i32) -> Res<()> {
+pub(crate) fn move_window(e: &mut Emu, hwnd: u32, x: i32, y: i32, w: i32, h: i32) -> Res<()> {
     let Some(win) = e.wm.window(hwnd) else {
         return Ok(());
     };

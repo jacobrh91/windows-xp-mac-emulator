@@ -97,6 +97,38 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         }),
         "GetDriveTypeA" | "GetDriveTypeW" => (1, |_, _| Ok(3)), // DRIVE_FIXED
         "GetLogicalDrives" => (0, |_, _| Ok(1 << 2)),           // C:
+        "GetLogicalDriveStringsA" => (2, |e, a| {
+            let drives = b"C:\\\0\0";
+            if (a[0] as usize) < drives.len() {
+                return Ok(drives.len() as u32);
+            }
+            e.mem.write_bytes(a[1], drives)?;
+            Ok(drives.len() as u32 - 1)
+        }),
+        "GetComputerNameA" => (2, |e, a| name_out(e, a[0], a[1], "XPMAC")),
+        "GlobalHandle" => (1, |_, a| Ok(a[0])),
+        "OpenMutexA" => (3, |e, _| fail(e, 2, 0)), // ERROR_FILE_NOT_FOUND: no such mutex yet
+        // 16-bit-era file calls (HFILE_ERROR = -1).
+        "_lopen" => (2, |e, a| {
+            let path = e.mem.read_cstr(a[0])?;
+            let access = match a[1] & 3 {
+                0 => 0x8000_0000,
+                1 => 0x4000_0000,
+                _ => 0xC000_0000,
+            };
+            match e.win.vfs.open(&path, access, 3) {
+                Ok(h) => Ok(h),
+                Err(c) => fail(e, c, u32::MAX),
+            }
+        }),
+        "_lread" => (3, |e, a| match e.win.vfs.read(a[0], a[2] as usize) {
+            Ok(data) => {
+                e.mem.write_bytes(a[1], &data)?;
+                Ok(data.len() as u32)
+            }
+            Err(c) => fail(e, c, u32::MAX),
+        }),
+        "_lclose" => (1, |e, a| Ok(if e.win.vfs.close(a[0]) { 0 } else { u32::MAX })),
         "GetDiskFreeSpaceA" => (5, |e, a| {
             for (slot, v) in a[1..5].iter().zip([8u32, 512, 1_000_000, 2_000_000]) {
                 if *slot != 0 {
@@ -328,6 +360,20 @@ fn ok_or_err(e: &mut Emu, h: u32, f: impl FnOnce(&mut Vfs, u32) -> Result<(), u3
         Ok(()) => Ok(1),
         Err(c) => fail(e, c, 0),
     }
+}
+
+/// Copy a name into a buffer whose size (in characters) is at `*size`, as GetComputerNameA and
+/// GetUserNameA do; `*size` becomes the length written.
+pub(crate) fn name_out(e: &mut Emu, buf: u32, size: u32, name: &str) -> Res<u32> {
+    let room = e.mem.read(size, 4)?;
+    if room as usize <= name.len() {
+        e.mem.write(size, 4, name.len() as u32 + 1)?;
+        return fail(e, 111, 0); // ERROR_BUFFER_OVERFLOW
+    }
+    e.mem.write_bytes(buf, name.as_bytes())?;
+    e.mem.write(buf + name.len() as u32, 1, 0)?;
+    e.mem.write(size, 4, name.len() as u32)?;
+    Ok(1)
 }
 
 fn path_arg(e: &Emu, p: u32, wide: bool) -> Res<String> {

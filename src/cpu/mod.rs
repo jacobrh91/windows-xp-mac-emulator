@@ -73,6 +73,8 @@ pub type Res<T> = Result<T, Stop>;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Prefix {
     pub opsize16: bool,
+    /// Address-size prefix (0x67): loop and jcxz count in CX instead of ECX.
+    pub addr16: bool,
     pub fs: bool,
     /// 0, 0xF2 (repne) or 0xF3 (rep/repe)
     pub rep: u8,
@@ -157,6 +159,9 @@ pub struct Emu {
     pub recent: [u32; 16],
     /// XP_PROFILE: sampled instruction addresses (every 1024th step), bucketed by 16 bytes.
     pub profile: Option<std::collections::HashMap<u32, u32>>,
+    /// XP_BREAK: report the registers whenever the interpreter reaches this address (run
+    /// with XP_NO_JIT and XP_NO_ICACHE so every instruction goes through it).
+    pub break_at: Option<u32>,
     /// Host->guest calls in flight (`call_function`): the (eip, esp) of the API stub that
     /// made each call. Normally popped when the call returns; if a wait unwinds the host
     /// stack first they stay, and `finish_nested` completes the call when the guest returns.
@@ -204,6 +209,7 @@ impl Emu {
             last_pump: 0,
             recent: [0; 16],
             profile: None,
+            break_at: std::env::var("XP_BREAK").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()),
             nested: Vec::new(),
             seh: Vec::new(),
             seh_ret,
@@ -345,6 +351,25 @@ impl Emu {
     pub fn pop(&mut self) -> Res<u32> {
         let v = self.mem.read(self.regs[ESP], 4)?;
         self.regs[ESP] = self.regs[ESP].wrapping_add(4);
+        Ok(v)
+    }
+
+    /// Push a word or dword: with an operand-size prefix, pushes move the stack by 2.
+    fn push_sized(&mut self, v: u32, bits: u32) -> Res<()> {
+        if bits != 16 {
+            return self.push(v);
+        }
+        self.regs[ESP] = self.regs[ESP].wrapping_sub(2);
+        self.mem.write(self.regs[ESP], 2, v & 0xFFFF)?;
+        Ok(())
+    }
+
+    fn pop_sized(&mut self, bits: u32) -> Res<u32> {
+        if bits != 16 {
+            return self.pop();
+        }
+        let v = self.mem.read(self.regs[ESP], 2)?;
+        self.regs[ESP] = self.regs[ESP].wrapping_add(2);
         Ok(v)
     }
 
@@ -498,7 +523,7 @@ impl Emu {
         r
     }
 
-    /// op: 0 rol, 1 ror, 4/6 shl, 5 shr, 7 sar.
+    /// op: 0 rol, 1 ror, 2 rcl, 3 rcr, 4/6 shl, 5 shr, 7 sar.
     fn shift(&mut self, op: usize, a: u32, count: u32, bits: u32) -> Res<u32> {
         let count = count & 31;
         if count == 0 {
@@ -550,7 +575,24 @@ impl Emu {
                 self.set_szp(r, bits);
                 Ok(r)
             }
-            _ => Err(Stop::Unimplemented("rcl/rcr".into())),
+            _ => {
+                // rcl (2) / rcr (3): rotate the operand and CF together, bits + 1 wide.
+                let w = bits + 1;
+                let c = count % w;
+                if c == 0 {
+                    return Ok(a);
+                }
+                let wm = (1u64 << w) - 1;
+                let v = a as u64 | (self.flag(CF) as u64) << bits;
+                let rot = if op == 2 { (v << c | v >> (w - c)) & wm } else { (v >> c | v << (w - c)) & wm };
+                let r = rot as u32 & m;
+                self.set_flag(CF, rot >> bits & 1 != 0);
+                // OF (defined for a count of 1): rcl, the new top bit against CF; rcr, the
+                // two top bits of the result.
+                let of = if op == 2 { msb(r) != self.flag(CF) } else { msb(r) != msb(r << 1) };
+                self.set_flag(OF, of);
+                Ok(r)
+            }
         }
     }
 
@@ -618,6 +660,13 @@ impl Emu {
             return self.step_special();
         }
         self.recent[(self.steps & 15) as usize] = start;
+        if self.break_at == Some(start) {
+            let r = &self.regs;
+            eprintln!(
+                "[break] {start:#x}: eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x} eflags={:#x}",
+                r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], self.eflags
+            );
+        }
         if let Some(p) = self.profile.as_mut() {
             if self.steps & 1023 == 0 {
                 *p.entry(start & !15).or_insert(0) += 1;
@@ -683,10 +732,11 @@ impl Emu {
             };
             match b {
                 0x66 => p.opsize16 = true,
+                0x67 => p.addr16 = true,
                 0x64 => p.fs = true,
                 0xF2 | 0xF3 => p.rep = b,
-                // segment overrides we do not model, address-size, and `lock` (one thread)
-                0x26 | 0x2E | 0x36 | 0x3E | 0x65 | 0x67 | 0xF0 => {}
+                // segment overrides we do not model, and `lock` (one thread)
+                0x26 | 0x2E | 0x36 | 0x3E | 0x65 | 0xF0 => {}
                 _ => break b,
             }
         };
@@ -746,32 +796,32 @@ impl Emu {
                 self.set_flag(CF, cf);
                 self.set_reg(r, bits, res);
             }
-            0x50..=0x57 => self.push(self.regs[(opc & 7) as usize])?,
+            0x50..=0x57 => self.push_sized(self.regs[(opc & 7) as usize], bits)?,
             0x58..=0x5F => {
-                let v = self.pop()?;
-                self.regs[(opc & 7) as usize] = v;
+                let v = self.pop_sized(bits)?;
+                self.set_reg((opc & 7) as usize, bits, v);
             }
             0x60 => {
                 let esp = self.regs[ESP];
                 for r in 0..8 {
-                    self.push(if r == ESP { esp } else { self.regs[r] })?;
+                    self.push_sized(if r == ESP { esp } else { self.regs[r] }, bits)?;
                 }
             }
             0x61 => {
                 for r in (0..8).rev() {
-                    let v = self.pop()?;
+                    let v = self.pop_sized(bits)?;
                     if r != ESP {
-                        self.regs[r] = v;
+                        self.set_reg(r, bits, v);
                     }
                 }
             }
             0x68 => {
-                let v = self.fetch_imm(32)?;
-                self.push(v)?;
+                let v = self.fetch_imm(bits)?;
+                self.push_sized(v, bits)?;
             }
             0x6A => {
                 let v = self.fetch8()? as i8 as u32;
-                self.push(v)?;
+                self.push_sized(v, bits)?;
             }
             0x69 | 0x6B => {
                 let m = self.modrm(&p)?;
@@ -854,8 +904,8 @@ impl Emu {
             }
             0x8F => {
                 let m = self.modrm(&p)?;
-                let v = self.pop()?;
-                self.write_op(m.rm, 32, v)?;
+                let v = self.pop_sized(bits)?;
+                self.write_op(m.rm, bits, v)?;
             }
             0xD7 => {
                 // xlat: al = [ebx + al]
@@ -868,10 +918,10 @@ impl Emu {
             }
             0x90 | 0x9B => {} // nop; fwait (no pending x87 exceptions to wait for)
             // push/pop of segment registers: values are fixed, pops are discarded
-            0x06 | 0x16 | 0x1E => self.push(SEG_DATA)?,
-            0x0E => self.push(SEG_CS)?,
+            0x06 | 0x16 | 0x1E => self.push_sized(SEG_DATA, bits)?,
+            0x0E => self.push_sized(SEG_CS, bits)?,
             0x07 | 0x17 | 0x1F => {
-                self.pop()?;
+                self.pop_sized(bits)?;
             }
             // mov r/m, Sreg   /   mov Sreg, r/m
             0x8C => {
@@ -930,8 +980,11 @@ impl Emu {
             0xD8..=0xDF if opc != 0xD0 && opc != 0xD1 && opc != 0xD2 && opc != 0xD3 => {
                 return self.exec_fpu(opc, p, start);
             }
-            0x9C => self.push(self.eflags | 2)?,
-            0x9D => self.eflags = self.pop()? | 2,
+            0x9C => self.push_sized(self.eflags | 2, bits)?,
+            0x9D => {
+                let v = self.pop_sized(bits)?;
+                self.eflags = if bits == 16 { self.eflags & 0xFFFF_0000 | v } else { v } | 2;
+            }
             0xA0..=0xA3 => {
                 let mut addr = self.fetch_imm(32)?;
                 if p.fs {
@@ -989,16 +1042,25 @@ impl Emu {
                 self.regs[ESP] = self.regs[EBP];
                 self.regs[EBP] = self.pop()?;
             }
-            0xE2 => {
+            // loopnz, loopz, loop: count down (E)CX, then branch while it is not zero (and ZF
+            // says so).
+            0xE0..=0xE2 => {
                 let rel = self.fetch8()? as i8 as u32;
-                self.regs[ECX] = self.regs[ECX].wrapping_sub(1);
-                if self.regs[ECX] != 0 {
+                let cbits = if p.addr16 { 16 } else { 32 };
+                let count = self.get_reg(ECX, cbits).wrapping_sub(1) & mask(cbits);
+                self.set_reg(ECX, cbits, count);
+                let zf_ok = match opc {
+                    0xE0 => !self.flag(ZF),
+                    0xE1 => self.flag(ZF),
+                    _ => true,
+                };
+                if count != 0 && zf_ok {
                     self.eip = self.eip.wrapping_add(rel);
                 }
             }
             0xE3 => {
                 let rel = self.fetch8()? as i8 as u32;
-                if self.regs[ECX] == 0 {
+                if self.get_reg(ECX, if p.addr16 { 16 } else { 32 }) == 0 {
                     self.eip = self.eip.wrapping_add(rel);
                 }
             }
@@ -1040,8 +1102,8 @@ impl Emu {
                     }
                     4 if opc == 0xFF => self.eip = self.read_op(m.rm, 32)?,
                     6 if opc == 0xFF => {
-                        let v = self.read_op(m.rm, 32)?;
-                        self.push(v)?;
+                        let v = self.read_op(m.rm, bits)?;
+                        self.push_sized(v, bits)?;
                     }
                     _ => return Err(self.invalid(start)),
                 }
@@ -1452,6 +1514,44 @@ mod tests {
         (e, stop)
     }
 
+    /// rcl/rcr against a rotation one bit at a time, for every width and count.
+    #[test]
+    fn rotate_through_carry_matches_a_bitwise_reference() {
+        let mut e = Emu::new();
+        let mut seed = 0x9E37_79B9u32;
+        for _ in 0..2000 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let bits = [8, 16, 32][(seed >> 3) as usize % 3];
+            let a = seed.rotate_left(7) & mask(bits);
+            let count = seed >> 27; // 0..=31
+            let cf = seed & 1 != 0;
+            for op in [2usize, 3] {
+                let (mut v, mut c) = (a, cf);
+                for _ in 0..count % (bits + 1) {
+                    let top = v >> (bits - 1) & 1 != 0;
+                    if op == 2 {
+                        v = (v << 1 | c as u32) & mask(bits);
+                        c = top;
+                    } else {
+                        let low = v & 1 != 0;
+                        v = v >> 1 | (c as u32) << (bits - 1);
+                        c = low;
+                    }
+                }
+                e.set_flag(CF, cf);
+                let r = e.shift(op, a, count, bits).unwrap();
+                assert_eq!((r, e.flag(CF)), (v, if count == 0 { cf } else { c }), "op {op} {bits}-bit {a:#x} by {count}, CF {cf}");
+            }
+        }
+        // OF for a single step
+        e.set_flag(CF, false);
+        assert_eq!(e.shift(2, 0x80, 1, 8).unwrap(), 0);
+        assert!(e.flag(CF) && e.flag(OF), "rcl: top bit out to CF, which differs from the new top bit");
+        e.set_flag(CF, true);
+        assert_eq!(e.shift(3, 1, 1, 32).unwrap(), 0x8000_0000);
+        assert!(e.flag(CF) && e.flag(OF), "rcr: CF in at the top, next to a 0");
+    }
+
     fn run_ok(code: &[u8]) -> Emu {
         let (e, stop) = run(code);
         assert_eq!(stop, Stop::Halt, "program did not halt cleanly");
@@ -1495,6 +1595,48 @@ mod tests {
         let e = run_ok(&[0x68, 0x44, 0x33, 0x22, 0x11, 0x5B, 0xF4]);
         assert_eq!(e.regs[EBX], 0x11223344);
         assert_eq!(e.regs[ESP], 0x10000);
+    }
+
+    /// With an address-size prefix, loop counts in CX and leaves the top of ECX alone.
+    #[test]
+    fn loop_with_address_size_prefix_counts_cx() {
+        let e = run_ok(&[
+            0xB9, 0x03, 0x00, 0xAB, 0x12, // mov ecx, 0x12ab0003
+            0x31, 0xC0, // xor eax, eax
+            0x40, // inc eax          <- loop body
+            0x67, 0xE2, 0xFC, // loop (cx) back to inc
+            0xF4,
+        ]);
+        assert_eq!(e.regs[EAX], 3, "three passes, not 0x12ab0003");
+        assert_eq!(e.regs[ECX], 0x12AB_0000);
+        // loopnz stops early when ZF is set
+        let e = run_ok(&[
+            0xB9, 0x0A, 0x00, 0x00, 0x00, // mov ecx, 10
+            0x31, 0xC0, // xor eax, eax
+            0x40, // inc eax
+            0x83, 0xF8, 0x04, // cmp eax, 4
+            0xE0, 0xFA, // loopnz back to inc
+            0xF4,
+        ]);
+        assert_eq!((e.regs[EAX], e.regs[ECX]), (4, 6));
+    }
+
+    /// With an operand-size prefix, pushes and pops move the stack by two bytes.
+    #[test]
+    fn sixteen_bit_push_and_pop() {
+        let e = run_ok(&[
+            0xB8, 0x44, 0x33, 0x22, 0x11, // mov eax, 0x11223344
+            0xBB, 0x88, 0x77, 0x66, 0x55, // mov ebx, 0x55667788
+            0x66, 0x50, // push ax
+            0x66, 0x53, // push bx
+            0x66, 0x68, 0xCD, 0xAB, // push word 0xabcd
+            0x66, 0x59, // pop cx      (0xabcd)
+            0x5A, // pop edx           (bx:ax = 0x77883344... as one dword)
+            0xF4,
+        ]);
+        assert_eq!(e.regs[ECX] & 0xFFFF, 0xABCD, "push imm16 reads two immediate bytes");
+        assert_eq!(e.regs[EDX], 0x3344_7788, "two word pushes make one dword");
+        assert_eq!(e.regs[ESP], 0x10000, "balanced");
     }
 
     #[test]

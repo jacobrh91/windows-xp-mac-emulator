@@ -132,18 +132,23 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "MultiByteToWideChar") => (6, k32_multi_byte_to_wide),
         ("kernel32", "WideCharToMultiByte") => (8, k32_wide_to_multi_byte),
 
-        // ---- registry: every key is "not found" / "access denied" ----
-        ("advapi32", "RegOpenKeyExA") => (5, |_, _| Ok(2)),
-        ("advapi32", "RegQueryValueExA") => (6, |_, _| Ok(2)),
-        ("advapi32", "RegCloseKey") => (1, |_, _| Ok(0)),
-        ("advapi32", "RegCreateKeyExA") => (9, |_, _| Ok(5)),
-        ("advapi32", "RegSetValueExA") => (6, |_, _| Ok(5)),
+        // (The registry is in `registry`.)
+        ("advapi32", "GetUserNameA") => (2, |e, a| {
+            // GetUserNameA counts the terminator in the returned size.
+            let r = crate::win32::kernel32::name_out(e, a[0], a[1], "Player")?;
+            if r != 0 {
+                e.mem.write(a[1], 4, 7)?;
+            }
+            Ok(r)
+        }),
+        ("kernel32", "GetThreadPriority") => (1, |_, _| Ok(0)),
 
         // ---- user32 odds and ends ----
-        ("user32", "GetSystemMetrics") => (1, |_, a| {
+        ("user32", "GetSystemMetrics") => (1, |e, a| {
+            let (w, h) = e.win.ddraw.screen().unwrap_or((1024, 768));
             Ok(match a[0] {
-                0 => 1024, // SM_CXSCREEN
-                1 => 768,  // SM_CYSCREEN
+                0 => w, // SM_CXSCREEN
+                1 => h, // SM_CYSCREEN
                 _ => 0,
             })
         }),
@@ -672,8 +677,12 @@ mod tests {
     #[test]
     fn registry_is_empty_and_files_are_missing() {
         let mut e = Emu::new();
-        let (_, h) = lookup("advapi32", "RegOpenKeyExA").unwrap();
-        assert_eq!(h(&mut e, &[0; 12]).unwrap(), 2);
+        e.mem.map(0x10000, 0x1000);
+        e.mem.write_bytes(0x10000, b"Software\\Anything\0").unwrap();
+        let (_, h) = crate::win32::lookup("advapi32", "RegOpenKeyExA").unwrap();
+        let mut args = [0u32; crate::win32::MAX_ARGS];
+        args[..5].copy_from_slice(&[0x8000_0002, 0x10000, 0, 0, 0x10100]);
+        assert_eq!(h(&mut e, &args).unwrap(), 2);
         assert!(Win32::is_supported("kernel32", "CreateFileA"));
     }
 }

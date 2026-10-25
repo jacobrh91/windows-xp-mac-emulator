@@ -43,6 +43,7 @@ const DBLCLK_MS: u64 = 500;
 const DBLCLK_PX: i32 = 4;
 pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
+pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_INITMENUPOPUP: u32 = 0x0117;
 pub const WM_INITDIALOG: u32 = 0x0110;
 
@@ -971,9 +972,38 @@ impl WindowManager {
     // ---- keyboard ---------------------------------------------------------------------
 
     pub fn post_key(&mut self, vk: u32, down: bool) {
-        if let Some(k) = self.key_down.get_mut(vk as usize) {
+        let extended = crate::gui::keyboard::scan_code(vk).is_some_and(|s| s.1);
+        self.post_key_ex(vk, 0, extended, down);
+    }
+
+    /// A key went down or up. `side` is the left/right code of a modifier (VK_LSHIFT,
+    /// VK_RCONTROL, ...) or 0; `extended` is the keyboard's extended-key flag. The message
+    /// carries what Windows puts in lParam (scan code, previous state, transition), and is
+    /// WM_SYSKEYDOWN/UP while Alt is held, or for Alt and F10 themselves.
+    pub fn post_key_ex(&mut self, vk: u32, side: u32, extended: bool, down: bool) {
+        let was_down = self.key_down.get(vk as usize).copied().unwrap_or(false);
+        if side != 0 {
+            self.key_down[side as usize & 0xFF] = down;
+            // The generic modifier is down while either side is.
+            let (l, r) = match vk {
+                0x10 => (0xA0, 0xA1),
+                0x11 => (0xA2, 0xA3),
+                _ => (0xA4, 0xA5),
+            };
+            self.key_down[vk as usize & 0xFF] = self.key_down[l] || self.key_down[r];
+        } else if let Some(k) = self.key_down.get_mut(vk as usize) {
             *k = down;
         }
+        let alt = self.key_down[0x12];
+        let sys = (alt && !self.key_down[0x11]) || vk == 0x12 || vk == 0x79;
+        let message = match (down, sys) {
+            (true, false) => WM_KEYDOWN,
+            (false, false) => WM_KEYUP,
+            (true, true) => WM_SYSKEYDOWN,
+            (false, true) => WM_SYSKEYUP,
+        };
+        let scan_vk = if side != 0 { side } else { vk };
+        let lparam = crate::gui::keyboard::key_lparam(scan_vk, extended, down, was_down, alt && sys);
         let target = if self.focus != 0 {
             self.focus
         } else {
@@ -985,7 +1015,7 @@ impl WindowManager {
                 .unwrap_or(0)
         };
         if target != 0 {
-            self.post(target, if down { WM_KEYDOWN } else { WM_KEYUP }, vk, 1);
+            self.post(target, message, vk, lparam);
         }
     }
 

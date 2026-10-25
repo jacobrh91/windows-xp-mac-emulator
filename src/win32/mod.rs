@@ -4,6 +4,7 @@
 
 pub mod kernel32;
 pub mod kernel32_extra;
+pub mod registry;
 pub mod msvcrt;
 pub mod other_dlls;
 pub mod seh;
@@ -74,7 +75,7 @@ pub struct Exports {
 const EMULATED_DLLS: &[&str] = &[
     "kernel32", "user32", "gdi32", "advapi32", "ntdll", "shell32", "ole32", "oleaut32", "comctl32",
     "comdlg32", "version", "winmm", "ws2_32", "wsock32", "msvcrt", "ddraw", "d3d8", "d3d9",
-    "dsound", "dinput", "dinput8", "shlwapi", "imm32", "opengl32", "glu32", "setupapi", "wininet",
+    "dsound", "dinput", "dinput8", "dplayx", "shlwapi", "imm32", "opengl32", "glu32", "setupapi", "wininet",
     "winspool", "msacm32", "psapi", "rpcrt4", "mpr", "netapi32", "iphlpapi",
 ];
 
@@ -115,6 +116,8 @@ pub struct Win32 {
     /// The silent sound card and multimedia timers.
     pub audio: crate::media::audio::AudioState,
     pub d3d: crate::d3d::d3d8::D3d8,
+    pub ddraw: crate::d3d::ddraw::DDraw,
+    pub registry: registry::Registry,
     pub bink: crate::media::bink::BinkState,
     pub hooks: crate::hooks::HookState,
     pub games: crate::game_optimizations::GameState,
@@ -148,11 +151,13 @@ type Provider = fn(&str, &str) -> Option<(usize, Handler)>;
 const PROVIDERS: &[Provider] = &[
     core_api,
     kernel32_extra::lookup,
+    registry::lookup,
     crate::gui::user32::lookup,
     msvcrt::lookup,
     threads::lookup,
     crate::media::audio::lookup,
     crate::d3d::d3d8::lookup,
+    crate::d3d::ddraw::lookup,
     crate::media::bink::lookup,
     crate::hooks::lookup,
     kernel32::lookup,
@@ -270,6 +275,8 @@ impl Win32 {
             debug_output: Vec::new(),
             audio: Default::default(),
             d3d: Default::default(),
+            ddraw: Default::default(),
+            registry: Default::default(),
             bink: Default::default(),
             hooks: Default::default(),
             games: Default::default(),
@@ -512,6 +519,15 @@ impl Emu {
                 "[api] {dll}!{name}({}) -> {result} <{caller}>",
                 shown.join(", ")
             );
+            // XP_TRACE_STACK=<function>: also the return addresses on the stack at each call.
+            if std::env::var("XP_TRACE_STACK").is_ok_and(|f| f == name) {
+                let frames: Vec<String> = (0..64u32)
+                    .filter_map(|i| self.mem.read(esp.wrapping_add(4 * i), 4).ok())
+                    .filter_map(|v| self.win.locate(v))
+                    .take(12)
+                    .collect();
+                eprintln!("[api]   stack: {}", frames.join(" "));
+            }
         }
         // A bad pointer passed to an API is an access violation in the program, as on Windows
         // (where it would fault inside the system DLL): its exception handlers get a say.

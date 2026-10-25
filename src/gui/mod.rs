@@ -2,6 +2,7 @@
 //! framebuffer they draw into, and the macOS window that shows the result.
 
 pub mod gfx;
+pub mod keyboard;
 pub mod present;
 pub mod user32;
 pub mod wm;

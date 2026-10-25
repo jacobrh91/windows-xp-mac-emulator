@@ -7,6 +7,13 @@ use crate::cpu::{Emu, Res};
 use crate::win32::{Args, CDECL, Handler};
 
 const MMSYSERR_NODRIVER: u32 = 6;
+const MMSYSERR_BADDEVICEID: u32 = 2;
+const MCIERR_DEVICE_NOT_INSTALLED: u32 = 0x115;
+const DSERR_NODRIVER: u32 = 0x8878_0078;
+const E_FAIL: u32 = 0x8000_4005;
+/// Stand-ins for GDI palettes and regions, which nothing draws with.
+const PALETTE_HANDLE: u32 = 0x8800_0001;
+const REGION_HANDLE: u32 = 0x8800_0002;
 const WSAEAFNOSUPPORT: u32 = 10047;
 const INVALID_SOCKET: u32 = u32::MAX;
 
@@ -29,9 +36,27 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "EnumDisplaySettingsA") => (3, enum_display_settings),
         ("user32", "GetCaretBlinkTime") => (0, |_, _| Ok(530)),
         ("user32", "GetDoubleClickTime") => (0, |_, _| Ok(500)),
-        ("user32", "GetClassLongA")
-        | ("user32", "GetKeyNameTextA")
-        | ("user32", "MapVirtualKeyA") => (3, |_, _| Ok(0)),
+        ("user32", "GetClassLongA") => (2, |_, _| Ok(0)),
+        ("user32", "MapVirtualKeyA") => (2, |_, a| {
+            use crate::gui::keyboard::*;
+            Ok(match a[1] {
+                0 => scan_code(a[0]).map_or(0, |s| s.0),
+                1 | 3 => vk_of_scan(a[0] & 0xFF, a[0] & 0xE000 != 0, a[1] == 3),
+                2 => char_of(a[0]),
+                _ => 0,
+            })
+        }),
+        ("user32", "GetKeyNameTextA") => (3, |e, a| {
+            let scan = a[0] >> 16 & 0xFF;
+            let Some(name) = crate::gui::keyboard::key_name(scan, a[0] >> 24 & 1 != 0) else { return Ok(0) };
+            if a[2] == 0 {
+                return Ok(0);
+            }
+            let n = name.len().min(a[2] as usize - 1);
+            e.mem.write_bytes(a[1], &name.as_bytes()[..n])?;
+            e.mem.write(a[1] + n as u32, 1, 0)?;
+            Ok(n as u32)
+        }),
         ("user32", "GetClipCursor") => (1, |e, a| {
             for (i, v) in [0u32, 0, 1024, 768].iter().enumerate() {
                 e.mem.write(a[0] + 4 * i as u32, 4, *v)?;
@@ -112,7 +137,63 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             write_limited(e, a[0], &text)
         }),
 
+        ("user32", "DestroyIcon") => (1, |_, _| Ok(1)),
+        ("user32", "LoadCursorFromFileA") => (1, |_, _| Ok(0xcf00)),
+        ("user32", "GetKeyboardType") => (1, |_, a| {
+            Ok(match a[0] {
+                0 => 4,  // enhanced 101/102-key
+                2 => 12, // function keys
+                _ => 0,
+            })
+        }),
+        ("user32", "GetUpdateRect") => (3, |e, a| {
+            if a[1] != 0 {
+                e.mem.write_bytes(a[1], &[0; 16])?;
+            }
+            Ok(0)
+        }),
+        ("user32", "GetUpdateRgn") => (3, |_, _| Ok(1)), // NULLREGION
+        ("user32", "GetDlgItemTextA") => (4, |e, a| {
+            if a[3] > 0 {
+                e.mem.write(a[2], 1, 0)?;
+            }
+            Ok(0)
+        }),
+        ("user32", "FlashWindow") => (2, |_, _| Ok(0)),
+
         // ---- gdi32 ----
+        ("gdi32", "CreateFontIndirectA") => (1, |e, a| {
+            let h = e.mem.read(a[0], 4)? as i32;
+            Ok(e.wm.add_gdi(crate::gui::wm::Gdi::Font {
+                px: if h == 0 { 13 } else { h.unsigned_abs() },
+            }))
+        }),
+        ("gdi32", "SetViewportOrgEx") => (4, |e, a| {
+            if a[3] != 0 {
+                e.mem.write_bytes(a[3], &[0; 8])?;
+            }
+            Ok(1)
+        }),
+        // Palettes: the display is true colour, so these only need to be accepted.
+        ("gdi32", "CreatePalette") => (1, |_, _| Ok(PALETTE_HANDLE)),
+        ("gdi32", "SelectPalette") => (3, |_, _| Ok(PALETTE_HANDLE)),
+        ("gdi32", "RealizePalette") => (1, |_, _| Ok(0)),
+        ("gdi32", "AnimatePalette") => (4, |_, _| Ok(1)),
+        ("gdi32", "SetSystemPaletteUse") | ("gdi32", "GetSystemPaletteUse") => (2, |_, _| Ok(1)), // SYSPAL_STATIC
+        ("gdi32", "GetSystemPaletteEntries") => (4, |e, a| {
+            for i in 0..a[2] {
+                let v = (a[1] + i) & 0xFF;
+                e.mem.write(a[3] + 4 * i, 4, v * 0x010101)?;
+            }
+            Ok(a[2])
+        }),
+        ("gdi32", "SetDIBColorTable") => (4, |_, a| Ok(a[2])),
+        ("gdi32", "GetBkMode") => (1, |_, _| Ok(2)),                     // OPAQUE
+        ("gdi32", "GetBkColor") => (1, |_, _| Ok(0x00FF_FFFF)),
+        ("gdi32", "GetTextColor") => (1, |_, _| Ok(0)),
+        ("gdi32", "GdiFlush") => (0, |_, _| Ok(1)),
+        ("gdi32", "CreateRectRgn") => (4, |_, _| Ok(REGION_HANDLE)),
+        ("gdi32", "GetRegionData") => (3, |_, _| Ok(0)),
         ("gdi32", "SetStretchBltMode") => (2, |_, _| Ok(1)),
         ("gdi32", "SetTextAlign") => (2, |_, _| Ok(0)),
         ("gdi32", "GetDIBits") => (7, |_, _| Ok(0)),
@@ -216,6 +297,28 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             (3, |_, _| Ok(MMSYSERR_NODRIVER))
         }
         ("winmm", "mciSendCommandA") => (4, |_, _| Ok(MMSYSERR_NODRIVER)),
+        ("winmm", "mciSendStringA") => (4, |e, a| {
+            if a[1] != 0 && a[2] > 0 {
+                e.mem.write(a[1], 1, 0)?;
+            }
+            Ok(MCIERR_DEVICE_NOT_INSTALLED)
+        }),
+        ("winmm", "midiOutGetNumDevs") => (0, |_, _| Ok(0)),
+        ("winmm", "midiOutGetDevCapsA") => (3, |_, _| Ok(MMSYSERR_BADDEVICEID)),
+        ("winmm", "midiOutGetVolume") | ("winmm", "midiOutSetVolume") => (2, |_, _| Ok(MMSYSERR_NODRIVER)),
+
+        // ---- DirectSound, DirectInput, DirectPlay: no such devices (yet) ----
+        ("dsound", "DirectSoundCreate") => (3, |_, _| Ok(DSERR_NODRIVER)),
+        ("dsound", "DirectSoundEnumerateA") => (2, |_, _| Ok(0)),
+        ("dinput", "DirectInputCreateA") => (4, |_, _| Ok(E_FAIL)),
+        ("dplayx", "#1") => (3, |_, _| Ok(E_FAIL)), // DirectPlayCreate
+        ("dplayx", "#2") => (2, |_, _| Ok(E_FAIL)), // DirectPlayEnumerateA
+
+        // ---- comdlg32 / shell32 ----
+        ("comdlg32", "GetOpenFileNameA") | ("comdlg32", "GetSaveFileNameA") => (1, |_, _| Ok(0)), // cancelled
+        ("shell32", "DragAcceptFiles") => (2, |_, _| Ok(0)),
+        ("shell32", "DragQueryFileA") => (4, |_, _| Ok(0)),
+        ("shell32", "Shell_NotifyIconA") => (2, |_, _| Ok(1)),
         ("winmm", "midiOutOpen")
         | ("winmm", "waveOutOpen")
         | ("winmm", "waveInOpen")

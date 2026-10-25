@@ -1,13 +1,16 @@
-//! Optimizations for particular games: which functions of their DLLs to replace with native
-//! code (see `hooks`), and replacements only one game needs. Each game has its own module;
-//! a new one adds its hook table to `GAMES`, its stubs to `lookup` and its state to
-//! `GameState`.
+//! Optimizations and set-up for particular games: which functions of their DLLs to replace
+//! with native code (see `hooks`), replacements only one game needs, and what the game's
+//! installer would have left on the machine. Each game has its own module; a new one adds
+//! its hook table to `GAMES`, its stubs to `lookup`, its state to `GameState` and its
+//! preparations to `setup`.
 //!
 //! Every hook is checked byte for byte against the DLL before it goes in, so one game's hooks
 //! are harmless while another game (or another build of the same one) is running.
 
 pub mod impossible_creatures;
+pub mod rollercoaster_tycoon;
 
+use crate::cpu::Emu;
 use crate::hooks::Hook;
 use crate::win32::Handler;
 
@@ -21,6 +24,11 @@ pub fn hooks() -> impl Iterator<Item = &'static Hook> {
 /// The native stub for a game hook's name.
 pub fn lookup(name: &str) -> Option<(usize, Handler)> {
     impossible_creatures::lookup(name)
+}
+
+/// Prepare for running the program `exe` (its file name), before it starts.
+pub fn setup(e: &mut Emu, exe: &str) {
+    rollercoaster_tycoon::setup(e, exe);
 }
 
 /// What the games' native stubs remember between calls.

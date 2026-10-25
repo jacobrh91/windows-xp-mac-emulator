@@ -409,6 +409,8 @@ pub struct Presenter {
     window: Window,
     chars: Arc<Mutex<Vec<u32>>>,
     left_down: bool,
+    /// The Windows modifier keys (VK_LSHIFT..VK_RMENU) as last sent to the game.
+    modifiers: [bool; 6],
     last_pos: (i32, i32),
     /// Top-left of the visible region in emulated-desktop coordinates, and its size.
     region: (i32, i32, u32, u32),
@@ -431,6 +433,7 @@ impl Presenter {
             window,
             chars,
             left_down: false,
+            modifiers: [false; 6],
             last_pos: (-1, -1),
             region,
             buf: Vec::new(),
@@ -556,17 +559,37 @@ impl Presenter {
                 cocoa::describe(&self.window)
             );
         }
+        // Modifiers, Mac to PC: Command and Control are Ctrl, Option is Alt. They are read
+        // from the keys' state, so two Mac keys on one Windows key do not fight.
+        let held = |keys: &[Key]| keys.iter().any(|&k| self.window.is_key_down(k));
+        let now = [
+            held(&[Key::LeftShift]),
+            held(&[Key::RightShift]),
+            held(&[Key::LeftSuper, Key::LeftCtrl]),
+            held(&[Key::RightSuper, Key::RightCtrl]),
+            held(&[Key::LeftAlt]),
+            held(&[Key::RightAlt]),
+        ];
+        for (i, (&was, &is)) in self.modifiers.iter().zip(&now).enumerate() {
+            if was != is {
+                // (generic key, sided key, extended): VK_SHIFT/VK_LSHIFT, ... right Ctrl and
+                // right Alt are extended keys.
+                let (vk, side, ext) = [(0x10, 0xA0, false), (0x10, 0xA1, false), (0x11, 0xA2, false), (0x11, 0xA3, true), (0x12, 0xA4, false), (0x12, 0xA5, true)][i];
+                emu.wm.post_key_ex(vk, side, ext, is);
+            }
+        }
+        self.modifiers = now;
         for key in self.window.get_keys_pressed(KeyRepeat::Yes) {
             if toggle && key == Key::Enter {
                 continue;
             }
-            if let Some(vk) = virtual_key(key) {
-                emu.wm.post_key(vk, true);
+            if let Some((vk, ext)) = virtual_key(key) {
+                emu.wm.post_key_ex(vk, 0, ext, true);
             }
         }
         for key in self.window.get_keys_released() {
-            if let Some(vk) = virtual_key(key) {
-                emu.wm.post_key(vk, false);
+            if let Some((vk, ext)) = virtual_key(key) {
+                emu.wm.post_key_ex(vk, 0, ext, false);
             }
         }
         let typed: Vec<u32> = self
@@ -574,17 +597,27 @@ impl Presenter {
             .lock()
             .map(|mut v| std::mem::take(&mut *v))
             .unwrap_or_default();
+        let ctrl = emu.wm.key_down[0x11];
         for c in typed {
+            // With Ctrl held, Windows types control characters (Ctrl+A is 1) and nothing for
+            // other keys; macOS would type the plain letter under Command.
+            if ctrl {
+                if let Some(l) = char::from_u32(c).filter(char::is_ascii_alphabetic) {
+                    emu.wm.post_char(l.to_ascii_uppercase() as u32 & 0x1F);
+                }
+                continue;
+            }
             emu.wm.post_char(c);
         }
         self.window.is_open()
     }
 }
 
-/// Windows virtual-key code for a host key.
-pub fn virtual_key(key: Key) -> Option<u32> {
+/// Windows virtual-key code for a host key (modifiers are handled separately), and whether
+/// it is an extended key on a PC keyboard.
+pub fn virtual_key(key: Key) -> Option<(u32, bool)> {
     use Key::*;
-    Some(match key {
+    let vk = match key {
         Key0 | Key1 | Key2 | Key3 | Key4 | Key5 | Key6 | Key7 | Key8 | Key9 => {
             0x30 + (key as u32 - Key0 as u32)
         }
@@ -608,11 +641,33 @@ pub fn virtual_key(key: Key) -> Option<u32> {
         Home => 0x24,
         Insert => 0x2D,
         Delete => 0x2E,
-        LeftShift | RightShift => 0x10,
-        LeftCtrl | RightCtrl => 0x11,
-        LeftAlt | RightAlt => 0x12,
+        Minus => 0xBD,
+        Equal => 0xBB,
+        LeftBracket => 0xDB,
+        RightBracket => 0xDD,
+        Backslash => 0xDC,
+        Semicolon => 0xBA,
+        Apostrophe => 0xDE,
+        Comma => 0xBC,
+        Period => 0xBE,
+        Slash => 0xBF,
+        Backquote => 0xC0,
+        CapsLock => 0x14,
+        Pause => 0x13,
+        ScrollLock => 0x91,
+        NumLock => 0x90,
+        Menu => 0x5D,
+        NumPad0 | NumPad1 | NumPad2 | NumPad3 | NumPad4 | NumPad5 | NumPad6 | NumPad7 | NumPad8
+        | NumPad9 => 0x60 + (key as u32 - NumPad0 as u32),
+        NumPadDot => 0x6E,
+        NumPadSlash => 0x6F,
+        NumPadAsterisk => 0x6A,
+        NumPadMinus => 0x6D,
+        NumPadPlus => 0x6B,
+        NumPadEnter => return Some((0x0D, true)),
         _ => return None,
-    })
+    };
+    Some((vk, crate::gui::keyboard::scan_code(vk).is_some_and(|s| s.1)))
 }
 
 #[cfg(test)]

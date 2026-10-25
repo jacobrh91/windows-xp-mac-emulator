@@ -109,6 +109,7 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             .map(|f| f.to_string_lossy().into_owned())
             .unwrap_or_default();
         emu.win.exe_path = format!(r"C:\Game\{file}");
+        game_optimizations::setup(&mut emu, &file);
     }
     emu.win.trace = env::var_os("TRACE_API").is_some();
     if env::var_os("XP_SKIP_MOVIES").is_some() {
@@ -164,18 +165,22 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         })
         .unwrap_or_default();
     clicks.reverse();
-    // XP_KEYS=<secs>:<virtual key>,...  scripted key presses (27 is Esc).
-    let mut keys: Vec<(u64, u32)> = env::var("XP_KEYS")
+    let mut release_at: Option<(std::time::Instant, i32, i32)> = None;
+    // XP_KEYS=<secs>:<virtual key>[+<virtual key>...],...  scripted key presses (27 is Esc;
+    // 17+69 is Ctrl+E): pressed in order, held a moment, released in reverse.
+    let mut keys: Vec<(u64, Vec<u32>)> = env::var("XP_KEYS")
         .map(|v| {
             v.split(',')
                 .filter_map(|k| {
-                    let (t, vk) = k.split_once(':')?;
-                    Some((t.trim().parse().ok()?, vk.trim().parse().ok()?))
+                    let (t, vks) = k.split_once(':')?;
+                    let vks: Vec<u32> = vks.split('+').filter_map(|vk| vk.trim().parse().ok()).collect();
+                    Some((t.trim().parse().ok()?, vks))
                 })
                 .collect()
         })
         .unwrap_or_default();
     keys.reverse();
+    let mut keys_up: Option<(std::time::Instant, Vec<u32>)> = None;
     let stop = loop {
         let stop = emu.run(1_000_000);
         if let Some(s) = env::var("XP_STOP_AFTER")
@@ -258,9 +263,17 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             .last()
             .is_some_and(|k| started.elapsed().as_secs() >= k.0)
         {
-            let (_, vk) = keys.pop().unwrap();
-            emu.wm.post_key(vk, true);
-            emu.wm.post_key(vk, false);
+            let (_, vks) = keys.pop().unwrap();
+            for &vk in &vks {
+                emu.wm.post_key(vk, true);
+            }
+            keys_up = Some((std::time::Instant::now() + std::time::Duration::from_millis(100), vks));
+        }
+        if let Some((at, vks)) = keys_up.take_if(|(at, _)| std::time::Instant::now() >= *at) {
+            let _ = at;
+            for &vk in vks.iter().rev() {
+                emu.wm.post_key(vk, false);
+            }
         }
         while clicks
             .last()
@@ -269,7 +282,15 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             let (_, x, y) = clicks.pop().unwrap();
             emu.wm.post_mouse(0x0200, x, y); // WM_MOUSEMOVE
             emu.wm.post_mouse(0x0201, x, y); // WM_LBUTTONDOWN
+            // The button is held a moment, as a hand would: games that poll once a frame
+            // must see it down.
+            release_at = Some((std::time::Instant::now() + std::time::Duration::from_millis(100), x, y));
+        }
+        if let Some((at, x, y)) = release_at
+            && std::time::Instant::now() >= at
+        {
             emu.wm.post_mouse(0x0202, x, y); // WM_LBUTTONUP
+            release_at = None;
         }
         if let Some(d) = dump_after
             && !dumped
@@ -378,9 +399,27 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         "stopped: {stop:?} at eip={:#x} after {} steps, {} frames presented in {:.1}s",
         emu.eip,
         emu.steps,
-        emu.win.d3d.frames(),
+        emu.win.d3d.frames() + emu.win.ddraw.frames,
         started.elapsed().as_secs_f64()
     );
+    // XP_REGS=1: the guest's registers where it stopped.
+    if env::var_os("XP_REGS").is_some() {
+        let r = &emu.regs;
+        eprintln!(
+            "regs eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x} eflags={:#x}",
+            r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], emu.eflags
+        );
+    }
+    // XP_PEEK=<hex address>:<length>[,...]: guest memory where it stopped.
+    for spec in env::var("XP_PEEK").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+        let (a, n) = spec.split_once(':').unwrap_or((spec, "64"));
+        let (Ok(a), Ok(n)) = (u32::from_str_radix(a.trim_start_matches("0x"), 16), n.parse::<u32>()) else { continue };
+        for row in (0..n).step_by(16) {
+            let bytes = emu.mem.read_bytes(a + row, 16.min(n - row)).unwrap_or_default();
+            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            eprintln!("{:08x}: {}", a + row, hex.join(" "));
+        }
+    }
     // Close devices properly (process::exit skips destructors).
     emu.win.audio.close();
     if matches!(
