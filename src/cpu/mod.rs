@@ -2,7 +2,7 @@
 //! `mmx` and SSE in `sse`.
 
 pub mod fpu;
-pub(crate) mod icache;
+pub mod icache;
 pub mod mmx;
 pub mod sse;
 
@@ -125,7 +125,7 @@ pub struct Emu {
     pub eip: u32,
     pub eflags: u32,
     /// Decoded instructions (see `icache`), used unless XP_NO_ICACHE is set.
-    pub(crate) icache: icache::ICache,
+    pub icache: icache::ICache,
     pub(crate) icache_on: bool,
     pub fs_base: u32,
     pub mem: Memory,
@@ -261,9 +261,10 @@ impl Emu {
             let mut failed = false;
             let mut done = 0;
             while done < n {
-                done += 1;
+                let (k, r) = self.step_many(n - done);
+                done += k;
                 // Blocking and thread exits are the scheduler's business; the rest ends the run.
-                if let Err(stop) = self.step() {
+                if let Err(stop) = r {
                     failed = true;
                     if let Some(stop) = self.route_stop(stop) {
                         return stop;
@@ -537,6 +538,19 @@ impl Emu {
     }
 
     // ---- execution ---------------------------------------------------------
+
+    /// Run at most `limit` instructions: a whole cached block when there is one, otherwise a
+    /// single `step`. Returns how many ran and how the last one went.
+    #[inline(always)]
+    fn step_many(&mut self, limit: u64) -> (u64, Res<()>) {
+        // Debugging aids watch every instruction, so they take the single-step path.
+        if self.icache_on && self.profile.is_none() && self.mem.watch.is_none() {
+            if let Some(r) = self.run_block(limit) {
+                return r;
+            }
+        }
+        (1, self.step())
+    }
 
     #[inline(always)]
     pub fn step(&mut self) -> Res<()> {

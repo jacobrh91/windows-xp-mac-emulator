@@ -11,9 +11,16 @@
 //! so the results, flags and faults are the same either way. Writing to a page that holds cached
 //! instructions (self-modifying code, a DLL loaded over a freed one, a hook being patched in)
 //! marks the cache stale and it is emptied before the next instruction.
+//! Straight runs of decoded instructions are also kept as *blocks* (up to the next branch,
+//! call, return or instruction not handled here), which the run loop executes back to back
+//! without its per-instruction dispatch.
+//!
 //! `XP_NO_ICACHE=1` turns it off.
 
-use super::{sext, Emu, Op, Res, CF, EAX, EBP, ECX, ESP};
+use std::rc::Rc;
+
+use super::{sext, Emu, Op, Res, Stop, CF, EAX, EBP, ECX, ESP};
+use crate::win32::{HLE_BASE, HLE_END};
 
 /// Entries in the table (a power of two).
 const SLOTS: usize = 1 << 16;
@@ -76,18 +83,55 @@ pub(crate) struct Entry {
     op: Dop,
 }
 
-pub(crate) struct ICache {
+/// Entries in the block table (a power of two).
+const BLOCK_SLOTS: usize = 1 << 19;
+/// Longest block, in instructions.
+const MAX_BLOCK: usize = 32;
+
+/// One instruction of a block: the operation, where it starts and where the next one starts.
+#[derive(Clone, Copy)]
+pub(crate) struct BlockOp {
+    op: Dop,
+    start: u32,
+    next: u32,
+}
+
+/// A run of decoded instructions starting at `start`. Empty when the first one is not
+/// handled here (so the lookup is not repeated).
+#[derive(Clone)]
+pub(crate) struct Block {
+    start: u32,
+    ops: Rc<[BlockOp]>,
+}
+
+pub struct ICache {
     entries: Vec<Entry>,
+    blocks: Vec<Block>,
+    /// Blocks built and block runs (statistics for XP_FPS).
+    pub(crate) built: u64,
+    pub(crate) runs: u64,
+    pub(crate) flushes: u64,
 }
 
 impl ICache {
     pub(crate) fn new() -> ICache {
-        ICache { entries: vec![Entry { eip: EMPTY, len: 0, op: Dop::Unsupported }; SLOTS] }
+        let empty: Rc<[BlockOp]> = Rc::new([]);
+        ICache {
+            entries: vec![Entry { eip: EMPTY, len: 0, op: Dop::Unsupported }; SLOTS],
+            blocks: vec![Block { start: EMPTY, ops: empty }; BLOCK_SLOTS],
+            built: 0,
+            runs: 0,
+            flushes: 0,
+        }
     }
 
     fn clear(&mut self) {
+        self.flushes += 1;
         for e in self.entries.iter_mut() {
             e.eip = EMPTY;
+        }
+        for b in self.blocks.iter_mut() {
+            b.start = EMPTY;
         }
     }
 }
@@ -95,6 +139,16 @@ impl ICache {
 #[inline(always)]
 fn slot(eip: u32) -> usize {
     ((eip ^ (eip >> 16)) as usize) & (SLOTS - 1)
+}
+
+#[inline(always)]
+fn block_slot(eip: u32) -> usize {
+    ((eip ^ (eip >> 19)) as usize) & (BLOCK_SLOTS - 1)
+}
+
+/// Does this instruction end a block (it may change where execution goes)?
+fn ends_block(op: &Dop) -> bool {
+    matches!(op, Dop::Jcc { .. } | Dop::Jmp(_) | Dop::Call(_) | Dop::Ret(_) | Dop::CallInd(_) | Dop::JmpInd(_))
 }
 
 /// Instruction bytes being decoded.
@@ -295,6 +349,78 @@ impl Emu {
             Ea::Reg(r) => Op::Reg(r as usize),
             Ea::Mem { base, index, scale, disp } => Op::Mem(self.ea_addr(base, index, scale, disp)),
         }
+    }
+
+    /// Run up to `limit` instructions from the block starting at `eip`. None when there is no
+    /// block to run here (an API stub, or an instruction the cache does not handle): the caller
+    /// takes the ordinary single-step path. Otherwise (instructions executed, outcome); a
+    /// fault is handled exactly as `step` would handle it.
+    #[inline(always)]
+    pub(crate) fn run_block(&mut self, limit: u64) -> Option<(u64, Res<()>)> {
+        let start = self.eip;
+        if start.wrapping_sub(HLE_BASE) < HLE_END - HLE_BASE || start == self.seh_ret {
+            return None;
+        }
+        if self.mem.code_dirty {
+            self.icache.clear();
+            self.mem.forget_code_pages();
+        }
+        let i = block_slot(start);
+        if self.icache.blocks[i].start != start {
+            self.build_block(i, start);
+        }
+        let ops = self.icache.blocks[i].ops.clone();
+        if ops.is_empty() {
+            return None;
+        }
+        self.icache.runs += 1;
+        let n = ops.len().min(limit as usize);
+        for (k, b) in ops[..n].iter().enumerate() {
+            self.steps += 1;
+            self.recent[(self.steps & 15) as usize] = b.start;
+            let saved = (self.regs, self.eflags);
+            if let Err(e) = self.exec_dop(b.op, b.start, b.next) {
+                let r = match e {
+                    // A hardware fault is a Windows exception, as in `step`.
+                    stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. }) => self.raise_hardware(stop, b.start, saved),
+                    other => Err(other),
+                };
+                return Some((k as u64 + 1, r));
+            }
+            if self.mem.code_dirty {
+                // It just wrote to cached code: the rest of this block may be stale.
+                return Some((k as u64 + 1, Ok(())));
+            }
+        }
+        Some((n as u64, Ok(())))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn build_block(&mut self, i: usize, start: u32) {
+        let mut ops = Vec::new();
+        let mut at = start;
+        while ops.len() < MAX_BLOCK {
+            let mut buf = [0u8; 16];
+            let mut n = 0;
+            while n < buf.len() {
+                match self.mem.read_u8(at.wrapping_add(n as u32)) {
+                    Ok(b) => buf[n] = b,
+                    Err(_) => break,
+                }
+                n += 1;
+            }
+            self.mem.note_code(at, buf.len() as u32);
+            let Some((len, op)) = decode(&buf[..n], at) else { break };
+            let next = at.wrapping_add(len as u32);
+            ops.push(BlockOp { op, start: at, next });
+            if ends_block(&op) || next.wrapping_sub(HLE_BASE) < HLE_END - HLE_BASE {
+                break;
+            }
+            at = next;
+        }
+        self.icache.built += 1;
+        self.icache.blocks[i] = Block { start, ops: ops.into() };
     }
 
     /// Run the instruction at `start` through the cache: decoded once, then reused.

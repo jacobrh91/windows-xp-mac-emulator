@@ -176,6 +176,12 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
                 pct(0.95),
                 pct(1.0)
             );
+            if env::var_os("XP_BLOCK_STATS").is_some() {
+                eprintln!("[blocks] {} built, {} runs ({:.1} instructions per run), {} flushes", emu.icache.built, emu.icache.runs, (emu.steps - fps_mark.2) as f64 / emu.icache.runs.max(1) as f64, emu.icache.flushes);
+                emu.icache.flushes = 0;
+                emu.icache.built = 0;
+                emu.icache.runs = 0;
+            }
             fps_mark = (std::time::Instant::now(), frames, emu.steps);
             idle = std::time::Duration::ZERO;
         }
