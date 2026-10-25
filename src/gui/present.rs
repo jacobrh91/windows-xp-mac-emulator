@@ -351,8 +351,8 @@ mod cocoa {
     }
 
     /// The modifier keys held right now, left and right: [shift, shift, ctrl, ctrl, alt, alt]
-    /// as a PC sees them (Command and Control are both Ctrl, Option is Alt).
-    pub fn modifiers() -> Option<[bool; 6]> {
+    /// as a PC sees them (Control is Ctrl, Option is Alt), and whether Command is held.
+    pub fn modifiers() -> Option<([bool; 6], bool)> {
         // SAFETY: see module docs; +[NSEvent modifierFlags] takes no arguments.
         let f = unsafe { send_usize(send_class(c"NSEvent"), sel(c"modifierFlags")) };
         // Device-dependent bits say which side (IOKit's NX_DEVICE*KEYMASK); the generic ones
@@ -360,16 +360,19 @@ mod cocoa {
         let side = |bit: usize| f & bit != 0;
         let (shift, control, option, command) = (f & 1 << 17 != 0, f & 1 << 18 != 0, f & 1 << 19 != 0, f & 1 << 20 != 0);
         let (ls, rs) = (side(0x02), side(0x04));
-        let (lc, rc) = (side(0x01) || side(0x08), side(0x2000) || side(0x10));
+        let (lc, rc) = (side(0x01), side(0x2000));
         let (la, ra) = (side(0x20), side(0x40));
-        Some([
-            ls || (shift && !rs),
-            rs,
-            lc || ((control || command) && !rc),
-            rc,
-            la || (option && !ra),
-            ra,
-        ])
+        Some((
+            [
+                ls || (shift && !rs),
+                rs,
+                lc || (control && !rc),
+                rc,
+                la || (option && !ra),
+                ra,
+            ],
+            command,
+        ))
     }
 
     /// Is the window the one receiving the keyboard?
@@ -471,7 +474,7 @@ mod cocoa {
         false
     }
     pub fn toggle_native_fullscreen(_: &Window) {}
-    pub fn modifiers() -> Option<[bool; 6]> {
+    pub fn modifiers() -> Option<([bool; 6], bool)> {
         None
     }
     pub fn is_key_window(_: &Window) -> bool {
@@ -528,6 +531,10 @@ pub struct Presenter {
     left_down: bool,
     /// The right and middle buttons, as last sent to the game.
     other_down: [bool; 2],
+    /// The left button is down as a Control-click (sent as the right button).
+    ctrl_click: bool,
+    /// Ctrl is hidden from the game after a Control-click, until Control is released.
+    ctrl_click_hold: bool,
     /// The Windows modifier keys (VK_LSHIFT..VK_RMENU) as last sent to the game.
     modifiers: [bool; 6],
     last_pos: (i32, i32),
@@ -554,6 +561,8 @@ impl Presenter {
             chars,
             left_down: false,
             other_down: [false; 2],
+            ctrl_click: false,
+            ctrl_click_hold: false,
             modifiers: [false; 6],
             last_pos: (-1, -1),
             region,
@@ -573,6 +582,19 @@ impl Presenter {
     /// Is it time to show a new frame and read input (60 times a second)?
     pub fn due(&self) -> bool {
         self.last_pump.elapsed() >= std::time::Duration::from_micros(16_667)
+    }
+
+    /// Tell the game about modifier keys that went down or up since last time.
+    fn send_modifiers(&mut self, emu: &mut Emu, now: [bool; 6]) {
+        for (i, (&was, &is)) in self.modifiers.iter().zip(&now).enumerate() {
+            if was != is {
+                // (generic key, sided key, extended): VK_SHIFT/VK_LSHIFT, ... right Ctrl and
+                // right Alt are extended keys.
+                let (vk, side, ext) = [(0x10, 0xA0, false), (0x10, 0xA1, false), (0x11, 0xA2, false), (0x11, 0xA3, true), (0x12, 0xA4, false), (0x12, 0xA5, true)][i];
+                emu.wm.post_key_ex(vk, side, ext, is);
+            }
+        }
+        self.modifiers = now;
     }
 
     pub fn pump(&mut self, emu: &mut Emu) -> bool {
@@ -647,6 +669,40 @@ impl Presenter {
                     })
             }
         };
+        // Modifiers, Mac to PC: Control is Ctrl, Option is Alt; Command is the Mac's own and
+        // the game never sees it. They are read from the keyboard's state as macOS reports it
+        // right now, not from key events: a release can go missing (a fullscreen switch,
+        // Command-Tab), and a modifier left held turns every key into a shortcut. Nothing is
+        // held while the window is not in front.
+        let (mut now, command) = if self.window.is_active() || cocoa::is_key_window(&self.window) {
+            cocoa::modifiers().unwrap_or_else(|| {
+                let held = |keys: &[Key]| keys.iter().any(|&k| self.window.is_key_down(k));
+                (
+                    [
+                        held(&[Key::LeftShift]),
+                        held(&[Key::RightShift]),
+                        held(&[Key::LeftCtrl]),
+                        held(&[Key::RightCtrl]),
+                        held(&[Key::LeftAlt]),
+                        held(&[Key::RightAlt]),
+                    ],
+                    held(&[Key::LeftSuper, Key::RightSuper]),
+                )
+            })
+        } else {
+            ([false; 6], false)
+        };
+        let control = now[2] || now[3];
+        // Control-click is a right click, as everywhere on the Mac: the game sees the right
+        // button and not Ctrl, until Control is let go.
+        if !control {
+            self.ctrl_click_hold = false;
+        }
+        if self.ctrl_click_hold {
+            now[2] = false;
+            now[3] = false;
+        }
+
         if let Some((mx, my)) = mouse {
             let pos = (mx + rx, my + ry);
             if pos != self.last_pos {
@@ -656,11 +712,24 @@ impl Presenter {
             let down = self.window.get_mouse_down(MouseButton::Left);
             if down != self.left_down {
                 self.left_down = down;
-                emu.wm.post_mouse(
-                    if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP },
-                    pos.0,
-                    pos.1,
-                );
+                if down && control {
+                    // Control-click: let go of Ctrl first, then press the right button.
+                    self.ctrl_click_hold = true;
+                    self.ctrl_click = true;
+                    now[2] = false;
+                    now[3] = false;
+                    self.send_modifiers(emu, now);
+                    emu.wm.post_mouse(0x0204, pos.0, pos.1); // WM_RBUTTONDOWN
+                } else if !down && self.ctrl_click {
+                    self.ctrl_click = false;
+                    emu.wm.post_mouse(0x0205, pos.0, pos.1); // WM_RBUTTONUP
+                } else {
+                    emu.wm.post_mouse(
+                        if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP },
+                        pos.0,
+                        pos.1,
+                    );
+                }
             }
             // Right and middle buttons (WM_RBUTTONDOWN/UP, WM_MBUTTONDOWN/UP).
             for (i, button, msg) in [(0, MouseButton::Right, 0x0204), (1, MouseButton::Middle, 0x0207)] {
@@ -672,8 +741,8 @@ impl Presenter {
             }
         } else if self.left_down && !self.window.get_mouse_down(MouseButton::Left) {
             self.left_down = false; // released outside the picture: don't leave a drag stuck
-            emu.wm
-                .post_mouse(WM_LBUTTONUP, self.last_pos.0, self.last_pos.1);
+            let up = if std::mem::take(&mut self.ctrl_click) { 0x0205 } else { WM_LBUTTONUP };
+            emu.wm.post_mouse(up, self.last_pos.0, self.last_pos.1);
         }
 
         // Option+Enter toggles macOS fullscreen and is not forwarded to the game.
@@ -712,36 +781,10 @@ impl Presenter {
                 cocoa::describe(&self.window)
             );
         }
-        // Modifiers, Mac to PC: Command and Control are Ctrl, Option is Alt. They are read
-        // from the keyboard's state as macOS reports it right now, not from key events: a
-        // release can go missing (a fullscreen switch, Command-Tab), and a modifier left held
-        // turns every key into a shortcut. Nothing is held while the window is not in front.
-        let now = if self.window.is_active() || cocoa::is_key_window(&self.window) {
-            cocoa::modifiers().unwrap_or_else(|| {
-                let held = |keys: &[Key]| keys.iter().any(|&k| self.window.is_key_down(k));
-                [
-                    held(&[Key::LeftShift]),
-                    held(&[Key::RightShift]),
-                    held(&[Key::LeftSuper, Key::LeftCtrl]),
-                    held(&[Key::RightSuper, Key::RightCtrl]),
-                    held(&[Key::LeftAlt]),
-                    held(&[Key::RightAlt]),
-                ]
-            })
-        } else {
-            [false; 6]
-        };
-        for (i, (&was, &is)) in self.modifiers.iter().zip(&now).enumerate() {
-            if was != is {
-                // (generic key, sided key, extended): VK_SHIFT/VK_LSHIFT, ... right Ctrl and
-                // right Alt are extended keys.
-                let (vk, side, ext) = [(0x10, 0xA0, false), (0x10, 0xA1, false), (0x11, 0xA2, false), (0x11, 0xA3, true), (0x12, 0xA4, false), (0x12, 0xA5, true)][i];
-                emu.wm.post_key_ex(vk, side, ext, is);
-            }
-        }
-        self.modifiers = now;
+        self.send_modifiers(emu, now);
         for key in self.window.get_keys_pressed(KeyRepeat::Yes) {
-            if toggle && key == Key::Enter {
+            // Command shortcuts are the Mac's (Command-Tab, Command-Q): not keys for the game.
+            if (toggle && key == Key::Enter) || command {
                 continue;
             }
             if let Some((vk, ext)) = virtual_key(key) {
@@ -760,8 +803,11 @@ impl Presenter {
             .unwrap_or_default();
         let ctrl = emu.wm.key_down[0x11];
         for c in typed {
+            if command {
+                continue;
+            }
             // With Ctrl held, Windows types control characters (Ctrl+A is 1) and nothing for
-            // other keys; macOS would type the plain letter under Command.
+            // other keys.
             if ctrl {
                 if let Some(l) = char::from_u32(c).filter(char::is_ascii_alphabetic) {
                     emu.wm.post_char(l.to_ascii_uppercase() as u32 & 0x1F);
