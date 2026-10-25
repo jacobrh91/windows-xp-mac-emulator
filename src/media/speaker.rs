@@ -49,7 +49,9 @@ impl Mixer {
                 continue;
             }
             if !v.primed {
-                if v.frames.len() < self.prebuffer && (v.frames.is_empty() || v.waited < self.prebuffer) {
+                if v.frames.len() < self.prebuffer
+                    && (v.frames.is_empty() || v.waited < self.prebuffer)
+                {
                     if !v.frames.is_empty() {
                         v.waited += 1;
                     }
@@ -86,12 +88,21 @@ impl SpeakerHandle {
     }
 
     fn new(rate: u32, prebuffer: usize) -> SpeakerHandle {
-        SpeakerHandle { mixer: Arc::new(Mutex::new(Mixer { voices: HashMap::new(), prebuffer })), rate }
+        SpeakerHandle {
+            mixer: Arc::new(Mutex::new(Mixer {
+                voices: HashMap::new(),
+                prebuffer,
+            })),
+            rate,
+        }
     }
 
     fn with_voice<R>(&self, id: u32, f: impl FnOnce(&mut Voice) -> R) -> R {
         let mut m = self.mixer.lock().unwrap();
-        let v = m.voices.entry(id).or_insert_with(|| Voice { volume: [1.0, 1.0], ..Voice::default() });
+        let v = m.voices.entry(id).or_insert_with(|| Voice {
+            volume: [1.0, 1.0],
+            ..Voice::default()
+        });
         f(v)
     }
 
@@ -110,18 +121,33 @@ impl SpeakerHandle {
     /// (frames ever queued, frames played) for voice `id`. A producer that notes the first
     /// number after queueing something knows it has been heard once the second reaches it.
     pub fn progress(&self, id: u32) -> (u64, u64) {
-        self.mixer.lock().unwrap().voices.get(&id).map_or((0, 0), |v| (v.total_queued, v.played))
+        self.mixer
+            .lock()
+            .unwrap()
+            .voices
+            .get(&id)
+            .map_or((0, 0), |v| (v.total_queued, v.played))
     }
 
     /// Frames of voice `id` not yet played.
     #[cfg(test)]
     pub fn queued(&self, id: u32) -> usize {
-        self.mixer.lock().unwrap().voices.get(&id).map_or(0, |v| v.frames.len())
+        self.mixer
+            .lock()
+            .unwrap()
+            .voices
+            .get(&id)
+            .map_or(0, |v| v.frames.len())
     }
 
     /// Is voice `id` holding back audio while it builds up its prebuffer?
     pub fn buffering(&self, id: u32) -> bool {
-        self.mixer.lock().unwrap().voices.get(&id).is_some_and(|v| !v.primed && !v.frames.is_empty())
+        self.mixer
+            .lock()
+            .unwrap()
+            .voices
+            .get(&id)
+            .is_some_and(|v| !v.primed && !v.frames.is_empty())
     }
 
     /// Drop everything queued (it counts as played).
@@ -165,7 +191,10 @@ impl Drop for Speaker {
         if let Some((path, frames)) = &self.recording {
             let frames = frames.lock().unwrap();
             match std::fs::write(path, wav_bytes(&frames, self.handle.rate)) {
-                Ok(()) => eprintln!("[sound] {:.1} s of output written to {path}", frames.len() as f32 / self.handle.rate as f32),
+                Ok(()) => eprintln!(
+                    "[sound] {:.1} s of output written to {path}",
+                    frames.len() as f32 / self.handle.rate as f32
+                ),
                 Err(e) => eprintln!("[sound] cannot write {path}: {e}"),
             }
         }
@@ -208,10 +237,18 @@ impl Speaker {
         let config = supported.config();
         let channels = config.channels as usize;
         // XP_VOLUME=<percent>: master volume (default 100).
-        let master = std::env::var("XP_VOLUME").ok().and_then(|v| v.trim_end_matches('%').parse::<f32>().ok()).map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0));
-        let handle = SpeakerHandle::new(config.sample_rate, (config.sample_rate as f32 * PREBUFFER_SECS) as usize);
+        let master = std::env::var("XP_VOLUME")
+            .ok()
+            .and_then(|v| v.trim_end_matches('%').parse::<f32>().ok())
+            .map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0));
+        let handle = SpeakerHandle::new(
+            config.sample_rate,
+            (config.sample_rate as f32 * PREBUFFER_SECS) as usize,
+        );
         let mixer = handle.mixer.clone();
-        let recording = std::env::var("XP_SOUND_WAV").ok().map(|p| (p, Arc::new(Mutex::new(Vec::new()))));
+        let recording = std::env::var("XP_SOUND_WAV")
+            .ok()
+            .map(|p| (p, Arc::new(Mutex::new(Vec::new()))));
         let tape = recording.as_ref().map(|r| r.1.clone());
         let stream = device
             .build_output_stream(
@@ -239,8 +276,16 @@ impl Speaker {
             )
             .ok()?;
         stream.play().ok()?;
-        eprintln!("[sound] playing through the default output device at {} Hz, volume {:.0}%", handle.rate, master * 100.0);
-        Some(Speaker { _stream: stream, handle, recording })
+        eprintln!(
+            "[sound] playing through the default output device at {} Hz, volume {:.0}%",
+            handle.rate,
+            master * 100.0
+        );
+        Some(Speaker {
+            _stream: stream,
+            handle,
+            recording,
+        })
     }
 }
 
@@ -254,7 +299,11 @@ pub struct Resampler {
 
 impl Resampler {
     pub fn new(from_rate: u32, to_rate: u32) -> Resampler {
-        Resampler { step: from_rate as f64 / to_rate.max(1) as f64, pos: 0.0, prev: [0.0; 2] }
+        Resampler {
+            step: from_rate as f64 / to_rate.max(1) as f64,
+            pos: 0.0,
+            prev: [0.0; 2],
+        }
     }
 
     pub fn process(&mut self, input: &[[f32; 2]], out: &mut Vec<[f32; 2]>) {
@@ -291,7 +340,11 @@ pub fn decode_pcm(bytes: &[u8], bits: u32, channels: u32) -> Vec<[f32; 2]> {
         .chunks_exact(frame)
         .map(|f| {
             let l = sample(&f[..width]);
-            let r = if channels == 2 { sample(&f[width..]) } else { l };
+            let r = if channels == 2 {
+                sample(&f[width..])
+            } else {
+                l
+            };
             [l, r]
         })
         .collect()
@@ -303,8 +356,14 @@ mod tests {
 
     #[test]
     fn pcm_decoding() {
-        assert_eq!(decode_pcm(&[128, 255, 0], 8, 1), vec![[0.0, 0.0], [127.0 / 128.0; 2], [-1.0, -1.0]]);
-        let s16: Vec<u8> = [16384i16, -32768].iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(
+            decode_pcm(&[128, 255, 0], 8, 1),
+            vec![[0.0, 0.0], [127.0 / 128.0; 2], [-1.0, -1.0]]
+        );
+        let s16: Vec<u8> = [16384i16, -32768]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         assert_eq!(decode_pcm(&s16, 16, 2), vec![[0.5, -1.0]]);
     }
 
@@ -321,7 +380,10 @@ mod tests {
         }
         assert_eq!(whole.len(), 200);
         assert_eq!(whole, pieces, "buffer boundaries make no difference");
-        assert!(whole.windows(2).all(|w| w[1][0] >= w[0][0]), "a ramp stays a ramp");
+        assert!(
+            whole.windows(2).all(|w| w[1][0] >= w[0][0]),
+            "a ramp stays a ramp"
+        );
         let mut down = Vec::new();
         Resampler::new(48000, 24000).process(&ramp, &mut down);
         assert_eq!(down.len(), 50);
@@ -339,8 +401,16 @@ mod tests {
         assert_eq!(s.drain(1), vec![[0.0, 0.25]]);
         s.set_paused(2, false);
         s.clear(1);
-        assert_eq!(s.drain(1), vec![[0.5, -0.5]], "voice 2's second frame, kept while paused");
-        assert_eq!(s.drain(1), vec![[0.0, 0.0]], "silence when nothing is queued");
+        assert_eq!(
+            s.drain(1),
+            vec![[0.5, -0.5]],
+            "voice 2's second frame, kept while paused"
+        );
+        assert_eq!(
+            s.drain(1),
+            vec![[0.0, 0.0]],
+            "silence when nothing is queued"
+        );
         assert_eq!(s.queued(2), 0);
     }
 
@@ -348,13 +418,28 @@ mod tests {
     fn a_voice_waits_for_its_prebuffer_and_again_after_running_dry() {
         let s = SpeakerHandle::new(100, 3);
         s.queue(1, &[[0.5, 0.5]; 2]);
-        assert_eq!(s.drain(1), vec![[0.0, 0.0]], "only 2 of 3 frames queued: wait");
+        assert_eq!(
+            s.drain(1),
+            vec![[0.0, 0.0]],
+            "only 2 of 3 frames queued: wait"
+        );
         s.queue(1, &[[0.5, 0.5]; 1]);
-        assert_eq!(s.drain(4), vec![[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.0, 0.0]]);
+        assert_eq!(
+            s.drain(4),
+            vec![[0.5, 0.5], [0.5, 0.5], [0.5, 0.5], [0.0, 0.0]]
+        );
         s.queue(1, &[[0.25, 0.25]; 1]);
-        assert_eq!(s.drain(1), vec![[0.0, 0.0]], "ran dry, so it buffers up again");
+        assert_eq!(
+            s.drain(1),
+            vec![[0.0, 0.0]],
+            "ran dry, so it buffers up again"
+        );
         assert!(s.buffering(1));
-        assert_eq!(s.drain(3), vec![[0.0, 0.0], [0.0, 0.0], [0.25, 0.25]], "but a lone short sound still plays after one prebuffer period");
+        assert_eq!(
+            s.drain(3),
+            vec![[0.0, 0.0], [0.0, 0.0], [0.25, 0.25]],
+            "but a lone short sound still plays after one prebuffer period"
+        );
     }
 
     #[test]

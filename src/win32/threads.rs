@@ -7,10 +7,10 @@
 //! simply retries it when the thread next runs. When every thread is blocked the host is
 //! asked for input, asked to sleep until the next deadline, or told it is a deadlock.
 
-use crate::cpu::{Emu, Res, Stop, EAX, ESP};
 use crate::cpu::fpu::Fpu;
+use crate::cpu::{EAX, ESP, Emu, Res, Stop};
 use crate::win32::seh::SehState;
-use crate::win32::vfs::{Obj, INVALID_HANDLE};
+use crate::win32::vfs::{INVALID_HANDLE, Obj};
 use crate::win32::{Handler, PEB_ADDR};
 
 pub const MAIN_THREAD_ID: u32 = 0x500;
@@ -64,12 +64,23 @@ pub struct Thread {
 }
 
 fn empty_cpu() -> CpuState {
-    CpuState { regs: [0; 8], eip: 0, eflags: 2, fs_base: 0, fpu: Fpu::new(), nested: Vec::new(), seh: Vec::new(), pending_wait: None }
+    CpuState {
+        regs: [0; 8],
+        eip: 0,
+        eflags: 2,
+        fs_base: 0,
+        fpu: Fpu::new(),
+        nested: Vec::new(),
+        seh: Vec::new(),
+        pending_wait: None,
+    }
 }
 
 impl Emu {
     pub fn cur_tid(&self) -> u32 {
-        self.threads.get(self.current).map_or(MAIN_THREAD_ID, |t| t.id)
+        self.threads
+            .get(self.current)
+            .map_or(MAIN_THREAD_ID, |t| t.id)
     }
 
     /// Threads are only tracked once a second one exists.
@@ -129,33 +140,56 @@ impl Emu {
     /// until the earliest thread deadline, timer or audio buffer, capped at `max`.
     pub fn idle_ms(&self, max: u64) -> u64 {
         let now = self.win.now_ms();
-        let due = [self.wake_at, self.win.audio.next_due()].into_iter().flatten().min();
+        let due = [self.wake_at, self.win.audio.next_due()]
+            .into_iter()
+            .flatten()
+            .min();
         due.map_or(max, |t| t.saturating_sub(now).min(max))
     }
 
     /// One line per thread: what it is doing and what it waits for (a debugging aid).
     pub fn dump_threads(&self) {
         for (i, t) in self.threads.iter().enumerate() {
-            let (eip, pending) = if i == self.current { (self.eip, self.pending_wait) } else { (t.cpu.eip, t.cpu.pending_wait) };
+            let (eip, pending) = if i == self.current {
+                (self.eip, self.pending_wait)
+            } else {
+                (t.cpu.eip, t.cpu.pending_wait)
+            };
             let at = self.win.locate(eip).unwrap_or_else(|| format!("{eip:#x}"));
-            let esp = if i == self.current { self.regs[4] } else { t.cpu.regs[4] };
+            let esp = if i == self.current {
+                self.regs[4]
+            } else {
+                t.cpu.regs[4]
+            };
             let mut frames = Vec::new();
             for k in 0..256u32 {
                 if let Ok(v) = self.mem.read(esp.wrapping_add(4 * k), 4)
                     && let Some(loc) = self.win.locate(v)
-                        && !loc.starts_with("0x") && frames.len() < 10 {
-                            frames.push(loc);
-                        }
+                    && !loc.starts_with("0x")
+                    && frames.len() < 10
+                {
+                    frames.push(loc);
+                }
             }
             eprintln!("[thread {}]   stack: {}", t.id, frames.join(" "));
-            eprintln!("[thread {}] {:?} block={:?} at {} wait={:?}{}", t.id, t.state, t.block, at, pending, if i == self.current { " (current)" } else { "" });
+            eprintln!(
+                "[thread {}] {:?} block={:?} at {} wait={:?}{}",
+                t.id,
+                t.state,
+                t.block,
+                at,
+                pending,
+                if i == self.current { " (current)" } else { "" }
+            );
         }
     }
 
     /// The next thread after `from` that can run (blocked threads count: they re-poll).
     fn next_ready(&self, from: usize) -> Option<usize> {
         let n = self.threads.len();
-        (1..=n).map(|k| (from + k) % n).find(|&i| self.threads[i].state == State::Ready)
+        (1..=n)
+            .map(|k| (from + k) % n)
+            .find(|&i| self.threads[i].state == State::Ready)
     }
 
     /// Offer the CPU to the next thread. Called when the running thread has had its slice.
@@ -166,9 +200,19 @@ impl Emu {
     }
 
     /// Create a thread; returns its handle.
-    pub(crate) fn create_thread(&mut self, start: u32, param: u32, stack_size: u32, suspended: bool) -> Res<u32> {
+    pub(crate) fn create_thread(
+        &mut self,
+        start: u32,
+        param: u32,
+        stack_size: u32,
+        suspended: bool,
+    ) -> Res<u32> {
         self.ensure_main_thread();
-        let size = if stack_size == 0 { DEFAULT_STACK } else { stack_size.clamp(0x4000, 0x400_0000) };
+        let size = if stack_size == 0 {
+            DEFAULT_STACK
+        } else {
+            stack_size.clamp(0x4000, 0x400_0000)
+        };
         let stack = self.alloc_virtual(size);
         let top = stack + size;
         let id = MAIN_THREAD_ID + self.threads.len() as u32;
@@ -176,7 +220,15 @@ impl Emu {
 
         // Its own thread information block.
         let teb = self.alloc_virtual(0x1000);
-        for (off, v) in [(0u32, 0xFFFF_FFFFu32), (4, top), (8, stack), (0x18, teb), (0x20, 0x400), (0x24, id), (0x30, PEB_ADDR)] {
+        for (off, v) in [
+            (0u32, 0xFFFF_FFFFu32),
+            (4, top),
+            (8, stack),
+            (0x18, teb),
+            (0x20, 0x400),
+            (0x24, id),
+            (0x30, PEB_ADDR),
+        ] {
             self.mem.write(teb + off, 4, v)?;
         }
         // Returning from the thread function lands in the exit stub with EAX as the exit code.
@@ -189,9 +241,22 @@ impl Emu {
         self.threads.push(Thread {
             id,
             handle,
-            state: if suspended { State::Suspended } else { State::Ready },
+            state: if suspended {
+                State::Suspended
+            } else {
+                State::Ready
+            },
             suspend_count: suspended as u32,
-            cpu: CpuState { regs, eip: start, eflags: 2, fs_base: teb, fpu: Fpu::new(), nested: Vec::new(), seh: Vec::new(), pending_wait: None },
+            cpu: CpuState {
+                regs,
+                eip: start,
+                eflags: 2,
+                fs_base: teb,
+                fpu: Fpu::new(),
+                nested: Vec::new(),
+                seh: Vec::new(),
+                pending_wait: None,
+            },
             tls: Vec::new(),
             block: None,
         });
@@ -205,7 +270,10 @@ impl Emu {
     fn finish_thread(&mut self, idx: usize, code: u32) {
         self.threads[idx].state = State::Finished;
         let h = self.threads[idx].handle;
-        if let Some(Obj::Thread { done, exit_code, .. }) = self.win.vfs.get_mut(h) {
+        if let Some(Obj::Thread {
+            done, exit_code, ..
+        }) = self.win.vfs.get_mut(h)
+        {
             *done = true;
             *exit_code = code;
         }
@@ -231,7 +299,9 @@ impl Emu {
         match b {
             Block::Input => Stop::WaitForInput,
             Block::Until(_) => Stop::Sleeping,
-            Block::Forever => Stop::Unimplemented("deadlock: the only thread is waiting for something that can never happen".into()),
+            Block::Forever => Stop::Unimplemented(
+                "deadlock: the only thread is waiting for something that can never happen".into(),
+            ),
         }
     }
 
@@ -250,24 +320,50 @@ impl Emu {
         }
         self.threads[self.current].block = Some(b);
         self.stall += 1;
-        let runnable = self.threads.iter().filter(|t| t.state == State::Ready).count() as u32;
+        let runnable = self
+            .threads
+            .iter()
+            .filter(|t| t.state == State::Ready)
+            .count() as u32;
         if self.stall > runnable * 2 {
             // Everyone has been polled and nobody got anywhere. Device events (timers, audio
             // buffers finishing) may be what unblocks them.
             if self.pump_devices().unwrap_or(false) {
                 self.stall = 0;
             } else {
-                let blocks: Vec<Block> = self.threads.iter().filter(|t| t.state == State::Ready).filter_map(|t| t.block.clone()).collect();
+                let blocks: Vec<Block> = self
+                    .threads
+                    .iter()
+                    .filter(|t| t.state == State::Ready)
+                    .filter_map(|t| t.block.clone())
+                    .collect();
                 // The earliest any of them can make progress, so the host sleeps just that long.
-                self.wake_at = blocks.iter().filter_map(|b| if let Block::Until(t) = b { Some(*t) } else { None }).min();
+                self.wake_at = blocks
+                    .iter()
+                    .filter_map(|b| {
+                        if let Block::Until(t) = b {
+                            Some(*t)
+                        } else {
+                            None
+                        }
+                    })
+                    .min();
                 if blocks.contains(&Block::Input) {
                     return Some(Stop::WaitForInput);
                 }
                 if blocks.iter().any(|b| matches!(b, Block::Until(_))) {
                     return Some(Stop::Sleeping);
                 }
-                let ids: Vec<String> = self.threads.iter().filter(|t| t.state == State::Ready).map(|t| format!("{:#x}", t.id)).collect();
-                return Some(Stop::Unimplemented(format!("deadlock: every thread ({}) is waiting on another", ids.join(", "))));
+                let ids: Vec<String> = self
+                    .threads
+                    .iter()
+                    .filter(|t| t.state == State::Ready)
+                    .map(|t| format!("{:#x}", t.id))
+                    .collect();
+                return Some(Stop::Unimplemented(format!(
+                    "deadlock: every thread ({}) is waiting on another",
+                    ids.join(", ")
+                )));
             }
         }
         self.rotate();
@@ -286,9 +382,10 @@ impl Emu {
         }
         let key = (self.eip, self.regs[ESP]);
         if let Some((e, s, d)) = self.pending_wait
-            && (e, s) == key {
-                return Some(d);
-            }
+            && (e, s) == key
+        {
+            return Some(d);
+        }
         let d = self.win.now_ms() + ms as u64;
         self.pending_wait = Some((key.0, key.1, d));
         Some(d)
@@ -317,10 +414,18 @@ pub fn wait_objects(e: &mut Emu, handles: &[u32], all: bool, ms: u32) -> Res<u32
             ready.push(i as u32);
         }
     }
-    let satisfied = if all { ready.len() == handles.len() } else { !ready.is_empty() };
+    let satisfied = if all {
+        ready.len() == handles.len()
+    } else {
+        !ready.is_empty()
+    };
     if satisfied {
         // Taking the objects: auto-reset events clear, mutexes are acquired.
-        let taken: Vec<u32> = if all { (0..handles.len() as u32).collect() } else { vec![ready[0]] };
+        let taken: Vec<u32> = if all {
+            (0..handles.len() as u32).collect()
+        } else {
+            vec![ready[0]]
+        };
         for i in taken {
             match e.win.vfs.get_mut(handles[i as usize]) {
                 Some(Obj::Event { signaled, manual }) if !*manual => *signaled = false,
@@ -369,7 +474,10 @@ fn cs_init(e: &mut Emu, cs: u32) -> Res<()> {
 }
 
 fn cs_try_enter(e: &mut Emu, cs: u32) -> Res<bool> {
-    let (owner, rec) = (e.mem.read(cs + CS_OWNER, 4)?, e.mem.read(cs + CS_RECURSION, 4)?);
+    let (owner, rec) = (
+        e.mem.read(cs + CS_OWNER, 4)?,
+        e.mem.read(cs + CS_RECURSION, 4)?,
+    );
     let me = e.cur_tid();
     if owner == 0 || owner == me {
         e.mem.write(cs + CS_OWNER, 4, me)?;
@@ -382,9 +490,10 @@ fn cs_try_enter(e: &mut Emu, cs: u32) -> Res<bool> {
 
 pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
     if dll == "kernel32"
-        && let Some(r) = lookup_suspend(name) {
-            return Some(r);
-        }
+        && let Some(r) = lookup_suspend(name)
+    {
+        return Some(r);
+    }
     let r: (usize, Handler) = match (dll, name) {
         ("__emu", "thread_exit") => (0, |e, _| {
             let code = e.regs[EAX];
@@ -412,7 +521,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Err(Stop::ThreadExit)
         }),
         ("kernel32", "TerminateThread") => (2, |e, a| {
-            let Some(i) = e.thread_index_by_handle(a[0]) else { return Ok(0) };
+            let Some(i) = e.thread_index_by_handle(a[0]) else {
+                return Ok(0);
+            };
             e.finish_thread(i, a[1]);
             if i == e.current {
                 return Err(Stop::ThreadExit);
@@ -422,7 +533,11 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "GetCurrentThreadId") => (0, |e, _| Ok(e.cur_tid())),
         ("kernel32", "GetExitCodeThread") => (2, |e, a| {
             let code = match e.win.vfs.get(a[0]) {
-                Some(Obj::Thread { done: true, exit_code, .. }) => *exit_code,
+                Some(Obj::Thread {
+                    done: true,
+                    exit_code,
+                    ..
+                }) => *exit_code,
                 Some(Obj::Thread { .. }) => STILL_ACTIVE,
                 _ => return Ok(0),
             };
@@ -454,7 +569,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(slot)
         }),
         ("kernel32", "TlsFree") => (1, |_, _| Ok(1)),
-        ("kernel32", "TlsGetValue") => (1, |e, a| Ok(e.tls_values().get(a[0] as usize).copied().unwrap_or(0))),
+        ("kernel32", "TlsGetValue") => (1, |e, a| {
+            Ok(e.tls_values().get(a[0] as usize).copied().unwrap_or(0))
+        }),
         ("kernel32", "TlsSetValue") => (2, |e, a| {
             if a[0] >= 1088 {
                 return Ok(0);
@@ -503,7 +620,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
 pub fn lookup_suspend(name: &str) -> Option<(usize, Handler)> {
     match name {
         "ResumeThread" => Some((1, |e, a| {
-            let Some(i) = e.thread_index_by_handle(a[0]) else { return Ok(0) };
+            let Some(i) = e.thread_index_by_handle(a[0]) else {
+                return Ok(0);
+            };
             let t = &mut e.threads[i];
             let prev = t.suspend_count;
             t.suspend_count = t.suspend_count.saturating_sub(1);
@@ -513,7 +632,9 @@ pub fn lookup_suspend(name: &str) -> Option<(usize, Handler)> {
             Ok(prev)
         })),
         "SuspendThread" => Some((1, |e, a| {
-            let Some(i) = e.thread_index_by_handle(a[0]) else { return Ok(0) };
+            let Some(i) = e.thread_index_by_handle(a[0]) else {
+                return Ok(0);
+            };
             let t = &mut e.threads[i];
             let prev = t.suspend_count;
             t.suspend_count += 1;
@@ -530,12 +651,23 @@ pub fn lookup_suspend(name: &str) -> Option<(usize, Handler)> {
 mod tests {
     use super::*;
     use crate::loader;
-    use crate::tests::util::{build_pe, Asm, CODE_VA};
+    use crate::tests::util::{Asm, CODE_VA, build_pe};
 
     const K32: &[&str] = &[
-        "CreateThread", "WaitForSingleObject", "ExitProcess", "EnterCriticalSection", "LeaveCriticalSection",
-        "InitializeCriticalSection", "CreateEventA", "SetEvent", "Sleep", "TlsAlloc", "TlsSetValue", "TlsGetValue",
-        "GetCurrentThreadId", "GetExitCodeThread",
+        "CreateThread",
+        "WaitForSingleObject",
+        "ExitProcess",
+        "EnterCriticalSection",
+        "LeaveCriticalSection",
+        "InitializeCriticalSection",
+        "CreateEventA",
+        "SetEvent",
+        "Sleep",
+        "TlsAlloc",
+        "TlsSetValue",
+        "TlsGetValue",
+        "GetCurrentThreadId",
+        "GetExitCodeThread",
     ];
     const CT: usize = 0;
     const WAIT: usize = 1;
@@ -571,13 +703,22 @@ mod tests {
         build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
             a.e(&[0x68]).data_va(1); // &tid
-            a.e(&[0x6A, 0]).e(&[0x6A, 41]).push_label("worker").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0])
+                .e(&[0x6A, 41])
+                .push_label("worker")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x89, 0xC6]); // mov esi, eax
             a.e(&[0x6A, 0xFF, 0x56]).call(l.iat_va(0, WAIT)); // WaitForSingleObject(h, INFINITE)
-            a.e(&[0x68]).data_va(2).e(&[0x56]).call(l.iat_va(0, GET_EXIT)); // GetExitCodeThread(h, &data[2])
+            a.e(&[0x68])
+                .data_va(2)
+                .e(&[0x56])
+                .call(l.iat_va(0, GET_EXIT)); // GetExitCodeThread(h, &data[2])
             a.push_mem_data(2).call(l.iat_va(0, EXIT));
             a.label("worker");
-            a.e(&[0x8B, 0x44, 0x24, 0x04, 0x40]).store(0).e(&[0xC2, 4, 0]);
+            a.e(&[0x8B, 0x44, 0x24, 0x04, 0x40])
+                .store(0)
+                .e(&[0xC2, 4, 0]);
             a.finish()
         })
     }
@@ -585,7 +726,11 @@ mod tests {
     #[test]
     fn a_thread_runs_and_a_waiter_gets_its_exit_code() {
         let (emu, stop) = run_with(&join_program(), 50, 100_000);
-        assert_eq!(stop, Stop::Exit(42), "the exit code came back through WaitForSingleObject + GetExitCodeThread");
+        assert_eq!(
+            stop,
+            Stop::Exit(42),
+            "the exit code came back through WaitForSingleObject + GetExitCodeThread"
+        );
         assert_eq!(data(&emu, 0), 42, "the thread ran with its own parameter");
         assert_eq!(emu.threads.len(), 2);
     }
@@ -595,7 +740,10 @@ mod tests {
     fn preemption_program() -> Vec<u8> {
         build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).push_label("worker").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .push_label("worker")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.label("spin");
             a.e(&[0x81, 0x3D]).data_va(0).e(&1000u32.to_le_bytes()); // cmp [data0], 1000
             a.jcc8(0x72, "spin"); // jb spin
@@ -623,7 +771,10 @@ mod tests {
             if locked {
                 a.e(&[0x68]).data_va(8).call(l.iat_va(0, INIT_CS)); // InitializeCriticalSection(&cs)
             }
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).push_label("work").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .push_label("work")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x89, 0xC7]); // mov edi, eax (thread handle)
             a.e(&[0x6A, 0]).call_label("work"); // push a dummy parameter; work does `ret 4`
             a.e(&[0x6A, 0xFF, 0x57]).call(l.iat_va(0, WAIT));
@@ -652,14 +803,25 @@ mod tests {
         let (emu, stop) = run_with(&counter_program(true), 3, 5_000_000);
         assert_eq!(stop, Stop::Exit(2 * ROUNDS), "no lost updates");
         assert_eq!(data(&emu, 0), 2 * ROUNDS);
-        assert_eq!(emu.mem.read(crate::tests::util::data_va(8) + 12, 4).unwrap(), 0, "lock released at the end");
+        assert_eq!(
+            emu.mem
+                .read(crate::tests::util::data_va(8) + 12, 4)
+                .unwrap(),
+            0,
+            "lock released at the end"
+        );
     }
 
     #[test]
     fn without_the_lock_updates_are_lost_so_the_test_above_has_teeth() {
         let (_, stop) = run_with(&counter_program(false), 3, 5_000_000);
-        let Stop::Exit(total) = stop else { panic!("{stop:?}") };
-        assert!(total < 2 * ROUNDS, "unsynchronized increments should race (got {total})");
+        let Stop::Exit(total) = stop else {
+            panic!("{stop:?}")
+        };
+        assert!(
+            total < 2 * ROUNDS,
+            "unsynchronized increments should race (got {total})"
+        );
     }
 
     /// main: ev = CreateEvent(manual, unsignaled); t = CreateThread(waiter, ev); SetEvent(ev);
@@ -667,16 +829,21 @@ mod tests {
     fn event_program() -> Vec<u8> {
         build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 1, 0x6A, 0]).call(l.iat_va(0, CREATE_EVENT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 1, 0x6A, 0])
+                .call(l.iat_va(0, CREATE_EVENT));
             a.e(&[0x89, 0xC6]); // esi = event
-            a.e(&[0x6A, 0, 0x6A, 0, 0x56]).push_label("waiter").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x56])
+                .push_label("waiter")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x89, 0xC7]); // edi = thread
             a.e(&[0x6A, 10]).call(l.iat_va(0, SLEEP)); // give the waiter time to block first
             a.e(&[0x56]).call(l.iat_va(0, SET_EVENT));
             a.e(&[0x6A, 0xFF, 0x57]).call(l.iat_va(0, WAIT));
             a.push_mem_data(0).call(l.iat_va(0, EXIT));
             a.label("waiter");
-            a.e(&[0x6A, 0xFF, 0xFF, 0x74, 0x24, 0x08]).call(l.iat_va(0, WAIT)); // Wait(param, INFINITE)
+            a.e(&[0x6A, 0xFF, 0xFF, 0x74, 0x24, 0x08])
+                .call(l.iat_va(0, WAIT)); // Wait(param, INFINITE)
             a.e(&[0xC7, 0x05]).data_va(0).e(&5u32.to_le_bytes()); // data[0] = 5
             a.e(&[0xC2, 4, 0]);
             a.finish()
@@ -693,7 +860,11 @@ mod tests {
         assert_eq!(emu.run(100_000), Stop::Sleeping);
         assert_eq!(data(&emu, 0), 0, "the waiter is still blocked");
         emu.win.virtual_now = Some(10);
-        assert_eq!(emu.run(100_000), Stop::Exit(5), "SetEvent woke the waiter, which finished before main exited");
+        assert_eq!(
+            emu.run(100_000),
+            Stop::Exit(5),
+            "SetEvent woke the waiter, which finished before main exited"
+        );
     }
 
     #[test]
@@ -718,12 +889,16 @@ mod tests {
     fn waiting_forever_on_an_event_nobody_can_signal_is_reported_as_a_deadlock() {
         let image = build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CREATE_EVENT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CREATE_EVENT));
             a.e(&[0x6A, 0xFF, 0x50]).call(l.iat_va(0, WAIT));
             a.finish()
         });
         let (_, stop) = run_with(&image, 100, 10_000);
-        assert!(matches!(&stop, Stop::Unimplemented(m) if m.contains("deadlock")), "{stop:?}");
+        assert!(
+            matches!(&stop, Stop::Unimplemented(m) if m.contains("deadlock")),
+            "{stop:?}"
+        );
     }
 
     #[test]
@@ -731,17 +906,25 @@ mod tests {
         // main waits for the worker, the worker waits for an event nobody sets.
         let image = build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CREATE_EVENT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CREATE_EVENT));
             a.e(&[0x89, 0xC6]);
-            a.e(&[0x6A, 0, 0x6A, 0, 0x56]).push_label("w").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x56])
+                .push_label("w")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x6A, 0xFF, 0x50]).call(l.iat_va(0, WAIT));
             a.label("w");
-            a.e(&[0x6A, 0xFF, 0xFF, 0x74, 0x24, 0x08]).call(l.iat_va(0, WAIT));
+            a.e(&[0x6A, 0xFF, 0xFF, 0x74, 0x24, 0x08])
+                .call(l.iat_va(0, WAIT));
             a.e(&[0xC2, 4, 0]);
             a.finish()
         });
         let (_, stop) = run_with(&image, 20, 100_000);
-        assert!(matches!(&stop, Stop::Unimplemented(m) if m.contains("deadlock")), "{stop:?}");
+        assert!(
+            matches!(&stop, Stop::Unimplemented(m) if m.contains("deadlock")),
+            "{stop:?}"
+        );
     }
 
     /// TLS slots are per thread: main stores 111, the worker sees 0 and stores 222; main still reads 111.
@@ -750,7 +933,10 @@ mod tests {
             let mut a = Asm::new();
             a.call(l.iat_va(0, TLS_ALLOC)).store(5); // data[5] = slot
             a.e(&[0x6A, 111, 0x50]).call(l.iat_va(0, TLS_SET)); // TlsSetValue(slot, 111)
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).push_label("worker").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .push_label("worker")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x89, 0xC7]);
             a.e(&[0x6A, 0xFF, 0x57]).call(l.iat_va(0, WAIT));
             a.push_mem_data(5).call(l.iat_va(0, TLS_GET)); // main's value afterwards
@@ -758,7 +944,10 @@ mod tests {
             a.push_mem_data(0).call(l.iat_va(0, EXIT)); // exit(worker's initial value)
             a.label("worker");
             a.push_mem_data(5).call(l.iat_va(0, TLS_GET)).store(0); // data[0] = what the worker sees
-            a.e(&[0x68, 222, 0, 0, 0]).e(&[0xFF, 0x35]).data_va(5).call(l.iat_va(0, TLS_SET));
+            a.e(&[0x68, 222, 0, 0, 0])
+                .e(&[0xFF, 0x35])
+                .data_va(5)
+                .call(l.iat_va(0, TLS_SET));
             a.e(&[0xC2, 4, 0]);
             a.finish()
         })
@@ -768,7 +957,11 @@ mod tests {
     fn thread_local_storage_is_per_thread() {
         let (emu, stop) = run_with(&tls_program(), 25, 100_000);
         assert_eq!(stop, Stop::Exit(0), "the worker started with an empty slot");
-        assert_eq!(data(&emu, 1), 111, "the worker's store did not touch main's value");
+        assert_eq!(
+            data(&emu, 1),
+            111,
+            "the worker's store did not touch main's value"
+        );
     }
 
     #[test]
@@ -776,7 +969,10 @@ mod tests {
         let image = build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
             a.call(l.iat_va(0, GET_TID)).store(1);
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).push_label("w").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .push_label("w")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x89, 0xC7, 0x6A, 0xFF, 0x57]).call(l.iat_va(0, WAIT));
             a.e(&[0x6A, 0]).call(l.iat_va(0, EXIT));
             a.label("w");
@@ -792,20 +988,41 @@ mod tests {
     #[test]
     fn other_threads_keep_running_while_main_waits_for_input() {
         // worker: data[0] += 1, 100 times, then exits. main: GetMessage forever.
-        let image = build_pe(&[("KERNEL32.dll", K32), ("user32.dll", &["GetMessageA"])], |l| {
-            let mut a = Asm::new();
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).push_label("w").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).e(&[0x68]).data_va(16).call(l.iat_va(1, 0)); // GetMessageA(&msg,0,0,0)
-            a.e(&[0x6A, 0]).call(l.iat_va(0, EXIT));
-            a.label("w");
-            a.e(&[0xBE, 100, 0, 0, 0]);
-            a.label("l").e(&[0xFF, 0x05]).data_va(0).e(&[0x4E]).jcc8(0x75, "l");
-            a.e(&[0xC2, 4, 0]);
-            a.finish()
-        });
+        let image = build_pe(
+            &[("KERNEL32.dll", K32), ("user32.dll", &["GetMessageA"])],
+            |l| {
+                let mut a = Asm::new();
+                a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                    .push_label("w")
+                    .e(&[0x6A, 0, 0x6A, 0])
+                    .call(l.iat_va(0, CT));
+                a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                    .e(&[0x68])
+                    .data_va(16)
+                    .call(l.iat_va(1, 0)); // GetMessageA(&msg,0,0,0)
+                a.e(&[0x6A, 0]).call(l.iat_va(0, EXIT));
+                a.label("w");
+                a.e(&[0xBE, 100, 0, 0, 0]);
+                a.label("l")
+                    .e(&[0xFF, 0x05])
+                    .data_va(0)
+                    .e(&[0x4E])
+                    .jcc8(0x75, "l");
+                a.e(&[0xC2, 4, 0]);
+                a.finish()
+            },
+        );
         let (emu, stop) = run_with(&image, 20, 1_000_000);
-        assert_eq!(stop, Stop::WaitForInput, "asks the host for input only once nothing else can run");
-        assert_eq!(data(&emu, 0), 100, "the worker finished its work in the meantime");
+        assert_eq!(
+            stop,
+            Stop::WaitForInput,
+            "asks the host for input only once nothing else can run"
+        );
+        assert_eq!(
+            data(&emu, 0),
+            100,
+            "the worker finished its work in the meantime"
+        );
     }
 
     #[test]
@@ -813,11 +1030,17 @@ mod tests {
         // CREATE_SUSPENDED thread would set data[0]; main checks it stays 0 while suspended.
         let image = build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = Asm::new();
-            a.e(&[0x6A, 0, 0x6A, 4, 0x6A, 0]).push_label("w").e(&[0x6A, 0, 0x6A, 0]).call(l.iat_va(0, CT));
+            a.e(&[0x6A, 0, 0x6A, 4, 0x6A, 0])
+                .push_label("w")
+                .e(&[0x6A, 0, 0x6A, 0])
+                .call(l.iat_va(0, CT));
             a.e(&[0x6A, 50]).call(l.iat_va(0, SLEEP));
             a.push_mem_data(0).call(l.iat_va(0, EXIT));
             a.label("w");
-            a.e(&[0xC7, 0x05]).data_va(0).e(&1u32.to_le_bytes()).e(&[0xC2, 4, 0]);
+            a.e(&[0xC7, 0x05])
+                .data_va(0)
+                .e(&1u32.to_le_bytes())
+                .e(&[0xC2, 4, 0]);
             a.finish()
         });
         let mut emu = Emu::new();
@@ -826,7 +1049,11 @@ mod tests {
         loader::load(&mut emu, &image).unwrap();
         assert_eq!(emu.run(100_000), Stop::Sleeping);
         emu.win.virtual_now = Some(50);
-        assert_eq!(emu.run(100_000), Stop::Exit(0), "the suspended thread never ran");
+        assert_eq!(
+            emu.run(100_000),
+            Stop::Exit(0),
+            "the suspended thread never ran"
+        );
         let _ = CODE_VA;
     }
 }

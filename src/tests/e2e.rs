@@ -3,7 +3,7 @@
 use crate::cpu::{Emu, Stop};
 use crate::loader;
 use crate::loader::pe::Pe;
-use crate::tests::util::{build_pe, CODE_VA};
+use crate::tests::util::{CODE_VA, build_pe};
 
 fn call_iat(code: &mut Vec<u8>, slot: u32) {
     code.extend_from_slice(&[0xFF, 0x15]);
@@ -19,7 +19,9 @@ fn load_and_run(image: &[u8]) -> (Emu, Stop) {
 
 #[test]
 fn builder_output_parses() {
-    let image = build_pe(&[("KERNEL32.dll", &["ExitProcess", "GetVersion"])], |_| vec![0xC3]);
+    let image = build_pe(&[("KERNEL32.dll", &["ExitProcess", "GetVersion"])], |_| {
+        vec![0xC3]
+    });
     let pe = Pe::parse(&image).unwrap();
     assert_eq!(pe.entry_rva, 0x1000);
     assert_eq!(pe.imports.len(), 1);
@@ -48,7 +50,10 @@ fn returning_from_entry_exits_with_eax() {
 #[test]
 fn write_file_to_stdout() {
     let image = build_pe(
-        &[("KERNEL32.dll", &["GetStdHandle", "WriteFile", "ExitProcess"])],
+        &[(
+            "KERNEL32.dll",
+            &["GetStdHandle", "WriteFile", "ExitProcess"],
+        )],
         |l| {
             let text = CODE_VA + 0x40;
             let written = CODE_VA + 0x50;
@@ -74,22 +79,32 @@ fn write_file_to_stdout() {
     let (emu, stop) = load_and_run(&image);
     assert_eq!(stop, Stop::Exit(0));
     assert_eq!(emu.win.stdout, b"hello");
-    assert_eq!(emu.mem.read(CODE_VA + 0x50, 4).unwrap(), 5, "bytes-written out-param");
+    assert_eq!(
+        emu.mem.read(CODE_VA + 0x50, 4).unwrap(),
+        5,
+        "bytes-written out-param"
+    );
 }
 
 #[test]
 fn heap_alloc_returns_usable_memory() {
-    let image = build_pe(&[("KERNEL32.dll", &["GetProcessHeap", "HeapAlloc", "ExitProcess"])], |l| {
-        let mut c = Vec::new();
-        call_iat(&mut c, l.iat_va(0, 0));
-        c.extend_from_slice(&[0x6A, 100, 0x6A, 0, 0x50]); // push 100; push 0; push eax
-        call_iat(&mut c, l.iat_va(0, 1));
-        c.extend_from_slice(&[0xC7, 0x00, 0x34, 0x12, 0, 0]); // mov dword [eax], 0x1234
-        c.extend_from_slice(&[0x8B, 0x08]); // mov ecx, [eax]
-        c.push(0x51); // push ecx
-        call_iat(&mut c, l.iat_va(0, 2));
-        c
-    });
+    let image = build_pe(
+        &[(
+            "KERNEL32.dll",
+            &["GetProcessHeap", "HeapAlloc", "ExitProcess"],
+        )],
+        |l| {
+            let mut c = Vec::new();
+            call_iat(&mut c, l.iat_va(0, 0));
+            c.extend_from_slice(&[0x6A, 100, 0x6A, 0, 0x50]); // push 100; push 0; push eax
+            call_iat(&mut c, l.iat_va(0, 1));
+            c.extend_from_slice(&[0xC7, 0x00, 0x34, 0x12, 0, 0]); // mov dword [eax], 0x1234
+            c.extend_from_slice(&[0x8B, 0x08]); // mov ecx, [eax]
+            c.push(0x51); // push ecx
+            call_iat(&mut c, l.iat_va(0, 2));
+            c
+        },
+    );
     let (_, stop) = load_and_run(&image);
     assert_eq!(stop, Stop::Exit(0x1234));
 }
@@ -111,14 +126,19 @@ fn reports_xp_version() {
         c
     });
     let (_, stop) = load_and_run(&image);
-    let Stop::Exit(v) = stop else { panic!("{stop:?}") };
+    let Stop::Exit(v) = stop else {
+        panic!("{stop:?}")
+    };
     assert_eq!((v & 0xff, (v >> 8) & 0xff, v >> 16), (5, 1, 2600));
 }
 
 #[test]
 fn get_proc_address_resolves_supported_and_rejects_unknown() {
     let image = build_pe(
-        &[("KERNEL32.dll", &["GetModuleHandleA", "GetProcAddress", "ExitProcess"])],
+        &[(
+            "KERNEL32.dll",
+            &["GetModuleHandleA", "GetProcAddress", "ExitProcess"],
+        )],
         |l| {
             let mod_name = CODE_VA + 0x80;
             let good = CODE_VA + 0x90;
@@ -154,7 +174,11 @@ fn get_proc_address_resolves_supported_and_rejects_unknown() {
     );
     let (emu, stop) = load_and_run(&image);
     assert_eq!(stop, Stop::Exit(0x0A28_0105));
-    assert_eq!(emu.regs[3] & 0xffff_0000, 0x7800_0000, "module handle is fake but stable");
+    assert_eq!(
+        emu.regs[3] & 0xffff_0000,
+        0x7800_0000,
+        "module handle is fake but stable"
+    );
 }
 
 #[test]
@@ -167,7 +191,10 @@ fn unimplemented_import_stops_with_its_name() {
     let mut emu = Emu::new();
     let img = loader::load(&mut emu, &image).unwrap();
     assert_eq!(img.unsupported, ["KERNEL32.dll!NoSuchFunction"]);
-    assert_eq!(emu.run(100), Stop::Unimplemented("kernel32!NoSuchFunction".into()));
+    assert_eq!(
+        emu.run(100),
+        Stop::Unimplemented("kernel32!NoSuchFunction".into())
+    );
 }
 
 #[test]
@@ -207,7 +234,7 @@ fn bad_images_are_rejected() {
 
 mod dll {
     use super::*;
-    use crate::tests::util::{build, Spec};
+    use crate::tests::util::{Spec, build};
 
     const DLL_BASE: u32 = 0x1000_0000;
     const DATA: u32 = 0x40; // code-section offset used as the DLL's global variable
@@ -242,23 +269,37 @@ mod dll {
     }
 
     fn export(emu: &Emu, dll: &str, name: &str) -> u32 {
-        emu.win.find_module(dll).unwrap().exports.as_ref().unwrap().by_name[name]
+        emu.win
+            .find_module(dll)
+            .unwrap()
+            .exports
+            .as_ref()
+            .unwrap()
+            .by_name[name]
     }
 
     #[test]
     fn dll_main_runs_and_exports_resolve() {
         let mut emu = Emu::new();
-        emu.win.virtual_files.insert("flag.dll".into(), flag_dll(DLL_BASE));
+        emu.win
+            .virtual_files
+            .insert("flag.dll".into(), flag_dll(DLL_BASE));
         let h = emu.load_library("flag.dll").unwrap();
         assert_eq!(h, DLL_BASE, "loaded at its preferred base");
         let get_flag = export(&emu, "flag", "GetFlag");
-        assert_eq!(emu.call_function(get_flag, &[]).unwrap(), 1, "DllMain(PROCESS_ATTACH) ran");
+        assert_eq!(
+            emu.call_function(get_flag, &[]).unwrap(),
+            1,
+            "DllMain(PROCESS_ATTACH) ran"
+        );
     }
 
     #[test]
     fn load_library_is_idempotent() {
         let mut emu = Emu::new();
-        emu.win.virtual_files.insert("flag.dll".into(), flag_dll(DLL_BASE));
+        emu.win
+            .virtual_files
+            .insert("flag.dll".into(), flag_dll(DLL_BASE));
         let a = emu.load_library("FLAG.DLL").unwrap();
         let b = emu.load_library("flag").unwrap();
         assert_eq!(a, b);
@@ -268,36 +309,67 @@ mod dll {
     #[test]
     fn colliding_dlls_are_relocated() {
         let mut emu = Emu::new();
-        emu.win.virtual_files.insert("a.dll".into(), flag_dll(DLL_BASE));
-        emu.win.virtual_files.insert("b.dll".into(), flag_dll(DLL_BASE));
+        emu.win
+            .virtual_files
+            .insert("a.dll".into(), flag_dll(DLL_BASE));
+        emu.win
+            .virtual_files
+            .insert("b.dll".into(), flag_dll(DLL_BASE));
         let a = emu.load_library("a.dll").unwrap();
         let b = emu.load_library("b.dll").unwrap();
         assert_eq!(a, DLL_BASE);
         assert_ne!(b, DLL_BASE, "second DLL had to move");
 
         for (name, base) in [("a", a), ("b", b)] {
-            let addr = emu.call_function(export(&emu, name, "GetDataAddr"), &[]).unwrap();
-            assert_eq!(addr, base + 0x1000 + DATA, "{name}: absolute address was relocated");
-            assert_eq!(emu.call_function(export(&emu, name, "GetFlag"), &[]).unwrap(), 1);
+            let addr = emu
+                .call_function(export(&emu, name, "GetDataAddr"), &[])
+                .unwrap();
+            assert_eq!(
+                addr,
+                base + 0x1000 + DATA,
+                "{name}: absolute address was relocated"
+            );
+            assert_eq!(
+                emu.call_function(export(&emu, name, "GetFlag"), &[])
+                    .unwrap(),
+                1
+            );
         }
     }
 
     #[test]
     fn dll_data_is_independent_per_instance() {
         let mut emu = Emu::new();
-        emu.win.virtual_files.insert("a.dll".into(), flag_dll(DLL_BASE));
-        emu.win.virtual_files.insert("b.dll".into(), flag_dll(DLL_BASE));
+        emu.win
+            .virtual_files
+            .insert("a.dll".into(), flag_dll(DLL_BASE));
+        emu.win
+            .virtual_files
+            .insert("b.dll".into(), flag_dll(DLL_BASE));
         let a = emu.load_library("a.dll").unwrap();
         emu.load_library("b.dll").unwrap();
         emu.mem.write(a + 0x1000 + DATA, 4, 99).unwrap();
-        assert_eq!(emu.call_function(export(&emu, "a", "GetFlag"), &[]).unwrap(), 99);
-        assert_eq!(emu.call_function(export(&emu, "b", "GetFlag"), &[]).unwrap(), 1);
+        assert_eq!(
+            emu.call_function(export(&emu, "a", "GetFlag"), &[])
+                .unwrap(),
+            99
+        );
+        assert_eq!(
+            emu.call_function(export(&emu, "b", "GetFlag"), &[])
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
     fn exe_imports_from_real_dll() {
         let lib = build(
-            &Spec { exports: &[("Answer", 0)], dll: true, base: DLL_BASE, ..Spec::default() },
+            &Spec {
+                exports: &[("Answer", 0)],
+                dll: true,
+                base: DLL_BASE,
+                ..Spec::default()
+            },
             |_| vec![0xB8, 0xD2, 0x04, 0, 0, 0xC3], // mov eax, 1234; ret
         );
         let exe = build_pe(&[("lib.dll", &["Answer"])], |l| {
@@ -316,43 +388,56 @@ mod dll {
     #[test]
     fn guest_load_library_and_get_proc_address() {
         let lib = flag_dll(DLL_BASE);
-        let exe = build_pe(&[("KERNEL32.dll", &["LoadLibraryA", "GetProcAddress", "ExitProcess"])], |l| {
-            let (lib_name, fn_name) = (l.code_va(0x80), l.code_va(0x90));
-            let mut c = vec![0x68];
-            c.extend_from_slice(&lib_name.to_le_bytes());
-            call_iat(&mut c, l.iat_va(0, 0)); // eax = LoadLibraryA("flag.dll")
-            c.push(0x68);
-            c.extend_from_slice(&fn_name.to_le_bytes());
-            c.push(0x50);
-            call_iat(&mut c, l.iat_va(0, 1)); // eax = GetProcAddress(h, "GetFlag")
-            c.extend_from_slice(&[0xFF, 0xD0, 0x50]); // call eax; push eax
-            call_iat(&mut c, l.iat_va(0, 2)); // ExitProcess(flag)
-            assert!(c.len() < 0x80);
-            c.resize(0x80, 0x90);
-            c.extend_from_slice(b"flag.dll\0\0\0\0\0\0\0\0");
-            c.extend_from_slice(b"GetFlag\0");
-            c
-        });
+        let exe = build_pe(
+            &[(
+                "KERNEL32.dll",
+                &["LoadLibraryA", "GetProcAddress", "ExitProcess"],
+            )],
+            |l| {
+                let (lib_name, fn_name) = (l.code_va(0x80), l.code_va(0x90));
+                let mut c = vec![0x68];
+                c.extend_from_slice(&lib_name.to_le_bytes());
+                call_iat(&mut c, l.iat_va(0, 0)); // eax = LoadLibraryA("flag.dll")
+                c.push(0x68);
+                c.extend_from_slice(&fn_name.to_le_bytes());
+                c.push(0x50);
+                call_iat(&mut c, l.iat_va(0, 1)); // eax = GetProcAddress(h, "GetFlag")
+                c.extend_from_slice(&[0xFF, 0xD0, 0x50]); // call eax; push eax
+                call_iat(&mut c, l.iat_va(0, 2)); // ExitProcess(flag)
+                assert!(c.len() < 0x80);
+                c.resize(0x80, 0x90);
+                c.extend_from_slice(b"flag.dll\0\0\0\0\0\0\0\0");
+                c.extend_from_slice(b"GetFlag\0");
+                c
+            },
+        );
         let mut emu = Emu::new();
         emu.win.virtual_files.insert("flag.dll".into(), lib);
         loader::load(&mut emu, &exe).unwrap();
-        assert_eq!(emu.run(10_000), Stop::Exit(1), "DllMain ran inside LoadLibraryA");
+        assert_eq!(
+            emu.run(10_000),
+            Stop::Exit(1),
+            "DllMain ran inside LoadLibraryA"
+        );
     }
 
     #[test]
     fn missing_dll_is_null_and_sets_last_error() {
-        let exe = build_pe(&[("KERNEL32.dll", &["LoadLibraryA", "GetLastError"])], |l| {
-            let name = l.code_va(0x40);
-            let mut c = vec![0x68];
-            c.extend_from_slice(&name.to_le_bytes());
-            call_iat(&mut c, l.iat_va(0, 0));
-            c.extend_from_slice(&[0x89, 0xC3]); // mov ebx, eax
-            call_iat(&mut c, l.iat_va(0, 1)); // eax = GetLastError()
-            c.push(0xC3);
-            c.resize(0x40, 0x90);
-            c.extend_from_slice(b"nothere.dll\0");
-            c
-        });
+        let exe = build_pe(
+            &[("KERNEL32.dll", &["LoadLibraryA", "GetLastError"])],
+            |l| {
+                let name = l.code_va(0x40);
+                let mut c = vec![0x68];
+                c.extend_from_slice(&name.to_le_bytes());
+                call_iat(&mut c, l.iat_va(0, 0));
+                c.extend_from_slice(&[0x89, 0xC3]); // mov ebx, eax
+                call_iat(&mut c, l.iat_va(0, 1)); // eax = GetLastError()
+                c.push(0xC3);
+                c.resize(0x40, 0x90);
+                c.extend_from_slice(b"nothere.dll\0");
+                c
+            },
+        );
         let mut emu = Emu::new();
         loader::load(&mut emu, &exe).unwrap();
         assert_eq!(emu.run(1000), Stop::Exit(126));
@@ -362,7 +447,14 @@ mod dll {
     #[test]
     fn moved_image_without_relocations_still_loads_for_its_resources() {
         // No relocation table, and its preferred base is taken: resource-only DLLs do not care.
-        let no_relocs = build(&Spec { dll: true, base: DLL_BASE, ..Spec::default() }, |_| vec![0xC3]);
+        let no_relocs = build(
+            &Spec {
+                dll: true,
+                base: DLL_BASE,
+                ..Spec::default()
+            },
+            |_| vec![0xC3],
+        );
         let mut emu = Emu::new();
         emu.mem.map(DLL_BASE, 0x3000); // something already lives there
         emu.win.virtual_files.insert("x.dll".into(), no_relocs);
@@ -374,7 +466,12 @@ mod dll {
     /// DllMain(hinst, reason, reserved) writes `reason` to a fixed, unrelocated address
     /// (0x3000_0000) and bumps a call counter at 0x3000_0004, then returns TRUE.
     fn reason_dll() -> Vec<u8> {
-        let spec = Spec { dll: true, base: DLL_BASE, relocs: &[], ..Spec::default() };
+        let spec = Spec {
+            dll: true,
+            base: DLL_BASE,
+            relocs: &[],
+            ..Spec::default()
+        };
         build(&spec, |_| {
             let mut c = vec![0x8B, 0x44, 0x24, 0x08, 0xA3]; // mov eax,[esp+8]; mov [0x30000000],eax
             c.extend_from_slice(&0x3000_0000u32.to_le_bytes());
@@ -386,7 +483,10 @@ mod dll {
     }
 
     fn reason_state(emu: &Emu) -> (u32, u32) {
-        (emu.mem.read(0x3000_0000, 4).unwrap(), emu.mem.read(0x3000_0004, 4).unwrap())
+        (
+            emu.mem.read(0x3000_0000, 4).unwrap(),
+            emu.mem.read(0x3000_0004, 4).unwrap(),
+        )
     }
 
     #[test]
@@ -396,7 +496,11 @@ mod dll {
         emu.win.virtual_files.insert("rc.dll".into(), reason_dll());
         let h = emu.load_library("rc.dll").unwrap();
         assert_eq!(reason_state(&emu), (1, 1), "DLL_PROCESS_ATTACH ran once");
-        assert_eq!(emu.load_library("RC.DLL").unwrap(), h, "already loaded: same module");
+        assert_eq!(
+            emu.load_library("RC.DLL").unwrap(),
+            h,
+            "already loaded: same module"
+        );
         assert_eq!(reason_state(&emu).1, 1, "...and DllMain did not run again");
 
         assert!(emu.free_library(h).unwrap());
@@ -404,10 +508,17 @@ mod dll {
         assert_eq!(reason_state(&emu), (1, 1));
 
         assert!(emu.free_library(h).unwrap());
-        assert_eq!(reason_state(&emu), (0, 2), "DLL_PROCESS_DETACH ran when the count hit zero");
+        assert_eq!(
+            reason_state(&emu),
+            (0, 2),
+            "DLL_PROCESS_DETACH ran when the count hit zero"
+        );
         assert!(!emu.mem.is_mapped(h), "its memory is released");
         assert!(emu.win.find_module("rc.dll").is_none());
-        assert!(!emu.free_library(h).unwrap(), "freeing a handle that is not loaded reports failure");
+        assert!(
+            !emu.free_library(h).unwrap(),
+            "freeing a handle that is not loaded reports failure"
+        );
     }
 
     #[test]
@@ -434,10 +545,20 @@ mod dll {
         let c = emu.load_library("rc").unwrap();
         assert_eq!((a, b), (b, c), "one module under three spellings");
         assert_eq!(emu.win.modules.len(), 1);
-        assert_eq!(emu.win.modules[0].path, r"c:\game\rc.dll", "named by its full guest path, not a mangled one");
+        assert_eq!(
+            emu.win.modules[0].path, r"c:\game\rc.dll",
+            "named by its full guest path, not a mangled one"
+        );
         assert_eq!(emu.win.modules[0].refs, 3);
-        assert_eq!(emu.win.find_module(r"c:/game/RC.dll").map(|m| m.handle), Some(a), "slashes and case do not matter");
-        assert!(emu.win.find_module(r"C:\Elsewhere\rc.dll").is_none(), "a different path is a different module");
+        assert_eq!(
+            emu.win.find_module(r"c:/game/RC.dll").map(|m| m.handle),
+            Some(a),
+            "slashes and case do not matter"
+        );
+        assert!(
+            emu.win.find_module(r"C:\Elsewhere\rc.dll").is_none(),
+            "a different path is a different module"
+        );
     }
 
     #[test]
@@ -535,8 +656,17 @@ mod gui {
         let imports: &[(&str, &[&str])] = &[
             (
                 "user32.dll",
-                &["RegisterClassA", "CreateWindowExA", "GetMessageA", "DispatchMessageA", "PostQuitMessage",
-                  "DefWindowProcA", "BeginPaint", "EndPaint", "FillRect"],
+                &[
+                    "RegisterClassA",
+                    "CreateWindowExA",
+                    "GetMessageA",
+                    "DispatchMessageA",
+                    "PostQuitMessage",
+                    "DefWindowProcA",
+                    "BeginPaint",
+                    "EndPaint",
+                    "FillRect",
+                ],
             ),
             ("gdi32.dll", &["CreateSolidBrush"]),
             ("kernel32.dll", &["ExitProcess"]),
@@ -549,29 +679,52 @@ mod gui {
             a.push32(va(WC)).call(iat(0, 0)); // RegisterClassA(&wc)
             a.emit(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0]); // lpParam, hInst, hMenu, hParent
             a.push32(150).push32(200).emit(&[0x6A, 10, 0x6A, 10]); // h, w, y, x
-            a.push32(0x10CF_0000).push32(va(TITLE)).push32(va(CLASS)).emit(&[0x6A, 0]);
+            a.push32(0x10CF_0000)
+                .push32(va(TITLE))
+                .push32(va(CLASS))
+                .emit(&[0x6A, 0]);
             a.call(iat(0, 1)).store_eax(va(HWND)); // CreateWindowExA
-            a.label("loop").emit(&[0x6A, 0, 0x6A, 0, 0x6A, 0]).push32(va(MSG)).call(iat(0, 2));
+            a.label("loop")
+                .emit(&[0x6A, 0, 0x6A, 0, 0x6A, 0])
+                .push32(va(MSG))
+                .call(iat(0, 2));
             a.emit(&[0x85, 0xC0]).jmp8(0x74, "done"); // test eax,eax; jz done
             a.push32(va(MSG)).call(iat(0, 3)).jmp8(0xEB, "loop"); // DispatchMessageA
             a.label("done").push_mem(va(MSG) + 8).call(iat(2, 0)); // ExitProcess(msg.wParam)
             // --- WndProc(hwnd, msg, wparam, lparam) ---
             a.label("wndproc").emit(&[0x8B, 0x44, 0x24, 0x08]); // mov eax,[esp+8]
             a.emit(&[0x83, 0xF8, 0x02]).jmp8(0x75, "chk_paint"); // WM_DESTROY?
-            a.emit(&[0x6A, 0]).call(iat(0, 4)).emit(&[0x31, 0xC0, 0xC2, 16, 0]); // PostQuitMessage(0)
-            a.label("chk_paint").emit(&[0x83, 0xF8, 0x0F]).jmp8(0x75, "other"); // WM_PAINT?
-            a.push32(va(PS)).emit(&[0xFF, 0x74, 0x24, 0x08]).call(iat(0, 6)).store_eax(va(HDC));
+            a.emit(&[0x6A, 0])
+                .call(iat(0, 4))
+                .emit(&[0x31, 0xC0, 0xC2, 16, 0]); // PostQuitMessage(0)
+            a.label("chk_paint")
+                .emit(&[0x83, 0xF8, 0x0F])
+                .jmp8(0x75, "other"); // WM_PAINT?
+            a.push32(va(PS))
+                .emit(&[0xFF, 0x74, 0x24, 0x08])
+                .call(iat(0, 6))
+                .store_eax(va(HDC));
             a.push32(0x0000_00FF).call(iat(1, 0)); // CreateSolidBrush(red)
-            a.emit(&[0x50]).push32(va(RECT)).push_mem(va(HDC)).call(iat(0, 8)); // FillRect
-            a.push32(va(PS)).emit(&[0xFF, 0x74, 0x24, 0x08]).call(iat(0, 7)); // EndPaint
+            a.emit(&[0x50])
+                .push32(va(RECT))
+                .push_mem(va(HDC))
+                .call(iat(0, 8)); // FillRect
+            a.push32(va(PS))
+                .emit(&[0xFF, 0x74, 0x24, 0x08])
+                .call(iat(0, 7)); // EndPaint
             a.emit(&[0x31, 0xC0, 0xC2, 16, 0]);
-            a.label("other").emit(&[0xFF, 0x74, 0x24, 0x10, 0xFF, 0x74, 0x24, 0x10, 0xFF, 0x74, 0x24, 0x10, 0xFF, 0x74, 0x24, 0x10]);
+            a.label("other").emit(&[
+                0xFF, 0x74, 0x24, 0x10, 0xFF, 0x74, 0x24, 0x10, 0xFF, 0x74, 0x24, 0x10, 0xFF, 0x74,
+                0x24, 0x10,
+            ]);
             a.call(iat(0, 5)).emit(&[0xC2, 16, 0]); // DefWindowProcA
             let (mut code, labels) = a.finish();
 
             assert!(code.len() <= WC as usize);
             code.resize(0x200, 0);
-            let put = |c: &mut Vec<u8>, off: u32, v: u32| c[off as usize..off as usize + 4].copy_from_slice(&v.to_le_bytes());
+            let put = |c: &mut Vec<u8>, off: u32, v: u32| {
+                c[off as usize..off as usize + 4].copy_from_slice(&v.to_le_bytes())
+            };
             put(&mut code, WC + 4, va(labels["wndproc"] as u32)); // lpfnWndProc
             put(&mut code, WC + 28, 6); // hbrBackground = COLOR_WINDOW + 1
             put(&mut code, WC + 36, va(CLASS)); // lpszClassName
@@ -599,8 +752,16 @@ mod gui {
 
         let desktop = emu.wm.compose();
         // Window at (10,10), 3px frame + 19px caption -> client origin (13, 32).
-        assert_eq!(desktop.get_pixel(13 + 20, 32 + 20), Some(0xFF0000), "FillRect painted red");
-        assert_eq!(desktop.get_pixel(13 + 150, 32 + 100), Some(0xFFFFFF), "class background is white");
+        assert_eq!(
+            desktop.get_pixel(13 + 20, 32 + 20),
+            Some(0xFF0000),
+            "FillRect painted red"
+        );
+        assert_eq!(
+            desktop.get_pixel(13 + 150, 32 + 100),
+            Some(0xFFFFFF),
+            "class background is white"
+        );
         assert_eq!(desktop.get_pixel(60, 15), Some(0x0054E3), "caption bar");
         assert_eq!(desktop.get_pixel(500, 500), Some(0x3A6EA5), "desktop");
 
@@ -619,7 +780,8 @@ mod gui {
         let mut emu = Emu::new();
         loader::load(&mut emu, &gui_program()).unwrap();
         assert_eq!(emu.run(100_000), Stop::WaitForInput);
-        emu.wm.post_mouse(crate::gui::wm::WM_LBUTTONDOWN, 13 + 5, 32 + 6);
+        emu.wm
+            .post_mouse(crate::gui::wm::WM_LBUTTONDOWN, 13 + 5, 32 + 6);
         // The click is dispatched to the (default) handling without disturbing the loop.
         assert_eq!(emu.run(100_000), Stop::WaitForInput);
         assert!(emu.wm.queue.is_empty());
@@ -638,18 +800,28 @@ mod solitaire {
 
     /// Boot the game; with a seed, its random shuffle is reproducible.
     fn boot_seeded(seed: Option<u32>) -> Option<Emu> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("exe/MS_Solitaire_Windows_XP");
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("exe/MS_Solitaire_Windows_XP");
         let exe = std::fs::read(dir.join("sol.exe")).ok()?;
         let mut emu = Emu::new();
         emu.win.fixed_time = seed;
         emu.win.dll_dirs.push(dir);
         loader::load(&mut emu, &exe).ok()?;
-        assert_eq!(emu.run(50_000_000), Stop::WaitForInput, "game should reach its message loop");
+        assert_eq!(
+            emu.run(50_000_000),
+            Stop::WaitForInput,
+            "game should reach its message loop"
+        );
         Some(emu)
     }
 
     fn count(emu: &mut Emu, color: u32) -> usize {
-        emu.wm.compose().pixels.iter().filter(|&&p| p == color).count()
+        emu.wm
+            .compose()
+            .pixels
+            .iter()
+            .filter(|&&p| p == color)
+            .count()
     }
 
     #[test]
@@ -674,13 +846,21 @@ mod solitaire {
     }
 
     fn dialogs(emu: &Emu) -> Vec<u32> {
-        emu.wm.windows.iter().filter(|w| w.is_dialog).map(|w| w.hwnd).collect()
+        emu.wm
+            .windows
+            .iter()
+            .filter(|w| w.is_dialog)
+            .map(|w| w.hwnd)
+            .collect()
     }
 
     fn save_shot(emu: &mut Emu, name: &str) {
         if let Some(dir) = std::env::var_os("XP_SHOT_DIR") {
             let region = emu.wm.content_bounds().unwrap();
-            let shot = emu.wm.compose().crop(region.0, region.1, region.2, region.3);
+            let shot = emu
+                .wm
+                .compose()
+                .crop(region.0, region.1, region.2, region.3);
             std::fs::write(std::path::Path::new(&dir).join(name), shot.to_ppm()).unwrap();
         }
     }
@@ -712,7 +892,9 @@ mod solitaire {
     fn exposed_face_down_card_flips_only_when_clicked() {
         use crate::gui::wm::{WM_LBUTTONDOWN, WM_LBUTTONUP};
         // Seed 1 deals an ace face-up in the 4th column, with face-down cards under it.
-        let Some(mut emu) = boot_seeded(Some(1)) else { return };
+        let Some(mut emu) = boot_seeded(Some(1)) else {
+            return;
+        };
         let (cx, cy, _, _) = emu.wm.content_bounds().unwrap();
         let column = (cx + 47 + 82 * 3, cy + 125 + 6 * 3 + 40);
         let spot = |emu: &mut Emu| emu.wm.compose().crop(cx + 259, cy + 150, 60, 60).pixels;
@@ -737,7 +919,10 @@ mod solitaire {
         let Some(emu) = boot() else { return };
         let class = &emu.wm.windows.iter().find(|w| w.parent == 0).unwrap().class;
         let style = emu.wm.classes[&class.to_ascii_lowercase()].style;
-        assert!(style & crate::gui::wm::CS_DBLCLKS != 0, "class style {style:#x} lacks CS_DBLCLKS");
+        assert!(
+            style & crate::gui::wm::CS_DBLCLKS != 0,
+            "class style {style:#x} lacks CS_DBLCLKS"
+        );
     }
 
     #[test]
@@ -782,25 +967,44 @@ mod solitaire {
         let before = foundation_fingerprint(&mut emu);
         double_click(&mut emu, cx + 47 + 82 * col, cy + 125 + 6 * col + 40);
         assert_eq!(emu.run(50_000_000), Stop::WaitForInput);
-        assert_eq!(foundation_fingerprint(&mut emu), before, "two plain clicks must not move a card");
+        assert_eq!(
+            foundation_fingerprint(&mut emu),
+            before,
+            "two plain clicks must not move a card"
+        );
     }
 
     #[test]
     fn options_menu_item_opens_a_real_dialog_and_ok_closes_it() {
         let Some(mut emu) = boot() else { return };
         choose_game_menu_item(&mut emu, 70); // Deal, separator, Undo, Deck..., Options...
-        assert_eq!(emu.run(50_000_000), Stop::WaitForInput, "modal dialog waits for the user");
+        assert_eq!(
+            emu.run(50_000_000),
+            Stop::WaitForInput,
+            "modal dialog waits for the user"
+        );
         let dlg = dialogs(&emu);
         assert_eq!(dlg.len(), 1, "the Options dialog exists");
         let d = emu.wm.window(dlg[0]).unwrap();
-        assert!(d.visible && d.title.contains("Options"), "title was {:?}", d.title);
-        assert!(emu.wm.windows.iter().filter(|w| w.parent == dlg[0]).count() >= 6, "radio buttons, check boxes, OK/Cancel");
+        assert!(
+            d.visible && d.title.contains("Options"),
+            "title was {:?}",
+            d.title
+        );
+        assert!(
+            emu.wm.windows.iter().filter(|w| w.parent == dlg[0]).count() >= 6,
+            "radio buttons, check boxes, OK/Cancel"
+        );
         save_shot(&mut emu, "options.ppm");
 
         // Press Enter: IDOK -> EndDialog -> DialogBoxParam returns and the game carries on.
         emu.wm.post_key(0x0D, true);
         emu.wm.post_key(0x0D, false);
-        assert_eq!(emu.run(50_000_000), Stop::WaitForInput, "back in the game's own message loop");
+        assert_eq!(
+            emu.run(50_000_000),
+            Stop::WaitForInput,
+            "back in the game's own message loop"
+        );
         assert!(dialogs(&emu).is_empty(), "dialog closed");
         assert!(emu.wm.modal.is_none());
         assert!(emu.nested.is_empty(), "no leaked callback frames");
@@ -825,7 +1029,12 @@ mod solitaire {
     }
 
     fn checked(emu: &Emu, dlg: u32, label: &str) -> u32 {
-        emu.wm.windows.iter().find(|w| w.parent == dlg && crate::gui::wm::clean_label(&w.title) == label).unwrap().check
+        emu.wm
+            .windows
+            .iter()
+            .find(|w| w.parent == dlg && crate::gui::wm::clean_label(&w.title) == label)
+            .unwrap()
+            .check
     }
 
     #[test]
@@ -834,11 +1043,25 @@ mod solitaire {
         choose_game_menu_item(&mut emu, 70);
         assert_eq!(emu.run(50_000_000), Stop::WaitForInput);
         let dlg = dialogs(&emu)[0];
-        assert_eq!((checked(&emu, dlg, "Draw One"), checked(&emu, dlg, "Draw Three")), (0, 1), "starts on Draw Three");
+        assert_eq!(
+            (
+                checked(&emu, dlg, "Draw One"),
+                checked(&emu, dlg, "Draw Three")
+            ),
+            (0, 1),
+            "starts on Draw Three"
+        );
 
         click_control(&mut emu, dlg, "Draw One");
         assert_eq!(emu.run(50_000_000), Stop::WaitForInput);
-        assert_eq!((checked(&emu, dlg, "Draw One"), checked(&emu, dlg, "Draw Three")), (1, 0), "radio selection moved");
+        assert_eq!(
+            (
+                checked(&emu, dlg, "Draw One"),
+                checked(&emu, dlg, "Draw Three")
+            ),
+            (1, 0),
+            "radio selection moved"
+        );
         assert_eq!(checked(&emu, dlg, "Vegas"), 0, "other group untouched");
 
         let timed = checked(&emu, dlg, "Timed game");
@@ -862,9 +1085,15 @@ mod solitaire {
         assert_eq!(dialogs(&emu).len(), 1);
         emu.wm.request_close(); // targets the topmost window: the dialog -> WM_CLOSE -> IDCANCEL
         assert_eq!(emu.run(50_000_000), Stop::WaitForInput);
-        assert!(dialogs(&emu).is_empty(), "the dialog closed; the game is still running");
+        assert!(
+            dialogs(&emu).is_empty(),
+            "the dialog closed; the game is still running"
+        );
         emu.wm.request_close();
-        assert!(matches!(emu.run(50_000_000), Stop::Exit(_)), "second close quits the game");
+        assert!(
+            matches!(emu.run(50_000_000), Stop::Exit(_)),
+            "second close quits the game"
+        );
     }
 
     #[test]
@@ -875,14 +1104,24 @@ mod solitaire {
         for msg in [WM_LBUTTONDOWN, WM_LBUTTONUP] {
             emu.wm.post_mouse(msg, 90, 75);
         }
-        assert_eq!(emu.run(50_000_000), Stop::WaitForInput, "game handled the click and went idle");
+        assert_eq!(
+            emu.run(50_000_000),
+            Stop::WaitForInput,
+            "game handled the click and went idle"
+        );
         let after = emu.wm.compose().pixels.clone();
         let changed = before.iter().zip(&after).filter(|(a, b)| a != b).count();
-        assert!(changed > 2_000, "the screen changed after the click ({changed} pixels)");
+        assert!(
+            changed > 2_000,
+            "the screen changed after the click ({changed} pixels)"
+        );
 
         // And it still shuts down cleanly.
         emu.wm.request_close();
-        assert!(matches!(emu.run(50_000_000), Stop::Exit(_)), "closes without hanging or crashing");
+        assert!(
+            matches!(emu.run(50_000_000), Stop::Exit(_)),
+            "closes without hanging or crashing"
+        );
     }
 }
 
@@ -897,7 +1136,16 @@ mod nested_wait {
     /// then returns 77.
     fn program() -> Vec<u8> {
         let imports: &[(&str, &[&str])] = &[
-            ("user32.dll", &["RegisterClassA", "CreateWindowExA", "SendMessageA", "GetMessageA", "DefWindowProcA"]),
+            (
+                "user32.dll",
+                &[
+                    "RegisterClassA",
+                    "CreateWindowExA",
+                    "SendMessageA",
+                    "GetMessageA",
+                    "DefWindowProcA",
+                ],
+            ),
             ("kernel32.dll", &["ExitProcess"]),
         ];
         build_pe(imports, |l: &Layout| {
@@ -917,7 +1165,9 @@ mod nested_wait {
             let mut c = Vec::new();
             push32(&mut c, va(WC));
             call(&mut c, iat(0, 0)); // RegisterClassA
-            c.extend_from_slice(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 50, 0x6A, 50, 0x6A, 0, 0x6A, 0, 0x6A, 0]);
+            c.extend_from_slice(&[
+                0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 0, 0x6A, 50, 0x6A, 50, 0x6A, 0, 0x6A, 0, 0x6A, 0,
+            ]);
             push32(&mut c, va(NAME)); // title
             push32(&mut c, va(NAME)); // class
             c.extend_from_slice(&[0x6A, 0]);
@@ -943,7 +1193,9 @@ mod nested_wait {
             c.extend_from_slice(&[0xC2, 16, 0]);
             assert!(c.len() <= WC as usize);
             c.resize(0x200, 0);
-            let put = |c: &mut Vec<u8>, off: u32, v: u32| c[off as usize..off as usize + 4].copy_from_slice(&v.to_le_bytes());
+            let put = |c: &mut Vec<u8>, off: u32, v: u32| {
+                c[off as usize..off as usize + 4].copy_from_slice(&v.to_le_bytes())
+            };
             put(&mut c, WC + 4, va(wndproc));
             put(&mut c, WC + 36, va(NAME));
             c[NAME as usize..NAME as usize + 2].copy_from_slice(b"W\0");
@@ -955,8 +1207,16 @@ mod nested_wait {
     fn a_wait_inside_a_callback_resumes_and_returns_through_the_caller() {
         let mut emu = Emu::new();
         loader::load(&mut emu, &program()).unwrap();
-        assert_eq!(emu.run(100_000), Stop::WaitForInput, "blocked in GetMessage inside the WndProc");
-        assert_eq!(emu.run(1_000), Stop::WaitForInput, "still waiting, nothing lost on a retry");
+        assert_eq!(
+            emu.run(100_000),
+            Stop::WaitForInput,
+            "blocked in GetMessage inside the WndProc"
+        );
+        assert_eq!(
+            emu.run(1_000),
+            Stop::WaitForInput,
+            "still waiting, nothing lost on a retry"
+        );
         emu.wm.post(0, 0x401, 0, 0);
         assert_eq!(
             emu.run(100_000),

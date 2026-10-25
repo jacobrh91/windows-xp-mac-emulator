@@ -65,15 +65,36 @@ pub struct Jit {
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
+    fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64)
+    -> *mut c_void;
     fn pthread_jit_write_protect_np(enabled: i32);
     fn sys_icache_invalidate(start: *mut c_void, len: usize);
 }
 
 impl Jit {
     pub(crate) fn new() -> Jit {
-        let enabled = cfg!(all(target_arch = "aarch64", target_os = "macos")) && std::env::var_os("XP_NO_JIT").is_none();
-        Jit { enabled, mem: std::ptr::null_mut(), used: 0, generation: 1, compiled: 0, helper_calls: 0, runs: 0, helper_kinds: Default::default(), stats: std::env::var_os("XP_BLOCK_STATS").is_some(), chain: vec![ChainEntry { eip: u32::MAX, len: 0, body: 0 }; CHAIN_SLOTS], keep: Vec::new() }
+        let enabled = cfg!(all(target_arch = "aarch64", target_os = "macos"))
+            && std::env::var_os("XP_NO_JIT").is_none();
+        Jit {
+            enabled,
+            mem: std::ptr::null_mut(),
+            used: 0,
+            generation: 1,
+            compiled: 0,
+            helper_calls: 0,
+            runs: 0,
+            helper_kinds: Default::default(),
+            stats: std::env::var_os("XP_BLOCK_STATS").is_some(),
+            chain: vec![
+                ChainEntry {
+                    eip: u32::MAX,
+                    len: 0,
+                    body: 0
+                };
+                CHAIN_SLOTS
+            ],
+            keep: Vec::new(),
+        }
     }
 
     /// Forget all compiled code (the block cache was flushed, or the code area is full).
@@ -93,7 +114,16 @@ impl Jit {
         const MAP_PRIVATE_ANON_JIT: i32 = 0x2 | 0x1000 | 0x800;
         if self.mem.is_null() {
             // SAFETY: an anonymous private mapping; checked for failure below.
-            let p = unsafe { mmap(std::ptr::null_mut(), CODE_BYTES, PROT_RWX, MAP_PRIVATE_ANON_JIT, -1, 0) };
+            let p = unsafe {
+                mmap(
+                    std::ptr::null_mut(),
+                    CODE_BYTES,
+                    PROT_RWX,
+                    MAP_PRIVATE_ANON_JIT,
+                    -1,
+                    0,
+                )
+            };
             if p as isize == -1 {
                 self.enabled = false;
                 return None;
@@ -129,7 +159,11 @@ impl Jit {
         let (code, body) = codegen::block(&ops)?;
         let f = self.install(&code)?;
         let start = ops[0].start;
-        self.chain[chain_slot(start)] = ChainEntry { eip: start, len: ops.len() as u32, body: f as usize as u64 + body as u64 };
+        self.chain[chain_slot(start)] = ChainEntry {
+            eip: start,
+            len: ops.len() as u32,
+            body: f as usize as u64 + body as u64,
+        };
         self.keep.push(ops);
         Some(f)
     }
@@ -145,10 +179,31 @@ pub(crate) unsafe extern "C" fn jit_step(emu: *mut Emu, op: *const BlockOp) -> u
     emu.jit.helper_calls += 1;
     if emu.jit.stats {
         let kind = match b.op {
-            Dop::Fpu { opc, reg, rm: Ea::Mem { .. } } => format!("x87 {opc:02X}/{reg} mem"),
-            Dop::Fpu { opc, reg, rm: Ea::Reg(i) } => format!("x87 {opc:02X}/{reg} st{i}"),
-            Dop::Shift { op, by_cl, count, .. } => format!("shift /{op} {}", if by_cl { "cl".to_string() } else { count.to_string() }),
-            other => format!("{other:?}").split([' ', '(', '{']).next().unwrap_or("?").to_string(),
+            Dop::Fpu {
+                opc,
+                reg,
+                rm: Ea::Mem { .. },
+            } => format!("x87 {opc:02X}/{reg} mem"),
+            Dop::Fpu {
+                opc,
+                reg,
+                rm: Ea::Reg(i),
+            } => format!("x87 {opc:02X}/{reg} st{i}"),
+            Dop::Shift {
+                op, by_cl, count, ..
+            } => format!(
+                "shift /{op} {}",
+                if by_cl {
+                    "cl".to_string()
+                } else {
+                    count.to_string()
+                }
+            ),
+            other => format!("{other:?}")
+                .split([' ', '(', '{'])
+                .next()
+                .unwrap_or("?")
+                .to_string(),
         };
         *emu.jit.helper_kinds.entry(kind).or_insert(0) += 1;
     }
@@ -157,7 +212,9 @@ pub(crate) unsafe extern "C" fn jit_step(emu: *mut Emu, op: *const BlockOp) -> u
         Ok(()) => (emu.eip != b.next || emu.mem.code_dirty) as u64,
         Err(e) => {
             let r = match e {
-                stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. }) => emu.raise_hardware(stop, b.start, saved),
+                stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. }) => {
+                    emu.raise_hardware(stop, b.start, saved)
+                }
                 other => Err(other),
             };
             match r {
@@ -183,13 +240,25 @@ pub(crate) const OFF_PAGES: u32 = std::mem::offset_of!(Emu, jit_pages) as u32;
 pub(crate) const OFF_CODE_PAGES: u32 = std::mem::offset_of!(Emu, jit_code_pages) as u32;
 pub(crate) const OFF_CHAIN: u32 = std::mem::offset_of!(Emu, jit_chain) as u32;
 pub(crate) const OFF_FPU: u32 = std::mem::offset_of!(Emu, fpu) as u32;
-const _: () = assert!(OFF_REGS == 0 && OFF_EIP == 32 && OFF_EFLAGS == 36 && OFF_PAGES == 40 && OFF_CODE_PAGES == 48 && OFF_CHAIN == 56);
-const _: () = assert!(OFF_FPU < 4096 && std::mem::offset_of!(super::fpu::Fpu, st) == 0 && std::mem::offset_of!(super::fpu::Fpu, top) == 64 && std::mem::offset_of!(super::fpu::Fpu, cc) == 72);
+const _: () = assert!(
+    OFF_REGS == 0
+        && OFF_EIP == 32
+        && OFF_EFLAGS == 36
+        && OFF_PAGES == 40
+        && OFF_CODE_PAGES == 48
+        && OFF_CHAIN == 56
+);
+const _: () = assert!(
+    OFF_FPU < 4096
+        && std::mem::offset_of!(super::fpu::Fpu, st) == 0
+        && std::mem::offset_of!(super::fpu::Fpu, top) == 64
+        && std::mem::offset_of!(super::fpu::Fpu, cc) == 72
+);
 
 #[cfg(target_arch = "aarch64")]
 mod codegen {
     use dynasmrt::aarch64::Aarch64Relocation;
-    use dynasmrt::{dynasm, DynamicLabel, DynasmApi, DynasmLabelApi, VecAssembler};
+    use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, VecAssembler, dynasm};
 
     use super::*;
 
@@ -342,7 +411,26 @@ mod codegen {
         let arith = |o: u8| matches!(o, 0 | 1 | 4..=7);
         match (opc, reg, rm) {
             // fld m32 / m64
-            (0xD9, 0, Ea::Mem { base, index, scale, disp }) | (0xDD, 0, Ea::Mem { base, index, scale, disp }) => {
+            (
+                0xD9,
+                0,
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                },
+            )
+            | (
+                0xDD,
+                0,
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                },
+            ) => {
                 ea(a, base, index, scale, disp);
                 if opc == 0xD9 {
                     load(a, 4, 1, slow);
@@ -355,7 +443,16 @@ mod codegen {
                 fpush(a);
             }
             // fst / fstp m32 / m64
-            (0xD9 | 0xDD, 2 | 3, Ea::Mem { base, index, scale, disp }) => {
+            (
+                0xD9 | 0xDD,
+                2 | 3,
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                },
+            ) => {
                 fpu_base(a);
                 fget(a, 0, 0);
                 ea(a, base, index, scale, disp);
@@ -371,7 +468,16 @@ mod codegen {
                 }
             }
             // st0 = st0 op m32 / m64
-            (0xD8 | 0xDC, o, Ea::Mem { base, index, scale, disp }) if arith(o) => {
+            (
+                0xD8 | 0xDC,
+                o,
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                },
+            ) if arith(o) => {
                 ea(a, base, index, scale, disp);
                 if opc == 0xD8 {
                     load(a, 4, 1, slow);
@@ -448,7 +554,16 @@ mod codegen {
                 fset(a, 0);
             }
             // fcom / fcomp with m32 / m64 / st(i); fcompp
-            (0xD8 | 0xDC, 2 | 3, Ea::Mem { base, index, scale, disp }) => {
+            (
+                0xD8 | 0xDC,
+                2 | 3,
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                },
+            ) => {
                 ea(a, base, index, scale, disp);
                 if opc == 0xD8 {
                     load(a, 4, 1, slow);
@@ -493,7 +608,16 @@ mod codegen {
                 );
             }
             // fild m32 / m16
-            (0xDB | 0xDF, 0, Ea::Mem { base, index, scale, disp }) => {
+            (
+                0xDB | 0xDF,
+                0,
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                },
+            ) => {
                 ea(a, base, index, scale, disp);
                 if opc == 0xDB {
                     load(a, 4, 1, slow);
@@ -594,7 +718,11 @@ mod codegen {
             dynasm!(a ; .arch aarch64 ; mov w3, w27);
             return;
         }
-        let clear = if keep_cf { ARITH_FLAGS & !1 } else { ARITH_FLAGS };
+        let clear = if keep_cf {
+            ARITH_FLAGS & !1
+        } else {
+            ARITH_FLAGS
+        };
         mov32(a, 9, clear);
         dynasm!(a ; .arch aarch64
             ; bic w3, w27, w9
@@ -673,10 +801,14 @@ mod codegen {
             0 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #11, #1),
             1 => dynasm!(a ; .arch aarch64 ; and w0, w27, #1),
             2 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #6, #1),
-            3 => dynasm!(a ; .arch aarch64 ; and w0, w27, #1 ; ubfx w1, w27, #6, #1 ; orr w0, w0, w1),
+            3 => {
+                dynasm!(a ; .arch aarch64 ; and w0, w27, #1 ; ubfx w1, w27, #6, #1 ; orr w0, w0, w1)
+            }
             4 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #7, #1),
             5 => dynasm!(a ; .arch aarch64 ; ubfx w0, w27, #2, #1),
-            6 => dynasm!(a ; .arch aarch64 ; ubfx w1, w27, #7, #1 ; ubfx w2, w27, #11, #1 ; eor w0, w1, w2),
+            6 => {
+                dynasm!(a ; .arch aarch64 ; ubfx w1, w27, #7, #1 ; ubfx w2, w27, #11, #1 ; eor w0, w1, w2)
+            }
             _ => dynasm!(a ; .arch aarch64
                 ; ubfx w1, w27, #7, #1 ; ubfx w2, w27, #11, #1 ; eor w0, w1, w2
                 ; ubfx w1, w27, #6, #1 ; orr w0, w0, w1),
@@ -691,7 +823,12 @@ mod codegen {
         match rm {
             Ea::Reg(r) if r < 4 => dynasm!(a ; .arch aarch64 ; uxtb W(dst), W(g(r))),
             Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; ubfx W(dst), W(g(r - 4)), #8, #8),
-            Ea::Mem { base, index, scale, disp } => {
+            Ea::Mem {
+                base,
+                index,
+                scale,
+                disp,
+            } => {
                 ea(a, base, index, scale, disp);
                 load(a, 1, dst, slow);
             }
@@ -793,8 +930,12 @@ mod codegen {
                 ; lsr w7, w2, #31
                 ; eor w7, w7, w4
             ),
-            5 => dynasm!(a ; .arch aarch64 ; lsr w2, w1, w12 ; lsr w4, w1, w13 ; and w4, w4, #1 ; lsr w7, w1, #31),
-            _ => dynasm!(a ; .arch aarch64 ; asr w2, w1, w12 ; lsr w4, w1, w13 ; and w4, w4, #1 ; movz w7, #0),
+            5 => {
+                dynasm!(a ; .arch aarch64 ; lsr w2, w1, w12 ; lsr w4, w1, w13 ; and w4, w4, #1 ; lsr w7, w1, #31)
+            }
+            _ => {
+                dynasm!(a ; .arch aarch64 ; asr w2, w1, w12 ; lsr w4, w1, w13 ; and w4, w4, #1 ; movz w7, #0)
+            }
         }
         dynasm!(a ; .arch aarch64 ; cmp w2, #0 ; cset w5, eq ; lsr w6, w2, #31);
         parity(a, false);
@@ -828,7 +969,12 @@ mod codegen {
     fn read_rm(a: &mut Asm, rm: Ea, dst: u8, slow: DynamicLabel) {
         match rm {
             Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(dst), W(g(r))),
-            Ea::Mem { base, index, scale, disp } => {
+            Ea::Mem {
+                base,
+                index,
+                scale,
+                disp,
+            } => {
                 ea(a, base, index, scale, disp);
                 load(a, 4, dst, slow);
             }
@@ -869,24 +1015,48 @@ mod codegen {
             }
             Dop::MovRmR { rm, reg, bits: 32 } => match rm {
                 Ea::Reg(r) => dynasm!(a ; .arch aarch64 ; mov W(g(r)), W(g(reg))),
-                Ea::Mem { base, index, scale, disp } => {
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                } => {
                     ea(a, base, index, scale, disp);
                     store32(a, g(reg), slow);
                 }
             },
             Dop::MovRmI { rm, imm } => match rm {
                 Ea::Reg(r) => mov32(a, g(r), imm),
-                Ea::Mem { base, index, scale, disp } => {
+                Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                } => {
                     ea(a, base, index, scale, disp);
                     mov32(a, 1, imm);
                     store32(a, 1, slow);
                 }
             },
-            Dop::Lea { reg, ea: Ea::Mem { base, index, scale, disp } } => {
+            Dop::Lea {
+                reg,
+                ea:
+                    Ea::Mem {
+                        base,
+                        index,
+                        scale,
+                        disp,
+                    },
+            } => {
                 ea(a, base, index, scale, disp);
                 dynasm!(a ; .arch aarch64 ; mov W(g(reg)), w0);
             }
-            Dop::AluRRm { op: o, reg, rm, bits: 32 } => {
+            Dop::AluRRm {
+                op: o,
+                reg,
+                rm,
+                bits: 32,
+            } => {
                 read_rm(a, rm, 4, slow);
                 dynasm!(a ; .arch aarch64 ; mov w1, W(g(reg)));
                 let borrow = alu(a, o).unwrap();
@@ -896,9 +1066,19 @@ mod codegen {
                 }
                 dynasm!(a ; .arch aarch64 ; mov w27, w3);
             }
-            Dop::AluRmR { op: o, rm, reg, bits: 32 } => alu_rm(a, o, rm, AluSrc::Reg(reg), false, slow),
+            Dop::AluRmR {
+                op: o,
+                rm,
+                reg,
+                bits: 32,
+            } => alu_rm(a, o, rm, AluSrc::Reg(reg), false, slow),
             Dop::Test { rm, reg, bits: 32 } => alu_rm(a, 4, rm, AluSrc::Reg(reg), true, slow),
-            Dop::AluRmI { op: o, rm, imm, bits: 32 } => alu_rm(a, o, rm, AluSrc::Imm(imm), false, slow),
+            Dop::AluRmI {
+                op: o,
+                rm,
+                imm,
+                bits: 32,
+            } => alu_rm(a, o, rm, AluSrc::Imm(imm), false, slow),
             Dop::TestI { rm, imm, bits: 32 } => alu_rm(a, 4, rm, AluSrc::Imm(imm), true, slow),
             Dop::IncDec { rm, dec } => {
                 read_rm(a, rm, 1, slow);
@@ -937,7 +1117,12 @@ mod codegen {
                 load(a, 4, 1, slow);
                 dynasm!(a ; .arch aarch64 ; mov w2, W(g(EBP)) ; add w2, w2, #4 ; mov W(g(ESP)), w2 ; mov W(g(EBP)), w1);
             }
-            Dop::Movx { reg, rm, bits, signed } => {
+            Dop::Movx {
+                reg,
+                rm,
+                bits,
+                signed,
+            } => {
                 match rm {
                     Ea::Reg(r) => {
                         if bits == 16 {
@@ -948,7 +1133,12 @@ mod codegen {
                             dynasm!(a ; .arch aarch64 ; ubfx w1, W(g(r - 4)), #8, #8);
                         }
                     }
-                    Ea::Mem { base, index, scale, disp } => {
+                    Ea::Mem {
+                        base,
+                        index,
+                        scale,
+                        disp,
+                    } => {
                         ea(a, base, index, scale, disp);
                         load(a, bits as u32 / 8, 1, slow);
                     }
@@ -967,19 +1157,50 @@ mod codegen {
                 write8(a, Ea::Reg(reg), 1, slow);
             }
             Dop::MovRmR { rm, reg, bits: 8 } => {
-                if let Ea::Mem { base, index, scale, disp } = rm {
+                if let Ea::Mem {
+                    base,
+                    index,
+                    scale,
+                    disp,
+                } = rm
+                {
                     ea(a, base, index, scale, disp);
                 }
                 read8(a, Ea::Reg(reg), 1, slow);
                 write8(a, rm, 1, slow);
             }
-            Dop::AluRmR { op: o, rm, reg, bits: 8 } if o != 2 && o != 3 => alu8(a, o, rm, AluSrc::Reg(reg), false, slow),
-            Dop::AluRmI { op: o, rm, imm, bits: 8 } if o != 2 && o != 3 => alu8(a, o, rm, AluSrc::Imm(imm), false, slow),
+            Dop::AluRmR {
+                op: o,
+                rm,
+                reg,
+                bits: 8,
+            } if o != 2 && o != 3 => alu8(a, o, rm, AluSrc::Reg(reg), false, slow),
+            Dop::AluRmI {
+                op: o,
+                rm,
+                imm,
+                bits: 8,
+            } if o != 2 && o != 3 => alu8(a, o, rm, AluSrc::Imm(imm), false, slow),
             Dop::Test { rm, reg, bits: 8 } => alu8(a, 4, rm, AluSrc::Reg(reg), true, slow),
             Dop::TestI { rm, imm, bits: 8 } => alu8(a, 4, rm, AluSrc::Imm(imm), true, slow),
-            Dop::AluRRm { op: o, reg, rm, bits: 8 } if o != 2 && o != 3 => alu8_reg(a, o, reg, rm, slow),
-            Dop::Shift { op: o @ (4..=7), rm, count, by_cl: false } if count & 31 != 0 => shift_imm(a, o, rm, count as u32 & 31, slow),
-            Dop::Shift { op: o @ (4..=7), rm, by_cl: true, .. } => shift_cl(a, o, rm, slow),
+            Dop::AluRRm {
+                op: o,
+                reg,
+                rm,
+                bits: 8,
+            } if o != 2 && o != 3 => alu8_reg(a, o, reg, rm, slow),
+            Dop::Shift {
+                op: o @ (4..=7),
+                rm,
+                count,
+                by_cl: false,
+            } if count & 31 != 0 => shift_imm(a, o, rm, count as u32 & 31, slow),
+            Dop::Shift {
+                op: o @ (4..=7),
+                rm,
+                by_cl: true,
+                ..
+            } => shift_cl(a, o, rm, slow),
             Dop::Imul { reg, rm } => {
                 read_rm(a, rm, 1, slow);
                 dynasm!(a ; .arch aarch64 ; mov w4, W(g(reg)));
@@ -1040,7 +1261,10 @@ mod codegen {
         let mut scratch = Asm::new(0);
         let (slow, _) = (scratch.new_dynamic_label(), exit);
         let scratch_exit = scratch.new_dynamic_label();
-        let native_ok: Vec<bool> = ops.iter().map(|op| native(&mut scratch, op, slow, scratch_exit)).collect();
+        let native_ok: Vec<bool> = ops
+            .iter()
+            .map(|op| native(&mut scratch, op, slow, scratch_exit))
+            .collect();
         let mut need = vec![true; ops.len()];
         let mut live = true;
         for (i, op) in ops.iter().enumerate().rev() {
@@ -1049,10 +1273,16 @@ mod codegen {
                 (true, false)
             } else {
                 match op.op {
-                    Dop::AluRmR { op: o, .. } | Dop::AluRRm { op: o, .. } | Dop::AluRmI { op: o, .. } => (o == 2 || o == 3, true),
+                    Dop::AluRmR { op: o, .. }
+                    | Dop::AluRRm { op: o, .. }
+                    | Dop::AluRmI { op: o, .. } => (o == 2 || o == 3, true),
                     Dop::Test { .. } | Dop::TestI { .. } => (false, true),
                     Dop::Shift { by_cl: false, .. } => (false, true),
-                    Dop::Shift { .. } | Dop::IncDec { .. } | Dop::Imul { .. } | Dop::ImulI { .. } | Dop::Jcc { .. } => (true, false),
+                    Dop::Shift { .. }
+                    | Dop::IncDec { .. }
+                    | Dop::Imul { .. }
+                    | Dop::ImulI { .. }
+                    | Dop::Jcc { .. } => (true, false),
                     _ => (false, false),
                 }
             };
@@ -1093,7 +1323,15 @@ mod codegen {
             let slow = a.new_dynamic_label();
             let after = a.new_dynamic_label();
             let count = i as u64 + 1;
-            let transfer = matches!(op.op, Dop::Jcc { .. } | Dop::Jmp(_) | Dop::Call(_) | Dop::Ret(_) | Dop::CallInd(_) | Dop::JmpInd(_));
+            let transfer = matches!(
+                op.op,
+                Dop::Jcc { .. }
+                    | Dop::Jmp(_)
+                    | Dop::Call(_)
+                    | Dop::Ret(_)
+                    | Dop::CallInd(_)
+                    | Dop::JmpInd(_)
+            );
             if transfer {
                 // The exit reads this block's instruction count from x13.
                 mov64(&mut a, 13, count);
@@ -1106,7 +1344,15 @@ mod codegen {
             }
             dynasm!(a ; .arch aarch64 ; =>after);
             slows.push((slow, after, op as *const BlockOp, count));
-            if matches!(op.op, Dop::Jcc { .. } | Dop::Jmp(_) | Dop::Call(_) | Dop::Ret(_) | Dop::CallInd(_) | Dop::JmpInd(_)) {
+            if matches!(
+                op.op,
+                Dop::Jcc { .. }
+                    | Dop::Jmp(_)
+                    | Dop::Call(_)
+                    | Dop::Ret(_)
+                    | Dop::CallInd(_)
+                    | Dop::JmpInd(_)
+            ) {
                 ended = true;
                 // If the transfer went through the slow path it has left (see below); the
                 // native path has already jumped to `exit`.

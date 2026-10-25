@@ -200,12 +200,12 @@ pub fn sys_color(index: u32) -> u32 {
     match index {
         1 => DESKTOP_COLOR,
         2 => CAPTION_COLOR,
-        5 | 8 => 0xFFFFFF, // WINDOW, WINDOWTEXT is below
-        6 => 0x000000,     // WINDOWFRAME
-        7 | 18 => 0x000000, // MENUTEXT, BTNTEXT
+        5 | 8 => 0xFFFFFF,       // WINDOW, WINDOWTEXT is below
+        6 => 0x000000,           // WINDOWFRAME
+        7 | 18 => 0x000000,      // MENUTEXT, BTNTEXT
         15 | 4 | 22 => BTN_FACE, // BTNFACE, MENU, BTNSHADOW area
-        16 => 0x808080,    // BTNSHADOW
-        20 => 0xFFFFFF,    // BTNHILIGHT
+        16 => 0x808080,          // BTNSHADOW
+        20 => 0xFFFFFF,          // BTNHILIGHT
         _ => BTN_FACE,
     }
 }
@@ -249,12 +249,45 @@ impl WindowManager {
             (DKGRAY_BRUSH, 0x404040),
             (BLACK_BRUSH, 0),
         ] {
-            gdi.insert(h, Gdi::Brush { color: c, null: false });
+            gdi.insert(
+                h,
+                Gdi::Brush {
+                    color: c,
+                    null: false,
+                },
+            );
         }
-        gdi.insert(NULL_BRUSH, Gdi::Brush { color: 0, null: true });
-        gdi.insert(WHITE_PEN, Gdi::Pen { color: 0xFFFFFF, width: 1, null: false });
-        gdi.insert(BLACK_PEN, Gdi::Pen { color: 0, width: 1, null: false });
-        gdi.insert(NULL_PEN, Gdi::Pen { color: 0, width: 1, null: true });
+        gdi.insert(
+            NULL_BRUSH,
+            Gdi::Brush {
+                color: 0,
+                null: true,
+            },
+        );
+        gdi.insert(
+            WHITE_PEN,
+            Gdi::Pen {
+                color: 0xFFFFFF,
+                width: 1,
+                null: false,
+            },
+        );
+        gdi.insert(
+            BLACK_PEN,
+            Gdi::Pen {
+                color: 0,
+                width: 1,
+                null: false,
+            },
+        );
+        gdi.insert(
+            NULL_PEN,
+            Gdi::Pen {
+                color: 0,
+                width: 1,
+                null: true,
+            },
+        );
         gdi.insert(FONT, Gdi::Font { px: 13 });
         let mut desktop = Framebuffer::new(DESKTOP_W, DESKTOP_H);
         desktop.fill_rect(0, 0, DESKTOP_W, DESKTOP_H, DESKTOP_COLOR);
@@ -327,7 +360,8 @@ impl WindowManager {
     pub fn bounds(&self) -> Option<(i32, i32, u32, u32)> {
         let mut it = self.windows.iter().filter(|w| w.parent == 0 && w.visible);
         let first = it.next()?;
-        let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x + first.w, first.y + first.h);
+        let (mut x0, mut y0, mut x1, mut y1) =
+            (first.x, first.y, first.x + first.w, first.y + first.h);
         for w in it {
             x0 = x0.min(w.x);
             y0 = y0.min(w.y);
@@ -345,7 +379,9 @@ impl WindowManager {
     pub fn content_bounds(&self) -> Option<(i32, i32, u32, u32)> {
         let mut acc: Option<(i32, i32, i32, i32)> = None;
         for w in self.windows.iter().filter(|w| w.parent == 0 && w.visible) {
-            let (Some((ox, oy)), Some((cw, ch))) = (self.client_origin(w.hwnd), self.client_size(w.hwnd)) else {
+            let (Some((ox, oy)), Some((cw, ch))) =
+                (self.client_origin(w.hwnd), self.client_size(w.hwnd))
+            else {
                 continue;
             };
             let top = oy - if w.menu != 0 { MENU_H } else { 0 };
@@ -371,7 +407,11 @@ impl WindowManager {
     pub fn client_origin(&self, hwnd: u32) -> Option<(i32, i32)> {
         let w = self.window(hwnd)?;
         let (b, c) = Self::chrome(w);
-        let (px, py) = if w.parent != 0 { self.client_origin(w.parent)? } else { (0, 0) };
+        let (px, py) = if w.parent != 0 {
+            self.client_origin(w.parent)?
+        } else {
+            (0, 0)
+        };
         Some((px + w.x + b, py + w.y + b + c))
     }
 
@@ -405,7 +445,11 @@ impl WindowManager {
             Some(c) => (c.wndproc, Some(c.bg)),
             None => (0, None),
         };
-        let bg = class_bg.unwrap_or(if class.eq_ignore_ascii_case("EDIT") { 0xFFFFFF } else { BTN_FACE });
+        let bg = class_bg.unwrap_or(if class.eq_ignore_ascii_case("EDIT") {
+            0xFFFFFF
+        } else {
+            BTN_FACE
+        });
         let hwnd = self.next_hwnd;
         self.next_hwnd += 0x10;
         let mut win = Window {
@@ -442,7 +486,9 @@ impl WindowManager {
 
     /// Resize a window's outer rectangle, keeping what it has painted so far.
     pub fn set_geometry(&mut self, hwnd: u32, x: i32, y: i32, w: i32, h: i32) {
-        let Some(win) = self.window_mut(hwnd) else { return };
+        let Some(win) = self.window_mut(hwnd) else {
+            return;
+        };
         win.x = x;
         win.y = y;
         let resized = (win.w, win.h) != (w, h);
@@ -460,7 +506,11 @@ impl WindowManager {
     }
 
     pub fn children_of(&self, hwnd: u32) -> Vec<u32> {
-        self.windows.iter().filter(|w| w.parent == hwnd).map(|w| w.hwnd).collect()
+        self.windows
+            .iter()
+            .filter(|w| w.parent == hwnd)
+            .map(|w| w.hwnd)
+            .collect()
     }
 
     /// Remove a window and all its descendants; returns every removed handle.
@@ -495,41 +545,79 @@ impl WindowManager {
 
     pub fn post(&mut self, hwnd: u32, message: u32, wparam: u32, lparam: u32) {
         let time = self.now_ms as u32;
-        self.queue.push_back(Msg { hwnd, message, wparam, lparam, time });
+        self.queue.push_back(Msg {
+            hwnd,
+            message,
+            wparam,
+            lparam,
+            time,
+        });
     }
 
     /// The next message the app should see, in Windows' priority order: posted messages,
     /// then WM_QUIT, then due timers, then WM_PAINT. Removes it if `remove`.
     pub fn next_message(&mut self, remove: bool) -> Option<Msg> {
-        if let Some(m) = if remove { self.queue.pop_front() } else { self.queue.front().copied() } {
+        if let Some(m) = if remove {
+            self.queue.pop_front()
+        } else {
+            self.queue.front().copied()
+        } {
             return Some(m);
         }
         if let Some(code) = self.quit {
             if remove {
                 self.quit = None;
             }
-            return Some(Msg { hwnd: 0, message: WM_QUIT, wparam: code, lparam: 0, time: self.now_ms as u32 });
+            return Some(Msg {
+                hwnd: 0,
+                message: WM_QUIT,
+                wparam: code,
+                lparam: 0,
+                time: self.now_ms as u32,
+            });
         }
         let now = self.now_ms;
         if let Some(t) = self.timers.iter_mut().find(|t| t.due <= now) {
             if remove {
                 t.due = now + t.interval;
             }
-            return Some(Msg { hwnd: t.hwnd, message: WM_TIMER, wparam: t.id, lparam: t.callback, time: now as u32 });
+            return Some(Msg {
+                hwnd: t.hwnd,
+                message: WM_TIMER,
+                wparam: t.id,
+                lparam: t.callback,
+                time: now as u32,
+            });
         }
         let hwnd = self
             .windows
             .iter()
             .find(|w| w.needs_paint && self.is_visible(w.hwnd))
             .map(|w| w.hwnd)?;
-        Some(Msg { hwnd, message: WM_PAINT, wparam: 0, lparam: 0, time: now as u32 })
+        Some(Msg {
+            hwnd,
+            message: WM_PAINT,
+            wparam: 0,
+            lparam: 0,
+            time: now as u32,
+        })
     }
 
     pub fn set_timer(&mut self, hwnd: u32, id: u32, interval: u32, callback: u32) -> u32 {
-        let id = if hwnd == 0 && id == 0 { 0x1000 + self.timers.len() as u32 } else { id };
+        let id = if hwnd == 0 && id == 0 {
+            0x1000 + self.timers.len() as u32
+        } else {
+            id
+        };
         self.timers.retain(|t| !(t.hwnd == hwnd && t.id == id));
         let interval = interval.max(10) as u64;
-        self.timers.push(Timer { hwnd, id, interval, due: self.now_ms + interval, callback });
+        self.timers.push(Timer {
+            hwnd,
+            id,
+            interval,
+            due: self.now_ms + interval,
+            callback,
+        });
         id
     }
 
@@ -548,7 +636,9 @@ impl WindowManager {
             if !self.is_visible(w.hwnd) {
                 continue;
             }
-            let (Some((ox, oy)), Some((cw, ch))) = (self.client_origin(w.hwnd), self.client_size(w.hwnd)) else {
+            let (Some((ox, oy)), Some((cw, ch))) =
+                (self.client_origin(w.hwnd), self.client_size(w.hwnd))
+            else {
                 continue;
             };
             if x >= ox && y >= oy && x < ox + cw && y < oy + ch {
@@ -566,7 +656,12 @@ impl WindowManager {
         if message == WM_LBUTTONDOWN && self.handle_menu_click(x, y) {
             return;
         }
-        let target = if self.capture != 0 { self.client_origin(self.capture).map(|(ox, oy)| (self.capture, x - ox, y - oy)) } else { self.hit_test(x, y) };
+        let target = if self.capture != 0 {
+            self.client_origin(self.capture)
+                .map(|(ox, oy)| (self.capture, x - ox, y - oy))
+        } else {
+            self.hit_test(x, y)
+        };
         if let Some((hwnd, cx, cy)) = target {
             if message == WM_LBUTTONDOWN {
                 self.focus = hwnd;
@@ -574,7 +669,9 @@ impl WindowManager {
             }
             if message == WM_LBUTTONUP {
                 // Built-in buttons turn a click into WM_COMMAND(BN_CLICKED) for their parent.
-                if let Some(w) = self.window(hwnd).filter(|w| w.wndproc == 0 && w.enabled && w.class.eq_ignore_ascii_case("BUTTON")) {
+                if let Some(w) = self.window(hwnd).filter(|w| {
+                    w.wndproc == 0 && w.enabled && w.class.eq_ignore_ascii_case("BUTTON")
+                }) {
                     let (parent, id) = (w.parent, w.id);
                     self.click_button(hwnd);
                     if parent != 0 {
@@ -583,7 +680,12 @@ impl WindowManager {
                 }
             }
             let wparam = (message == WM_LBUTTONDOWN) as u32; // MK_LBUTTON
-            self.post(hwnd, message, wparam, ((cy as u32 & 0xffff) << 16) | (cx as u32 & 0xffff));
+            self.post(
+                hwnd,
+                message,
+                wparam,
+                ((cy as u32 & 0xffff) << 16) | (cx as u32 & 0xffff),
+            );
         }
     }
 
@@ -597,7 +699,10 @@ impl WindowManager {
         let now = self.now_ms;
         let is_double = wants_dbl
             && self.last_click.is_some_and(|(t, lx, ly, lh)| {
-                lh == hwnd && now.saturating_sub(t) <= DBLCLK_MS && (x - lx).abs() <= DBLCLK_PX && (y - ly).abs() <= DBLCLK_PX
+                lh == hwnd
+                    && now.saturating_sub(t) <= DBLCLK_MS
+                    && (x - lx).abs() <= DBLCLK_PX
+                    && (y - ly).abs() <= DBLCLK_PX
             });
         if is_double {
             self.last_click = None; // a third press starts over
@@ -637,14 +742,34 @@ impl WindowManager {
     pub fn radio_group(&self, parent: u32, hwnd: u32) -> Vec<u32> {
         const WS_GROUP: u32 = 0x0002_0000;
         let siblings: Vec<&Window> = self.windows.iter().filter(|w| w.parent == parent).collect();
-        let Some(pos) = siblings.iter().position(|w| w.hwnd == hwnd) else { return vec![] };
-        let start = (0..=pos).rev().find(|&i| siblings[i].style & WS_GROUP != 0).unwrap_or(0);
-        let end = (pos + 1..siblings.len()).find(|&i| siblings[i].style & WS_GROUP != 0).unwrap_or(siblings.len());
-        siblings[start..end].iter().filter(|w| matches!(w.style & 0xF, 4 | 9)).map(|w| w.hwnd).collect()
+        let Some(pos) = siblings.iter().position(|w| w.hwnd == hwnd) else {
+            return vec![];
+        };
+        let start = (0..=pos)
+            .rev()
+            .find(|&i| siblings[i].style & WS_GROUP != 0)
+            .unwrap_or(0);
+        let end = (pos + 1..siblings.len())
+            .find(|&i| siblings[i].style & WS_GROUP != 0)
+            .unwrap_or(siblings.len());
+        siblings[start..end]
+            .iter()
+            .filter(|w| matches!(w.style & 0xF, 4 | 9))
+            .map(|w| w.hwnd)
+            .collect()
     }
 
     pub fn post_char(&mut self, ch: u32) {
-        let target = if self.focus != 0 { self.focus } else { self.windows.iter().rev().find(|w| w.parent == 0 && w.visible).map(|w| w.hwnd).unwrap_or(0) };
+        let target = if self.focus != 0 {
+            self.focus
+        } else {
+            self.windows
+                .iter()
+                .rev()
+                .find(|w| w.parent == 0 && w.visible)
+                .map(|w| w.hwnd)
+                .unwrap_or(0)
+        };
         if target != 0 {
             self.post(target, WM_CHAR, ch, 1);
         }
@@ -652,7 +777,13 @@ impl WindowManager {
 
     /// The host window's close button: ask the topmost top-level window to close.
     pub fn request_close(&mut self) {
-        if let Some(hwnd) = self.windows.iter().rev().find(|w| w.parent == 0 && w.visible).map(|w| w.hwnd) {
+        if let Some(hwnd) = self
+            .windows
+            .iter()
+            .rev()
+            .find(|w| w.parent == 0 && w.visible)
+            .map(|w| w.hwnd)
+        {
             self.post(hwnd, WM_CLOSE, 0, 0);
         } else {
             self.quit = Some(0);
@@ -672,8 +803,17 @@ impl WindowManager {
     pub fn build_menu(&mut self, items: &[ParsedItem]) -> u32 {
         let h = self.new_menu();
         for it in items {
-            let submenu = if it.children.is_empty() { 0 } else { self.build_menu(&it.children) };
-            let item = MenuItem { text: it.text.clone(), id: it.id, flags: it.flags, submenu };
+            let submenu = if it.children.is_empty() {
+                0
+            } else {
+                self.build_menu(&it.children)
+            };
+            let item = MenuItem {
+                text: it.text.clone(),
+                id: it.id,
+                flags: it.flags,
+                submenu,
+            };
             self.menus.get_mut(&h).unwrap().items.push(item);
         }
         h
@@ -713,7 +853,9 @@ impl WindowManager {
         }
         let mut stack = vec![root];
         while let Some(h) = stack.pop() {
-            let Some(m) = self.menus.get(&h) else { continue };
+            let Some(m) = self.menus.get(&h) else {
+                continue;
+            };
             for (i, it) in m.items.iter().enumerate() {
                 if it.submenu != 0 {
                     stack.push(it.submenu);
@@ -744,23 +886,24 @@ impl WindowManager {
             if let Some(bar) = bar {
                 let layout = bar_layout(font, bar);
                 if let Some(item) = bar.items.get(index)
-                    && let Some(sub) = self.menus.get(&item.submenu) {
-                        let (pw, rows) = popup_layout(font, sub);
-                        let (px, py) = (ox + layout[index].0, oy);
-                        if x >= px && x < px + pw {
-                            for (i, (y0, y1)) in rows.iter().enumerate() {
-                                if y >= py + y0 && y < py + y1 {
-                                    let it = &sub.items[i];
-                                    if it.flags & (MF_GRAYED | MF_SEPARATOR) == 0 && it.submenu == 0 {
-                                        let id = it.id;
-                                        self.open_menu = None;
-                                        self.post(hwnd, WM_COMMAND, id, 0);
-                                    }
-                                    return true;
+                    && let Some(sub) = self.menus.get(&item.submenu)
+                {
+                    let (pw, rows) = popup_layout(font, sub);
+                    let (px, py) = (ox + layout[index].0, oy);
+                    if x >= px && x < px + pw {
+                        for (i, (y0, y1)) in rows.iter().enumerate() {
+                            if y >= py + y0 && y < py + y1 {
+                                let it = &sub.items[i];
+                                if it.flags & (MF_GRAYED | MF_SEPARATOR) == 0 && it.submenu == 0 {
+                                    let id = it.id;
+                                    self.open_menu = None;
+                                    self.post(hwnd, WM_COMMAND, id, 0);
                                 }
+                                return true;
                             }
                         }
                     }
+                }
                 // Clicking another bar title switches; anywhere else just closes.
                 let bar_y = oy - MENU_H;
                 if y >= bar_y && y < oy {
@@ -786,7 +929,10 @@ impl WindowManager {
                     return None;
                 }
                 let layout = bar_layout(font, self.menus.get(&w.menu)?);
-                layout.iter().position(|(x0, x1)| x >= ox + x0 && x < ox + x1).map(|i| (w.hwnd, i))
+                layout
+                    .iter()
+                    .position(|(x0, x1)| x >= ox + x0 && x < ox + x1)
+                    .map(|i| (w.hwnd, i))
             })
             .collect();
         match hits.last() {
@@ -809,7 +955,11 @@ impl WindowManager {
             }
             Some(_) => {
                 // A bar item with no dropdown acts as a command.
-                let id = self.window(hwnd).and_then(|w| self.menus.get(&w.menu)).map(|m| m.items[index].id).unwrap_or(0);
+                let id = self
+                    .window(hwnd)
+                    .and_then(|w| self.menus.get(&w.menu))
+                    .map(|m| m.items[index].id)
+                    .unwrap_or(0);
                 self.open_menu = None;
                 self.post(hwnd, WM_COMMAND, id, 0);
                 true
@@ -827,7 +977,12 @@ impl WindowManager {
         let target = if self.focus != 0 {
             self.focus
         } else {
-            self.windows.iter().rev().find(|w| w.parent == 0 && w.visible).map(|w| w.hwnd).unwrap_or(0)
+            self.windows
+                .iter()
+                .rev()
+                .find(|w| w.parent == 0 && w.visible)
+                .map(|w| w.hwnd)
+                .unwrap_or(0)
         };
         if target != 0 {
             self.post(target, if down { WM_KEYDOWN } else { WM_KEYUP }, vk, 1);
@@ -865,7 +1020,11 @@ impl WindowManager {
     }
 
     pub fn new_dc(&mut self, target: Target) -> u32 {
-        let bitmap = if target == Target::Mem { self.add_gdi(Gdi::Bitmap(Framebuffer::new(1, 1))) } else { 0 };
+        let bitmap = if target == Target::Mem {
+            self.add_gdi(Gdi::Bitmap(Framebuffer::new(1, 1)))
+        } else {
+            0
+        };
         self.add_gdi(Gdi::Dc(Dc {
             target,
             text_color: 0,
@@ -909,7 +1068,9 @@ impl WindowManager {
 
     pub fn measure_text(&mut self, hdc: u32, text: &str) -> (u32, u32) {
         let px = self.dc(hdc).map(|d| self.font_px(d.font)).unwrap_or(13);
-        self.font.get_or_insert_with(Font::load_system).measure(text, px)
+        self.font
+            .get_or_insert_with(Font::load_system)
+            .measure(text, px)
     }
 
     /// Run `f` with the DC's drawing surface and a snapshot of its state.
@@ -941,7 +1102,9 @@ impl WindowManager {
 
     pub fn fill_rect_dc(&mut self, hdc: u32, rect: (i32, i32, i32, i32), color: u32) {
         let (l, t, r, b) = rect;
-        self.with_surface(hdc, |fb, _, _, _| fb.fill_rect(l, t, (r - l).max(0) as u32, (b - t).max(0) as u32, color));
+        self.with_surface(hdc, |fb, _, _, _| {
+            fb.fill_rect(l, t, (r - l).max(0) as u32, (b - t).max(0) as u32, color)
+        });
     }
 
     /// Fill with the DC's current brush (PatBlt PATCOPY).
@@ -1007,16 +1170,37 @@ impl WindowManager {
     }
 
     pub fn get_pixel(&mut self, hdc: u32, x: i32, y: i32) -> Option<u32> {
-        self.with_surface(hdc, |fb, _, _, _| if x >= 0 && y >= 0 { fb.get_pixel(x as u32, y as u32) } else { None }).flatten()
+        self.with_surface(hdc, |fb, _, _, _| {
+            if x >= 0 && y >= 0 {
+                fb.get_pixel(x as u32, y as u32)
+            } else {
+                None
+            }
+        })
+        .flatten()
     }
 
     /// StretchBlt: scale the source rectangle to the destination rectangle (SRCCOPY).
     #[allow(clippy::too_many_arguments)]
-    pub fn stretch_blt(&mut self, dst: u32, dx: i32, dy: i32, dw: i32, dh: i32, src: u32, sx: i32, sy: i32, sw: i32, sh: i32) -> bool {
+    pub fn stretch_blt(
+        &mut self,
+        dst: u32,
+        dx: i32,
+        dy: i32,
+        dw: i32,
+        dh: i32,
+        src: u32,
+        sx: i32,
+        sy: i32,
+        sw: i32,
+        sh: i32,
+    ) -> bool {
         if dw == 0 || dh == 0 || sw == 0 || sh == 0 {
             return false;
         }
-        let Some(patch) = self.with_surface(src, |fb, _, _, _| fb.crop(sx, sy, sw.unsigned_abs(), sh.unsigned_abs())) else {
+        let Some(patch) = self.with_surface(src, |fb, _, _, _| {
+            fb.crop(sx, sy, sw.unsigned_abs(), sh.unsigned_abs())
+        }) else {
             return false;
         };
         let scaled = patch.scaled(dw.unsigned_abs(), dh.unsigned_abs());
@@ -1026,20 +1210,38 @@ impl WindowManager {
         let mut out = Framebuffer::new(w, h);
         for y in 0..h {
             for x in 0..w {
-                let (fx, fy) = (if flip_x { w - 1 - x } else { x }, if flip_y { h - 1 - y } else { y });
+                let (fx, fy) = (
+                    if flip_x { w - 1 - x } else { x },
+                    if flip_y { h - 1 - y } else { y },
+                );
                 out.pixels[(y * w + x) as usize] = scaled.pixels[(fy * w + fx) as usize];
             }
         }
-        let (ox, oy) = (if dw < 0 { dx + dw } else { dx }, if dh < 0 { dy + dh } else { dy });
-        self.with_surface(dst, |fb, _, _, _| fb.blit(&out, ox, oy)).is_some()
+        let (ox, oy) = (
+            if dw < 0 { dx + dw } else { dx },
+            if dh < 0 { dy + dh } else { dy },
+        );
+        self.with_surface(dst, |fb, _, _, _| fb.blit(&out, ox, oy))
+            .is_some()
     }
 
     /// Copy a rectangle from one DC to another (SRCCOPY).
-    pub fn bit_blt(&mut self, dst: u32, dx: i32, dy: i32, w: u32, h: u32, src: u32, sx: i32, sy: i32) -> bool {
+    pub fn bit_blt(
+        &mut self,
+        dst: u32,
+        dx: i32,
+        dy: i32,
+        w: u32,
+        h: u32,
+        src: u32,
+        sx: i32,
+        sy: i32,
+    ) -> bool {
         let Some(patch) = self.with_surface(src, |fb, _, _, _| fb.crop(sx, sy, w, h)) else {
             return false;
         };
-        self.with_surface(dst, |fb, _, _, _| fb.blit(&patch, dx, dy)).is_some()
+        self.with_surface(dst, |fb, _, _, _| fb.blit(&patch, dx, dy))
+            .is_some()
     }
 
     // ---- compositor ---------------------------------------------------------------------
@@ -1051,43 +1253,75 @@ impl WindowManager {
         for w in self.windows.iter_mut().filter(|w| w.wndproc == 0) {
             render_builtin(w, &font);
         }
-        self.desktop.fill_rect(0, 0, DESKTOP_W, DESKTOP_H, DESKTOP_COLOR);
+        self.desktop
+            .fill_rect(0, 0, DESKTOP_W, DESKTOP_H, DESKTOP_COLOR);
         let order: Vec<u32> = self.windows.iter().map(|w| w.hwnd).collect();
         for hwnd in order {
             if !self.is_visible(hwnd) {
                 continue;
             }
-            let Some((ox, oy)) = self.client_origin(hwnd) else { continue };
-            let Some(w) = self.windows.iter().find(|w| w.hwnd == hwnd) else { continue };
+            let Some((ox, oy)) = self.client_origin(hwnd) else {
+                continue;
+            };
+            let Some(w) = self.windows.iter().find(|w| w.hwnd == hwnd) else {
+                continue;
+            };
             if w.parent == 0 {
                 let (b, c) = Self::frame(w.style, false);
                 if b > 0 {
                     let frame_color = if c > 0 { BTN_FACE } else { 0 };
-                    self.desktop.fill_rect(w.x, w.y, w.w.max(0) as u32, w.h.max(0) as u32, frame_color);
+                    self.desktop.fill_rect(
+                        w.x,
+                        w.y,
+                        w.w.max(0) as u32,
+                        w.h.max(0) as u32,
+                        frame_color,
+                    );
                 }
                 if c > 0 {
-                    self.desktop.fill_rect(w.x + b, w.y + b, (w.w - 2 * b).max(0) as u32, c as u32, CAPTION_COLOR);
-                    font.draw(&mut self.desktop, w.x + b + 4, w.y + b + 2, &w.title, 12, 0xFFFFFF);
+                    self.desktop.fill_rect(
+                        w.x + b,
+                        w.y + b,
+                        (w.w - 2 * b).max(0) as u32,
+                        c as u32,
+                        CAPTION_COLOR,
+                    );
+                    font.draw(
+                        &mut self.desktop,
+                        w.x + b + 4,
+                        w.y + b + 2,
+                        &w.title,
+                        12,
+                        0xFFFFFF,
+                    );
                 }
             }
             self.desktop.blit(&w.surface, ox, oy);
-            if w.parent == 0 && w.menu != 0
-                && let Some(menu) = self.menus.get(&w.menu) {
-                    let open = self.open_menu.as_ref().filter(|o| o.hwnd == hwnd).map(|o| o.index);
-                    let cw = w.surface.width as i32;
-                    draw_menu_bar(&mut self.desktop, &font, menu, ox, oy - MENU_H, cw, open);
-                }
+            if w.parent == 0
+                && w.menu != 0
+                && let Some(menu) = self.menus.get(&w.menu)
+            {
+                let open = self
+                    .open_menu
+                    .as_ref()
+                    .filter(|o| o.hwnd == hwnd)
+                    .map(|o| o.index);
+                let cw = w.surface.width as i32;
+                draw_menu_bar(&mut self.desktop, &font, menu, ox, oy - MENU_H, cw, open);
+            }
         }
         if let Some(om) = &self.open_menu
-            && let (Some((ox, oy)), Some(w)) = (self.client_origin(om.hwnd), self.window(om.hwnd)) {
-                let bar = self.menus.get(&w.menu);
-                let item = bar.and_then(|b| b.items.get(om.index));
-                if let (Some(bar), Some(item)) = (bar, item)
-                    && let Some(sub) = self.menus.get(&item.submenu) {
-                        let x0 = bar_layout(&font, bar)[om.index].0;
-                        draw_popup(&mut self.desktop, &font, sub, ox + x0, oy);
-                    }
+            && let (Some((ox, oy)), Some(w)) = (self.client_origin(om.hwnd), self.window(om.hwnd))
+        {
+            let bar = self.menus.get(&w.menu);
+            let item = bar.and_then(|b| b.items.get(om.index));
+            if let (Some(bar), Some(item)) = (bar, item)
+                && let Some(sub) = self.menus.get(&item.submenu)
+            {
+                let x0 = bar_layout(&font, bar)[om.index].0;
+                draw_popup(&mut self.desktop, &font, sub, ox + x0, oy);
             }
+        }
         self.font = Some(font);
         &self.desktop
     }
@@ -1103,8 +1337,14 @@ pub struct ParsedItem {
 
 /// Parse an RT_MENU resource: classic MENUITEMTEMPLATE or extended MENUEX.
 pub fn parse_menu_template(b: &[u8]) -> Option<Vec<ParsedItem>> {
-    let u16_at = |o: usize| b.get(o..o + 2).map(|x| u16::from_le_bytes([x[0], x[1]]) as u32);
-    let u32_at = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
+    let u16_at = |o: usize| {
+        b.get(o..o + 2)
+            .map(|x| u16::from_le_bytes([x[0], x[1]]) as u32)
+    };
+    let u32_at = |o: usize| {
+        b.get(o..o + 4)
+            .map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))
+    };
     let wstr = |o: usize| -> Option<(String, usize)> {
         let mut units = Vec::new();
         let mut p = o;
@@ -1120,7 +1360,13 @@ pub fn parse_menu_template(b: &[u8]) -> Option<Vec<ParsedItem>> {
     let version = u16_at(0)?;
     let start = 4 + u16_at(2)? as usize;
     if version == 0 {
-        fn items(b: &[u8], mut p: usize, depth: u32, rd: &dyn Fn(usize) -> Option<u32>, ws: &dyn Fn(usize) -> Option<(String, usize)>) -> Option<(Vec<ParsedItem>, usize)> {
+        fn items(
+            b: &[u8],
+            mut p: usize,
+            depth: u32,
+            rd: &dyn Fn(usize) -> Option<u32>,
+            ws: &dyn Fn(usize) -> Option<(String, usize)>,
+        ) -> Option<(Vec<ParsedItem>, usize)> {
             let mut out = Vec::new();
             if depth > 16 {
                 return None;
@@ -1138,11 +1384,13 @@ pub fn parse_menu_template(b: &[u8]) -> Option<Vec<ParsedItem>> {
                     let (t, np) = ws(p + 2)?;
                     (text, children, p) = (t, Vec::new(), np);
                 }
-                let sep = flags & MF_SEPARATOR != 0 || (id == 0 && text.is_empty() && flags & MF_POPUP == 0);
+                let sep = flags & MF_SEPARATOR != 0
+                    || (id == 0 && text.is_empty() && flags & MF_POPUP == 0);
                 out.push(ParsedItem {
                     text,
                     id,
-                    flags: (flags & (MF_GRAYED | 2 | MF_CHECKED)) | if sep { MF_SEPARATOR } else { 0 },
+                    flags: (flags & (MF_GRAYED | 2 | MF_CHECKED))
+                        | if sep { MF_SEPARATOR } else { 0 },
                     children,
                 });
                 if flags & MF_END != 0 {
@@ -1154,8 +1402,14 @@ pub fn parse_menu_template(b: &[u8]) -> Option<Vec<ParsedItem>> {
     }
     // MENUEX
     fn ex_items(b: &[u8], mut p: usize, depth: u32) -> Option<(Vec<ParsedItem>, usize)> {
-        let rd32 = |o: usize| b.get(o..o + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]));
-        let rd16 = |o: usize| b.get(o..o + 2).map(|x| u16::from_le_bytes([x[0], x[1]]) as u32);
+        let rd32 = |o: usize| {
+            b.get(o..o + 4)
+                .map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))
+        };
+        let rd16 = |o: usize| {
+            b.get(o..o + 2)
+                .map(|x| u16::from_le_bytes([x[0], x[1]]) as u32)
+        };
         let mut out = Vec::new();
         if depth > 16 {
             return None;
@@ -1188,7 +1442,12 @@ pub fn parse_menu_template(b: &[u8]) -> Option<Vec<ParsedItem>> {
             if ty & MF_SEPARATOR != 0 {
                 flags |= MF_SEPARATOR;
             }
-            out.push(ParsedItem { text: String::from_utf16_lossy(&units), id, flags, children });
+            out.push(ParsedItem {
+                text: String::from_utf16_lossy(&units),
+                id,
+                flags,
+                children,
+            });
             if wflags & 0x80 != 0 {
                 return Some((out, p));
             }
@@ -1235,10 +1494,22 @@ pub fn popup_layout(font: &Font, menu: &Menu) -> (i32, Vec<(i32, i32)>) {
     (width, rows)
 }
 
-fn draw_menu_bar(fb: &mut Framebuffer, font: &Font, menu: &Menu, x: i32, y: i32, w: i32, open: Option<usize>) {
+fn draw_menu_bar(
+    fb: &mut Framebuffer,
+    font: &Font,
+    menu: &Menu,
+    x: i32,
+    y: i32,
+    w: i32,
+    open: Option<usize>,
+) {
     fb.fill_rect(x, y, w.max(0) as u32, MENU_H as u32, BTN_FACE);
     for (i, (it, (x0, x1))) in menu.items.iter().zip(bar_layout(font, menu)).enumerate() {
-        let (fg, bg) = if open == Some(i) { (0xFFFFFF, 0x0A246A) } else { (0, BTN_FACE) };
+        let (fg, bg) = if open == Some(i) {
+            (0xFFFFFF, 0x0A246A)
+        } else {
+            (0, BTN_FACE)
+        };
         fb.fill_rect(x + x0, y, (x1 - x0) as u32, MENU_H as u32, bg);
         font.draw(fb, x + x0 + 8, y + 2, &menu_label(&it.text).0, 12, fg);
     }
@@ -1254,7 +1525,11 @@ fn draw_popup(fb: &mut Framebuffer, font: &Font, menu: &Menu, x: i32, y: i32) {
             fb.fill_rect(x + 2, y + y0 + 3, (w - 4) as u32, 1, 0x808080);
             continue;
         }
-        let color = if it.flags & MF_GRAYED != 0 { 0x808080 } else { 0 };
+        let color = if it.flags & MF_GRAYED != 0 {
+            0x808080
+        } else {
+            0
+        };
         let (label, key) = menu_label(&it.text);
         font.draw(fb, x + 22, y + y0 + 2, &label, 12, color);
         if !key.is_empty() {
@@ -1312,7 +1587,10 @@ pub fn parse_dialog_template(b: &[u8]) -> Option<DlgTemplate> {
     }
     impl Cur<'_> {
         fn u16(&mut self) -> Option<u32> {
-            let v = self.b.get(self.p..self.p + 2).map(|x| u16::from_le_bytes([x[0], x[1]]) as u32)?;
+            let v = self
+                .b
+                .get(self.p..self.p + 2)
+                .map(|x| u16::from_le_bytes([x[0], x[1]]) as u32)?;
             self.p += 2;
             Some(v)
         }
@@ -1320,7 +1598,10 @@ pub fn parse_dialog_template(b: &[u8]) -> Option<DlgTemplate> {
             self.u16().map(|v| v as u16 as i16 as i32)
         }
         fn u32(&mut self) -> Option<u32> {
-            let v = self.b.get(self.p..self.p + 4).map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))?;
+            let v = self
+                .b
+                .get(self.p..self.p + 4)
+                .map(|x| u32::from_le_bytes([x[0], x[1], x[2], x[3]]))?;
             self.p += 4;
             Some(v)
         }
@@ -1339,7 +1620,10 @@ pub fn parse_dialog_template(b: &[u8]) -> Option<DlgTemplate> {
         }
         /// An ordinal (0xFFFF, id) or a string; ordinals/empties become `String`s via `atom`.
         fn name_or_ordinal(&mut self, atom: fn(u32) -> String) -> Option<String> {
-            let first = self.b.get(self.p..self.p + 2).map(|x| u16::from_le_bytes([x[0], x[1]]) as u32)?;
+            let first = self
+                .b
+                .get(self.p..self.p + 2)
+                .map(|x| u16::from_le_bytes([x[0], x[1]]) as u32)?;
             match first {
                 0 => {
                     self.p += 2;
@@ -1418,9 +1702,28 @@ pub fn parse_dialog_template(b: &[u8]) -> Option<DlgTemplate> {
         let text = c.name_or_ordinal(no_text)?;
         let extra = c.u16()?;
         c.p += extra as usize;
-        items.push(DlgItem { style: item.0, ex_style: item.1, x: item.2, y: item.3, cx: item.4, cy: item.5, id: item.6, class, title: text });
+        items.push(DlgItem {
+            style: item.0,
+            ex_style: item.1,
+            x: item.2,
+            y: item.3,
+            cx: item.4,
+            cy: item.5,
+            id: item.6,
+            class,
+            title: text,
+        });
     }
-    Some(DlgTemplate { style, ex_style, x, y, cx, cy, title, items })
+    Some(DlgTemplate {
+        style,
+        ex_style,
+        x,
+        y,
+        cx,
+        cy,
+        title,
+        items,
+    })
 }
 
 pub struct Resolved {
@@ -1470,16 +1773,31 @@ pub fn wrap_text(font: &Font, text: &str, px: u32, max_w: u32) -> Vec<String> {
 /// smaller (our font runs wider than the one the dialogs were laid out for); only then
 /// does it wrap.
 #[allow(clippy::too_many_arguments)]
-fn draw_wrapped(fb: &mut Framebuffer, font: &Font, text: &str, x: i32, width: u32, height: u32, centre_v: bool, color: u32) {
+fn draw_wrapped(
+    fb: &mut Framebuffer,
+    font: &Font,
+    text: &str,
+    x: i32,
+    width: u32,
+    height: u32,
+    centre_v: bool,
+    color: u32,
+) {
     let width = width.max(1);
-    let single = (CTRL_PX.saturating_sub(2)..=CTRL_PX).rev().find(|&px| font.measure(text, px).0 <= width);
+    let single = (CTRL_PX.saturating_sub(2)..=CTRL_PX)
+        .rev()
+        .find(|&px| font.measure(text, px).0 <= width);
     let (px, lines) = match single {
         Some(px) => (px, vec![text.to_string()]),
         None => (CTRL_PX - 1, wrap_text(font, text, CTRL_PX - 1, width)),
     };
     let line_h = font.measure("M", px).1 as i32;
     let total = line_h * lines.len() as i32;
-    let mut y = if centre_v { (height as i32 - total) / 2 } else { 0 };
+    let mut y = if centre_v {
+        (height as i32 - total) / 2
+    } else {
+        0
+    };
     for line in &lines {
         font.draw(fb, x, y, line, px, color);
         y += line_h;
@@ -1506,7 +1824,16 @@ fn render_builtin(w: &mut Window, font: &Font) {
                     w.surface.line(3, top + 7, 5, top + 9, c);
                     w.surface.line(5, top + 9, 10, top + 4, c);
                 }
-                draw_wrapped(&mut w.surface, font, &title, 18, cw.saturating_sub(18), ch, true, text_color);
+                draw_wrapped(
+                    &mut w.surface,
+                    font,
+                    &title,
+                    18,
+                    cw.saturating_sub(18),
+                    ch,
+                    true,
+                    text_color,
+                );
             }
             // radio buttons
             4 | 9 => {
@@ -1515,20 +1842,34 @@ fn render_builtin(w: &mut Window, font: &Font) {
                     for x in 0..12i32 {
                         let d2 = (2 * x - 11).pow(2) + (2 * y - 11).pow(2); // distance^2 from centre, x4
                         if d2 <= 121 {
-                            w.surface.set_pixel(x, top + y, if d2 >= 90 { 0x808080 } else { 0xFFFFFF });
+                            w.surface.set_pixel(
+                                x,
+                                top + y,
+                                if d2 >= 90 { 0x808080 } else { 0xFFFFFF },
+                            );
                         }
                         if w.check != 0 && d2 <= 18 {
                             w.surface.set_pixel(x, top + y, 0);
                         }
                     }
                 }
-                draw_wrapped(&mut w.surface, font, &title, 18, cw.saturating_sub(18), ch, true, text_color);
+                draw_wrapped(
+                    &mut w.surface,
+                    font,
+                    &title,
+                    18,
+                    cw.saturating_sub(18),
+                    ch,
+                    true,
+                    text_color,
+                );
             }
             // group box
             7 => {
                 let (tw, th) = font.measure(&title, CTRL_PX);
                 let top = th as i32 / 2;
-                w.surface.frame_rect(0, top, cw, ch.saturating_sub(top as u32), 0x808080);
+                w.surface
+                    .frame_rect(0, top, cw, ch.saturating_sub(top as u32), 0x808080);
                 w.surface.fill_rect(6, 0, tw + 4, th, w.bg);
                 font.draw(&mut w.surface, 8, 0, &title, CTRL_PX, text_color);
             }
@@ -1537,10 +1878,29 @@ fn render_builtin(w: &mut Window, font: &Font) {
                 w.surface.frame_rect(0, 0, cw, ch, 0x000000);
                 w.surface.fill_rect(1, 1, cw.saturating_sub(2), 1, 0xFFFFFF);
                 w.surface.fill_rect(1, 1, 1, ch.saturating_sub(2), 0xFFFFFF);
-                w.surface.fill_rect(1, ch.saturating_sub(2) as i32, cw.saturating_sub(2), 1, 0x808080);
-                w.surface.fill_rect(cw.saturating_sub(2) as i32, 1, 1, ch.saturating_sub(2), 0x808080);
+                w.surface.fill_rect(
+                    1,
+                    ch.saturating_sub(2) as i32,
+                    cw.saturating_sub(2),
+                    1,
+                    0x808080,
+                );
+                w.surface.fill_rect(
+                    cw.saturating_sub(2) as i32,
+                    1,
+                    1,
+                    ch.saturating_sub(2),
+                    0x808080,
+                );
                 let (tw, th) = font.measure(&title, CTRL_PX);
-                font.draw(&mut w.surface, (cw as i32 - tw as i32) / 2, (ch as i32 - th as i32) / 2, &title, CTRL_PX, text_color);
+                font.draw(
+                    &mut w.surface,
+                    (cw as i32 - tw as i32) / 2,
+                    (ch as i32 - th as i32) / 2,
+                    &title,
+                    CTRL_PX,
+                    text_color,
+                );
             }
         },
         "EDIT" => {
@@ -1582,7 +1942,15 @@ mod tests {
     #[test]
     fn default_position_and_size() {
         let mut wm = WindowManager::new();
-        let w = wm.add_window("T", "", WS_CAPTION, 0, (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT), 0, 0);
+        let w = wm.add_window(
+            "T",
+            "",
+            WS_CAPTION,
+            0,
+            (CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT),
+            0,
+            0,
+        );
         let win = wm.window(w).unwrap();
         assert_eq!((win.w, win.h), (640, 480));
         assert!(win.x >= 40 && win.y >= 40);
@@ -1596,12 +1964,20 @@ mod tests {
         wm.quit = Some(3);
         wm.post(w, WM_CHAR, b'x' as u32, 1);
         wm.now_ms = 100;
-        assert_eq!(wm.next_message(true).unwrap().message, WM_CHAR, "posted first");
+        assert_eq!(
+            wm.next_message(true).unwrap().message,
+            WM_CHAR,
+            "posted first"
+        );
         let q = wm.next_message(true).unwrap();
         assert_eq!((q.message, q.wparam), (WM_QUIT, 3), "then WM_QUIT");
         let t = wm.next_message(true).unwrap();
         assert_eq!((t.message, t.wparam), (WM_TIMER, 7), "then timers");
-        assert_eq!(wm.next_message(true).unwrap().message, WM_PAINT, "paint is lowest priority");
+        assert_eq!(
+            wm.next_message(true).unwrap().message,
+            WM_PAINT,
+            "paint is lowest priority"
+        );
         wm.window_mut(w).unwrap().needs_paint = false;
         assert_eq!(wm.next_message(true), None, "nothing left -> app must wait");
     }
@@ -1633,7 +2009,11 @@ mod tests {
         assert_eq!(wm.next_message(true), None);
         wm.now_ms = 100;
         assert_eq!(wm.next_message(true).unwrap().message, WM_TIMER);
-        assert_eq!(wm.next_message(true), None, "rescheduled one interval later");
+        assert_eq!(
+            wm.next_message(true),
+            None,
+            "rescheduled one interval later"
+        );
         wm.now_ms = 200;
         assert!(wm.next_message(true).is_some());
         assert!(wm.kill_timer(1, 1));
@@ -1647,11 +2027,27 @@ mod tests {
         let mut wm = WindowManager::new();
         let a = top(&mut wm, 0, 0, 300, 300);
         let b = top(&mut wm, 100, 100, 300, 300);
-        let btn = wm.add_window("BUTTON", "x", WS_CHILD | WS_VISIBLE, 0, (5, 5, 40, 20), b, 9);
+        let btn = wm.add_window(
+            "BUTTON",
+            "x",
+            WS_CHILD | WS_VISIBLE,
+            0,
+            (5, 5, 40, 20),
+            b,
+            9,
+        );
         wm.window_mut(btn).unwrap().visible = true;
         let (ox, oy) = wm.client_origin(b).unwrap();
-        assert_eq!(wm.hit_test(ox + 10, oy + 10), Some((btn, 5, 5)), "child wins over its parent");
-        assert_eq!(wm.hit_test(ox + 100, oy + 100).map(|h| h.0), Some(b), "b is above a");
+        assert_eq!(
+            wm.hit_test(ox + 10, oy + 10),
+            Some((btn, 5, 5)),
+            "child wins over its parent"
+        );
+        assert_eq!(
+            wm.hit_test(ox + 100, oy + 100).map(|h| h.0),
+            Some(b),
+            "b is above a"
+        );
         assert_eq!(wm.hit_test(110, 40).map(|h| h.0), Some(a));
         assert_eq!(wm.hit_test(1000, 700), None);
     }
@@ -1663,7 +2059,10 @@ mod tests {
         let (ox, oy) = wm.client_origin(w).unwrap();
         wm.post_mouse(WM_LBUTTONDOWN, ox + 7, oy + 9);
         let m = wm.queue.pop_front().unwrap();
-        assert_eq!((m.hwnd, m.message, m.lparam), (w, WM_LBUTTONDOWN, (9 << 16) | 7));
+        assert_eq!(
+            (m.hwnd, m.message, m.lparam),
+            (w, WM_LBUTTONDOWN, (9 << 16) | 7)
+        );
         assert_eq!(wm.focus, w);
     }
 
@@ -1701,7 +2100,11 @@ mod tests {
         wm.fill_rect_dc(dc, (5, 5, 15, 15), 0xFF0000);
         let s = &wm.window(w).unwrap().surface;
         assert_eq!(s.get_pixel(5, 5), Some(0xFF0000));
-        assert_eq!(s.get_pixel(15, 15), Some(BTN_FACE), "right/bottom edge is exclusive");
+        assert_eq!(
+            s.get_pixel(15, 15),
+            Some(BTN_FACE),
+            "right/bottom edge is exclusive"
+        );
         wm.line_to(dc, 0, 0); // pos starts at (0,0): degenerate line, black pen
         assert_eq!(wm.window(w).unwrap().surface.get_pixel(0, 0), Some(0));
     }
@@ -1711,7 +2114,10 @@ mod tests {
         let mut wm = WindowManager::new();
         let w = wm.add_window("T", "", 0, 0, (0, 0, 40, 40), 0, 0);
         let dc = wm.new_dc(Target::Window(w));
-        let red = wm.add_gdi(Gdi::Brush { color: 0xFF0000, null: false });
+        let red = wm.add_gdi(Gdi::Brush {
+            color: 0xFF0000,
+            null: false,
+        });
         wm.dc_mut(dc).unwrap().brush = red;
         wm.rectangle(dc, (10, 10, 20, 20));
         let s = &wm.window(w).unwrap().surface;
@@ -1742,7 +2148,11 @@ mod tests {
         assert_eq!(wm.get_pixel(dc, 1, 1), Some(0xFFFFFF));
         wm.invert_rect(dc, (0, 0, 2, 2));
         assert_eq!(wm.get_pixel(dc, 1, 1), Some(0));
-        assert_eq!(wm.get_pixel(dc, 3, 3), Some(0xFFFFFF), "outside the inverted rect");
+        assert_eq!(
+            wm.get_pixel(dc, 3, 3),
+            Some(0xFFFFFF),
+            "outside the inverted rect"
+        );
         wm.invert_rect(dc, (-5, -5, 100, 100)); // clipped, must not panic
     }
 
@@ -1764,7 +2174,10 @@ mod tests {
         assert!(wm.stretch_blt(screen, 14, 10, -4, 2, mem, 0, 0, 2, 1));
         assert_eq!(wm.get_pixel(screen, 10, 10), Some(0x222222));
         assert_eq!(wm.get_pixel(screen, 13, 10), Some(0x111111));
-        assert!(!wm.stretch_blt(screen, 0, 0, 0, 2, mem, 0, 0, 2, 1), "empty extent is a no-op");
+        assert!(
+            !wm.stretch_blt(screen, 0, 0, 0, 2, mem, 0, 0, 2, 1),
+            "empty extent is a no-op"
+        );
     }
 
     #[test]
@@ -1775,14 +2188,25 @@ mod tests {
         assert_eq!(wm.bounds(), Some((100, 50, 200, 150)));
         let hidden = wm.add_window("T", "", 0, 0, (900, 700, 50, 50), 0, 0);
         let _ = hidden;
-        assert_eq!(wm.bounds(), Some((100, 50, 200, 150)), "hidden windows do not count");
+        assert_eq!(
+            wm.bounds(),
+            Some((100, 50, 200, 150)),
+            "hidden windows do not count"
+        );
         top(&mut wm, 250, 100, 300, 300);
         assert_eq!(wm.bounds(), Some((100, 50, 450, 350)), "union of both");
         wm.add_window("BUTTON", "", WS_CHILD, 0, (0, 0, 999, 999), a, 1);
-        assert_eq!(wm.bounds(), Some((100, 50, 450, 350)), "children do not count");
+        assert_eq!(
+            wm.bounds(),
+            Some((100, 50, 450, 350)),
+            "children do not count"
+        );
         top(&mut wm, 1000, 700, 500, 500);
         let (x, y, w, h) = wm.bounds().unwrap();
-        assert!(x + w as i32 <= DESKTOP_W as i32 && y + h as i32 <= DESKTOP_H as i32, "clamped to desktop");
+        assert!(
+            x + w as i32 <= DESKTOP_W as i32 && y + h as i32 <= DESKTOP_H as i32,
+            "clamped to desktop"
+        );
     }
 
     #[test]
@@ -1792,7 +2216,11 @@ mod tests {
         let w = top(&mut wm, 100, 50, 200, 150);
         // 3px frame on each side, 19px caption.
         assert_eq!(wm.content_bounds(), Some((103, 72, 194, 125)));
-        assert_eq!(wm.bounds(), Some((100, 50, 200, 150)), "outer bounds still include the frame");
+        assert_eq!(
+            wm.bounds(),
+            Some((100, 50, 200, 150)),
+            "outer bounds still include the frame"
+        );
         let menu = wm.new_menu();
         wm.set_menu(w, menu);
         // The menu bar is part of the content: it starts where the caption ends, and the
@@ -1824,7 +2252,11 @@ mod tests {
         let font = Font::none(); // fixed advance: 6px per char at 11px
         let lines = wrap_text(&font, "aaa bbb ccc", 11, 6 * 7);
         assert_eq!(lines, ["aaa bbb", "ccc"]);
-        assert_eq!(wrap_text(&font, "abcdefghij", 11, 12), ["abcdefghij"], "an overlong word stays whole");
+        assert_eq!(
+            wrap_text(&font, "abcdefghij", 11, 12),
+            ["abcdefghij"],
+            "an overlong word stays whole"
+        );
         assert!(wrap_text(&font, "", 11, 100).is_empty());
     }
 
@@ -1862,11 +2294,20 @@ mod tests {
         }
         t.extend_from_slice(&0u16.to_le_bytes()); // no creation data
         let d = parse_dialog_template(&t).unwrap();
-        assert_eq!((d.title.as_str(), d.x, d.y, d.cx, d.cy), ("Hi", 10, 20, 100, 60));
+        assert_eq!(
+            (d.title.as_str(), d.x, d.y, d.cx, d.cy),
+            ("Hi", 10, 20, 100, 60)
+        );
         assert_eq!(d.items.len(), 1);
         let it = &d.items[0];
-        assert_eq!((it.class.as_str(), it.title.as_str(), it.id, it.x, it.cx), ("BUTTON", "OK", 1, 4, 30));
-        assert!(parse_dialog_template(&t[..t.len() - 9]).is_none(), "truncated template is rejected");
+        assert_eq!(
+            (it.class.as_str(), it.title.as_str(), it.id, it.x, it.cx),
+            ("BUTTON", "OK", 1, 4, 30)
+        );
+        assert!(
+            parse_dialog_template(&t[..t.len() - 9]).is_none(),
+            "truncated template is rejected"
+        );
     }
 
     #[test]
@@ -1879,12 +2320,24 @@ mod tests {
             wm.window_mut(h).unwrap().visible = true;
             h
         };
-        let (a, b, c) = (mk(&mut wm, 1, true), mk(&mut wm, 2, false), mk(&mut wm, 3, true));
+        let (a, b, c) = (
+            mk(&mut wm, 1, true),
+            mk(&mut wm, 2, false),
+            mk(&mut wm, 3, true),
+        );
         wm.click_button(a);
         wm.click_button(b);
-        assert_eq!((wm.window(a).unwrap().check, wm.window(b).unwrap().check), (0, 1), "b replaced a");
+        assert_eq!(
+            (wm.window(a).unwrap().check, wm.window(b).unwrap().check),
+            (0, 1),
+            "b replaced a"
+        );
         wm.click_button(c);
-        assert_eq!(wm.window(b).unwrap().check, 1, "c starts a new group, so b is untouched");
+        assert_eq!(
+            wm.window(b).unwrap().check,
+            1,
+            "c starts a new group, so b is untouched"
+        );
         assert_eq!(wm.window(c).unwrap().check, 1);
         assert_eq!(wm.radio_group(dlg, b), vec![a, b]);
     }
@@ -1903,24 +2356,51 @@ mod tests {
     #[test]
     fn quick_second_press_becomes_a_double_click_only_for_dblclks_classes() {
         let mut wm = WindowManager::new();
-        wm.classes.insert("dbl".into(), WndClass { wndproc: 1, bg: 0, menu_name: 0, wide: false, style: CS_DBLCLKS });
-        wm.classes.insert("plain".into(), WndClass { wndproc: 1, bg: 0, menu_name: 0, wide: false, style: 0 });
+        wm.classes.insert(
+            "dbl".into(),
+            WndClass {
+                wndproc: 1,
+                bg: 0,
+                menu_name: 0,
+                wide: false,
+                style: CS_DBLCLKS,
+            },
+        );
+        wm.classes.insert(
+            "plain".into(),
+            WndClass {
+                wndproc: 1,
+                bg: 0,
+                menu_name: 0,
+                wide: false,
+                style: 0,
+            },
+        );
         let mk = |wm: &mut WindowManager, class: &str| {
             let h = wm.add_window(class, "", 0, 0, (0, 0, 200, 200), 0, 0);
             wm.window_mut(h).unwrap().visible = true;
             h
         };
         let dbl = mk(&mut wm, "dbl");
-        let kinds = |wm: &mut WindowManager| wm.queue.drain(..).map(|m| m.message).collect::<Vec<_>>();
+        let kinds =
+            |wm: &mut WindowManager| wm.queue.drain(..).map(|m| m.message).collect::<Vec<_>>();
 
         wm.now_ms = 0;
         wm.post_mouse(WM_LBUTTONDOWN, 50, 50);
         wm.now_ms = 300;
         wm.post_mouse(WM_LBUTTONDOWN, 52, 49);
-        assert_eq!(kinds(&mut wm), [WM_LBUTTONDOWN, WM_LBUTTONDBLCLK], "second quick press");
+        assert_eq!(
+            kinds(&mut wm),
+            [WM_LBUTTONDOWN, WM_LBUTTONDBLCLK],
+            "second quick press"
+        );
         wm.now_ms = 350;
         wm.post_mouse(WM_LBUTTONDOWN, 52, 49);
-        assert_eq!(kinds(&mut wm), [WM_LBUTTONDOWN], "a third press starts a new sequence");
+        assert_eq!(
+            kinds(&mut wm),
+            [WM_LBUTTONDOWN],
+            "a third press starts a new sequence"
+        );
 
         wm.now_ms = 2000;
         wm.post_mouse(WM_LBUTTONDOWN, 50, 50);
@@ -1932,7 +2412,11 @@ mod tests {
         wm.post_mouse(WM_LBUTTONDOWN, 50, 50);
         wm.now_ms = 10_100;
         wm.post_mouse(WM_LBUTTONDOWN, 90, 50);
-        assert_eq!(kinds(&mut wm), [WM_LBUTTONDOWN, WM_LBUTTONDOWN], "too far apart");
+        assert_eq!(
+            kinds(&mut wm),
+            [WM_LBUTTONDOWN, WM_LBUTTONDOWN],
+            "too far apart"
+        );
 
         wm.remove_window(dbl);
         let plain = mk(&mut wm, "plain");
@@ -1941,7 +2425,11 @@ mod tests {
         wm.post_mouse(WM_LBUTTONDOWN, 50, 50);
         wm.now_ms = 20_100;
         wm.post_mouse(WM_LBUTTONDOWN, 50, 50);
-        assert_eq!(kinds(&mut wm), [WM_LBUTTONDOWN, WM_LBUTTONDOWN], "class did not ask for double clicks");
+        assert_eq!(
+            kinds(&mut wm),
+            [WM_LBUTTONDOWN, WM_LBUTTONDOWN],
+            "class did not ask for double clicks"
+        );
     }
 
     #[test]
@@ -1954,8 +2442,14 @@ mod tests {
     fn deleting_stock_objects_is_refused() {
         let mut wm = WindowManager::new();
         assert!(wm.delete_gdi(stock::WHITE_BRUSH));
-        assert!(wm.gdi.contains_key(&stock::WHITE_BRUSH), "stock objects survive DeleteObject");
-        let b = wm.add_gdi(Gdi::Brush { color: 1, null: false });
+        assert!(
+            wm.gdi.contains_key(&stock::WHITE_BRUSH),
+            "stock objects survive DeleteObject"
+        );
+        let b = wm.add_gdi(Gdi::Brush {
+            color: 1,
+            null: false,
+        });
         assert!(wm.delete_gdi(b));
         assert!(!wm.gdi.contains_key(&b));
     }
@@ -1965,15 +2459,26 @@ mod tests {
         let mut wm = WindowManager::new();
         let w = top(&mut wm, 100, 100, 200, 150);
         wm.window_mut(w).unwrap().bg = 0x123456;
-        wm.window_mut(w).unwrap().surface.fill_rect(0, 0, 500, 500, 0x123456);
+        wm.window_mut(w)
+            .unwrap()
+            .surface
+            .fill_rect(0, 0, 500, 500, 0x123456);
         let btn = wm.add_window("BUTTON", "", WS_CHILD, 0, (10, 10, 60, 24), w, 1);
         wm.window_mut(btn).unwrap().visible = true;
         let fb = wm.compose();
-        assert_eq!(fb.get_pixel(5, 5), Some(DESKTOP_COLOR), "desktop shows around windows");
+        assert_eq!(
+            fb.get_pixel(5, 5),
+            Some(DESKTOP_COLOR),
+            "desktop shows around windows"
+        );
         assert_eq!(fb.get_pixel(110, 105), Some(CAPTION_COLOR), "caption bar");
         let (cx, cy) = (100 + 3 + 100, 100 + 3 + 19 + 100);
         assert_eq!(fb.get_pixel(cx, cy), Some(0x123456), "client area");
-        assert_eq!(fb.get_pixel(103 + 10, 122 + 10), Some(0), "button's black outline");
+        assert_eq!(
+            fb.get_pixel(103 + 10, 122 + 10),
+            Some(0),
+            "button's black outline"
+        );
     }
 
     #[test]

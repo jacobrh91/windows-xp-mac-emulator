@@ -19,7 +19,7 @@
 
 use std::rc::Rc;
 
-use super::{sext, Emu, Op, Res, Stop, CF, EAX, EBP, ECX, ESP};
+use super::{CF, EAX, EBP, ECX, ESP, Emu, Op, Res, Stop, sext};
 use crate::win32::{HLE_BASE, HLE_END};
 
 /// Entries in the table (a power of two).
@@ -33,7 +33,12 @@ const NONE: u8 = 8;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Ea {
     Reg(u8),
-    Mem { base: u8, index: u8, scale: u8, disp: u32 },
+    Mem {
+        base: u8,
+        index: u8,
+        scale: u8,
+        disp: u32,
+    },
 }
 
 /// A decoded instruction. Sizes are 32 bits unless a `bits` field says otherwise.
@@ -42,37 +47,101 @@ pub(crate) enum Dop {
     /// Not handled here: run the full interpreter.
     Unsupported,
     /// `rm = rm op reg` (op as in `alu`: 0 add .. 7 cmp), 8 or 32 bits.
-    AluRmR { op: u8, rm: Ea, reg: u8, bits: u8 },
+    AluRmR {
+        op: u8,
+        rm: Ea,
+        reg: u8,
+        bits: u8,
+    },
     /// `reg = reg op rm`
-    AluRRm { op: u8, reg: u8, rm: Ea, bits: u8 },
+    AluRRm {
+        op: u8,
+        reg: u8,
+        rm: Ea,
+        bits: u8,
+    },
     /// `rm = rm op imm`
-    AluRmI { op: u8, rm: Ea, imm: u32, bits: u8 },
-    Test { rm: Ea, reg: u8, bits: u8 },
-    TestI { rm: Ea, imm: u32, bits: u8 },
+    AluRmI {
+        op: u8,
+        rm: Ea,
+        imm: u32,
+        bits: u8,
+    },
+    Test {
+        rm: Ea,
+        reg: u8,
+        bits: u8,
+    },
+    TestI {
+        rm: Ea,
+        imm: u32,
+        bits: u8,
+    },
     /// mov rm, reg / mov reg, rm (8 or 32 bits)
-    MovRmR { rm: Ea, reg: u8, bits: u8 },
-    MovRRm { reg: u8, rm: Ea, bits: u8 },
-    MovRmI { rm: Ea, imm: u32 },
-    Lea { reg: u8, ea: Ea },
-    IncDec { rm: Ea, dec: bool },
+    MovRmR {
+        rm: Ea,
+        reg: u8,
+        bits: u8,
+    },
+    MovRRm {
+        reg: u8,
+        rm: Ea,
+        bits: u8,
+    },
+    MovRmI {
+        rm: Ea,
+        imm: u32,
+    },
+    Lea {
+        reg: u8,
+        ea: Ea,
+    },
+    IncDec {
+        rm: Ea,
+        dec: bool,
+    },
     Push(Ea),
     PushI(u32),
     Pop(u8),
-    Jcc { cc: u8, target: u32 },
+    Jcc {
+        cc: u8,
+        target: u32,
+    },
     Jmp(u32),
     Call(u32),
     Ret(u16),
     CallInd(Ea),
     JmpInd(Ea),
     /// movzx / movsx from 8 or 16 bits
-    Movx { reg: u8, rm: Ea, bits: u8, signed: bool },
+    Movx {
+        reg: u8,
+        rm: Ea,
+        bits: u8,
+        signed: bool,
+    },
     /// shift group (C1 /n imm8, D1 /n by 1, D3 /n by cl): rol, ror, shl, shr, sar
-    Shift { op: u8, rm: Ea, count: u8, by_cl: bool },
+    Shift {
+        op: u8,
+        rm: Ea,
+        count: u8,
+        by_cl: bool,
+    },
     Leave,
     /// An x87 instruction (D8..DF) with its ModRM already decoded.
-    Fpu { opc: u8, reg: u8, rm: Ea },
-    Imul { reg: u8, rm: Ea },
-    ImulI { reg: u8, rm: Ea, imm: u32 },
+    Fpu {
+        opc: u8,
+        reg: u8,
+        rm: Ea,
+    },
+    Imul {
+        reg: u8,
+        rm: Ea,
+    },
+    ImulI {
+        reg: u8,
+        rm: Ea,
+        imm: u32,
+    },
     Nop,
 }
 
@@ -121,8 +190,24 @@ impl ICache {
     pub(crate) fn new() -> ICache {
         let empty: Rc<[BlockOp]> = Rc::new([]);
         ICache {
-            entries: vec![Entry { eip: EMPTY, len: 0, op: Dop::Unsupported }; SLOTS],
-            blocks: vec![Block { start: EMPTY, ops: empty, hits: 0, code: 0, jit_gen: 0 }; BLOCK_SLOTS],
+            entries: vec![
+                Entry {
+                    eip: EMPTY,
+                    len: 0,
+                    op: Dop::Unsupported
+                };
+                SLOTS
+            ],
+            blocks: vec![
+                Block {
+                    start: EMPTY,
+                    ops: empty,
+                    hits: 0,
+                    code: 0,
+                    jit_gen: 0
+                };
+                BLOCK_SLOTS
+            ],
             built: 0,
             runs: 0,
             flushes: 0,
@@ -152,7 +237,15 @@ fn block_slot(eip: u32) -> usize {
 
 /// Does this instruction end a block (it may change where execution goes)?
 fn ends_block(op: &Dop) -> bool {
-    matches!(op, Dop::Jcc { .. } | Dop::Jmp(_) | Dop::Call(_) | Dop::Ret(_) | Dop::CallInd(_) | Dop::JmpInd(_))
+    matches!(
+        op,
+        Dop::Jcc { .. }
+            | Dop::Jmp(_)
+            | Dop::Call(_)
+            | Dop::Ret(_)
+            | Dop::CallInd(_)
+            | Dop::JmpInd(_)
+    )
 }
 
 /// Instruction bytes being decoded.
@@ -204,7 +297,15 @@ impl Bytes<'_> {
             2 => disp = disp.wrapping_add(self.u32()?),
             _ => {}
         }
-        Some((reg, Ea::Mem { base, index, scale, disp }))
+        Some((
+            reg,
+            Ea::Mem {
+                base,
+                index,
+                scale,
+                disp,
+            },
+        ))
     }
 }
 
@@ -217,70 +318,147 @@ fn decode(b: &[u8], start: u32) -> Option<(u8, Dop)> {
         // the six ALU encodings, 32-bit forms
         0x00..=0x3F if opc & 7 <= 1 => {
             let (reg, rm) = c.modrm()?;
-            Dop::AluRmR { op: opc >> 3, rm, reg, bits: if opc & 1 == 0 { 8 } else { 32 } }
+            Dop::AluRmR {
+                op: opc >> 3,
+                rm,
+                reg,
+                bits: if opc & 1 == 0 { 8 } else { 32 },
+            }
         }
         0x00..=0x3F if opc & 7 <= 3 => {
             let (reg, rm) = c.modrm()?;
-            Dop::AluRRm { op: opc >> 3, reg, rm, bits: if opc & 1 == 0 { 8 } else { 32 } }
+            Dop::AluRRm {
+                op: opc >> 3,
+                reg,
+                rm,
+                bits: if opc & 1 == 0 { 8 } else { 32 },
+            }
         }
-        0x00..=0x3F if opc & 7 == 4 => Dop::AluRmI { op: opc >> 3, rm: Ea::Reg(EAX as u8), imm: c.u8()? as u32, bits: 8 },
-        0x00..=0x3F if opc & 7 == 5 => Dop::AluRmI { op: opc >> 3, rm: Ea::Reg(EAX as u8), imm: c.u32()?, bits: 32 },
-        0x40..=0x4F => Dop::IncDec { rm: Ea::Reg(opc & 7), dec: opc >= 0x48 },
+        0x00..=0x3F if opc & 7 == 4 => Dop::AluRmI {
+            op: opc >> 3,
+            rm: Ea::Reg(EAX as u8),
+            imm: c.u8()? as u32,
+            bits: 8,
+        },
+        0x00..=0x3F if opc & 7 == 5 => Dop::AluRmI {
+            op: opc >> 3,
+            rm: Ea::Reg(EAX as u8),
+            imm: c.u32()?,
+            bits: 32,
+        },
+        0x40..=0x4F => Dop::IncDec {
+            rm: Ea::Reg(opc & 7),
+            dec: opc >= 0x48,
+        },
         0x50..=0x57 => Dop::Push(Ea::Reg(opc & 7)),
         0x58..=0x5F => Dop::Pop(opc & 7),
         0x68 => Dop::PushI(c.u32()?),
         0x6A => Dop::PushI(c.u8()? as i8 as u32),
         0x69 => {
             let (reg, rm) = c.modrm()?;
-            Dop::ImulI { reg, rm, imm: c.u32()? }
+            Dop::ImulI {
+                reg,
+                rm,
+                imm: c.u32()?,
+            }
         }
         0x6B => {
             let (reg, rm) = c.modrm()?;
-            Dop::ImulI { reg, rm, imm: c.u8()? as i8 as u32 }
+            Dop::ImulI {
+                reg,
+                rm,
+                imm: c.u8()? as i8 as u32,
+            }
         }
         0x70..=0x7F => {
             let rel = c.u8()? as i8 as u32;
-            Dop::Jcc { cc: opc & 15, target: start.wrapping_add(c.p as u32).wrapping_add(rel) }
+            Dop::Jcc {
+                cc: opc & 15,
+                target: start.wrapping_add(c.p as u32).wrapping_add(rel),
+            }
         }
         0x80 => {
             let (op, rm) = c.modrm()?;
-            Dop::AluRmI { op, rm, imm: c.u8()? as u32, bits: 8 }
+            Dop::AluRmI {
+                op,
+                rm,
+                imm: c.u8()? as u32,
+                bits: 8,
+            }
         }
         0x81 => {
             let (op, rm) = c.modrm()?;
-            Dop::AluRmI { op, rm, imm: c.u32()?, bits: 32 }
+            Dop::AluRmI {
+                op,
+                rm,
+                imm: c.u32()?,
+                bits: 32,
+            }
         }
         0x83 => {
             let (op, rm) = c.modrm()?;
-            Dop::AluRmI { op, rm, imm: c.u8()? as i8 as u32, bits: 32 }
+            Dop::AluRmI {
+                op,
+                rm,
+                imm: c.u8()? as i8 as u32,
+                bits: 32,
+            }
         }
         0x84 | 0x85 => {
             let (reg, rm) = c.modrm()?;
-            Dop::Test { rm, reg, bits: if opc == 0x84 { 8 } else { 32 } }
+            Dop::Test {
+                rm,
+                reg,
+                bits: if opc == 0x84 { 8 } else { 32 },
+            }
         }
         0x88 | 0x89 => {
             let (reg, rm) = c.modrm()?;
-            Dop::MovRmR { rm, reg, bits: if opc == 0x88 { 8 } else { 32 } }
+            Dop::MovRmR {
+                rm,
+                reg,
+                bits: if opc == 0x88 { 8 } else { 32 },
+            }
         }
         0x8A | 0x8B => {
             let (reg, rm) = c.modrm()?;
-            Dop::MovRRm { reg, rm, bits: if opc == 0x8A { 8 } else { 32 } }
+            Dop::MovRRm {
+                reg,
+                rm,
+                bits: if opc == 0x8A { 8 } else { 32 },
+            }
         }
         0x8D => match c.modrm()? {
             (reg, ea @ Ea::Mem { .. }) => Dop::Lea { reg, ea },
             _ => return None,
         },
         0x90 => Dop::Nop,
-        0xA8 => Dop::TestI { rm: Ea::Reg(EAX as u8), imm: c.u8()? as u32, bits: 8 },
-        0xA9 => Dop::TestI { rm: Ea::Reg(EAX as u8), imm: c.u32()?, bits: 32 },
-        0xB8..=0xBF => Dop::MovRmI { rm: Ea::Reg(opc & 7), imm: c.u32()? },
+        0xA8 => Dop::TestI {
+            rm: Ea::Reg(EAX as u8),
+            imm: c.u8()? as u32,
+            bits: 8,
+        },
+        0xA9 => Dop::TestI {
+            rm: Ea::Reg(EAX as u8),
+            imm: c.u32()?,
+            bits: 32,
+        },
+        0xB8..=0xBF => Dop::MovRmI {
+            rm: Ea::Reg(opc & 7),
+            imm: c.u32()?,
+        },
         0xC1 | 0xD1 | 0xD3 => {
             let (op, rm) = c.modrm()?;
             if !matches!(op, 0 | 1 | 4..=7) {
                 return None; // rcl/rcr
             }
             let count = if opc == 0xC1 { c.u8()? } else { 1 };
-            Dop::Shift { op, rm, count, by_cl: opc == 0xD3 }
+            Dop::Shift {
+                op,
+                rm,
+                count,
+                by_cl: opc == 0xD3,
+            }
         }
         0xC9 => Dop::Leave,
         0xD8..=0xDF => {
@@ -317,11 +495,19 @@ fn decode(b: &[u8], start: u32) -> Option<(u8, Dop)> {
             0x80..=0x8F => {
                 let cc = b[1] & 15;
                 let rel = c.u32()?;
-                Dop::Jcc { cc, target: start.wrapping_add(c.p as u32).wrapping_add(rel) }
+                Dop::Jcc {
+                    cc,
+                    target: start.wrapping_add(c.p as u32).wrapping_add(rel),
+                }
             }
             op2 @ (0xB6 | 0xB7 | 0xBE | 0xBF) => {
                 let (reg, rm) = c.modrm()?;
-                Dop::Movx { reg, rm, bits: if op2 & 1 == 0 { 8 } else { 16 }, signed: op2 >= 0xBE }
+                Dop::Movx {
+                    reg,
+                    rm,
+                    bits: if op2 & 1 == 0 { 8 } else { 16 },
+                    signed: op2 >= 0xBE,
+                }
             }
             0xAF => {
                 let (reg, rm) = c.modrm()?;
@@ -351,7 +537,12 @@ impl Emu {
     fn ea_op(&self, ea: Ea) -> Op {
         match ea {
             Ea::Reg(r) => Op::Reg(r as usize),
-            Ea::Mem { base, index, scale, disp } => Op::Mem(self.ea_addr(base, index, scale, disp)),
+            Ea::Mem {
+                base,
+                index,
+                scale,
+                disp,
+            } => Op::Mem(self.ea_addr(base, index, scale, disp)),
         }
     }
 
@@ -392,7 +583,9 @@ impl Emu {
             if let Err(e) = self.exec_dop(b.op, b.start, b.next) {
                 let r = match e {
                     // A hardware fault is a Windows exception, as in `step`.
-                    stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. }) => self.raise_hardware(stop, b.start, saved),
+                    stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. }) => {
+                        self.raise_hardware(stop, b.start, saved)
+                    }
                     other => Err(other),
                 };
                 return Some((k as u64 + 1, r));
@@ -434,7 +627,8 @@ impl Emu {
         self.jit_chain = self.jit.chain.as_ptr();
         // SAFETY: `code` was produced by `jit.compile` for this block in the current
         // generation; it only touches this emulator through the pointer it is given.
-        let f: super::jit::BlockFn = unsafe { std::mem::transmute::<usize, super::jit::BlockFn>(code) };
+        let f: super::jit::BlockFn =
+            unsafe { std::mem::transmute::<usize, super::jit::BlockFn>(code) };
         let r = unsafe { f(self, limit) };
         self.jit.runs += 1;
         let count = r & 0xFFFF_FFFF;
@@ -463,16 +657,28 @@ impl Emu {
                 n += 1;
             }
             self.mem.note_code(at, buf.len() as u32);
-            let Some((len, op)) = decode(&buf[..n], at) else { break };
+            let Some((len, op)) = decode(&buf[..n], at) else {
+                break;
+            };
             let next = at.wrapping_add(len as u32);
-            ops.push(BlockOp { op, start: at, next });
+            ops.push(BlockOp {
+                op,
+                start: at,
+                next,
+            });
             if ends_block(&op) || next.wrapping_sub(HLE_BASE) < HLE_END - HLE_BASE {
                 break;
             }
             at = next;
         }
         self.icache.built += 1;
-        self.icache.blocks[i] = Block { start, ops: ops.into(), hits: 0, code: 0, jit_gen: 0 };
+        self.icache.blocks[i] = Block {
+            start,
+            ops: ops.into(),
+            hits: 0,
+            code: 0,
+            jit_gen: 0,
+        };
     }
 
     /// Run the instruction at `start` through the cache: decoded once, then reused.
@@ -510,7 +716,11 @@ impl Emu {
         // (All 16 bytes looked at: an instruction cut short by an unmapped page decodes
         // differently once that page exists.)
         self.mem.note_code(start, buf.len() as u32);
-        self.icache.entries[i] = Entry { eip: start, len, op };
+        self.icache.entries[i] = Entry {
+            eip: start,
+            len,
+            op,
+        };
         match op {
             Dop::Unsupported => self.step_decoded(start),
             op => self.exec_dop(op, start, start.wrapping_add(len as u32)),
@@ -608,13 +818,31 @@ impl Emu {
                 self.eip = t;
             }
             Dop::JmpInd(rm) => self.eip = self.read_op(self.ea_op(rm), 32)?,
-            Dop::Movx { reg, rm, bits, signed } => {
+            Dop::Movx {
+                reg,
+                rm,
+                bits,
+                signed,
+            } => {
                 let v = self.read_op(self.ea_op(rm), bits as u32)?;
-                self.regs[reg as usize] = if signed { sext(v, bits as u32) as u32 } else { v };
+                self.regs[reg as usize] = if signed {
+                    sext(v, bits as u32) as u32
+                } else {
+                    v
+                };
             }
-            Dop::Shift { op, rm, count, by_cl } => {
+            Dop::Shift {
+                op,
+                rm,
+                count,
+                by_cl,
+            } => {
                 let rm = self.ea_op(rm);
-                let count = if by_cl { self.regs[ECX] & 0xff } else { count as u32 };
+                let count = if by_cl {
+                    self.regs[ECX] & 0xff
+                } else {
+                    count as u32
+                };
                 let v = self.read_op(rm, 32)?;
                 let r = self.shift(op as usize, v, count, 32)?;
                 self.write_op(rm, 32, r)?;
@@ -650,20 +878,74 @@ impl Emu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cpu::{Stop, EBX, ESI};
+    use crate::cpu::{EBX, ESI, Stop};
 
     #[test]
     fn decodes_operands_and_absolute_targets() {
         // mov eax, [ebx+esi*4+0x10]
-        assert_eq!(decode(&[0x8B, 0x44, 0xB3, 0x10], 0), Some((4, Dop::MovRRm { reg: 0, rm: Ea::Mem { base: 3, index: 6, scale: 2, disp: 0x10 }, bits: 32 })));
+        assert_eq!(
+            decode(&[0x8B, 0x44, 0xB3, 0x10], 0),
+            Some((
+                4,
+                Dop::MovRRm {
+                    reg: 0,
+                    rm: Ea::Mem {
+                        base: 3,
+                        index: 6,
+                        scale: 2,
+                        disp: 0x10
+                    },
+                    bits: 32
+                }
+            ))
+        );
         // jne -2 at 0x1000: back to itself
-        assert_eq!(decode(&[0x75, 0xFE], 0x1000), Some((2, Dop::Jcc { cc: 5, target: 0x1000 })));
+        assert_eq!(
+            decode(&[0x75, 0xFE], 0x1000),
+            Some((
+                2,
+                Dop::Jcc {
+                    cc: 5,
+                    target: 0x1000
+                }
+            ))
+        );
         // call +0x100 at 0x2000
-        assert_eq!(decode(&[0xE8, 0x00, 0x01, 0, 0], 0x2000), Some((5, Dop::Call(0x2105))));
+        assert_eq!(
+            decode(&[0xE8, 0x00, 0x01, 0, 0], 0x2000),
+            Some((5, Dop::Call(0x2105)))
+        );
         // [disp32] with no base
-        assert_eq!(decode(&[0x8B, 0x05, 0x78, 0x56, 0x34, 0x12], 0).map(|d| d.1), Some(Dop::MovRRm { reg: 0, rm: Ea::Mem { base: NONE, index: NONE, scale: 0, disp: 0x1234_5678 }, bits: 32 }));
-        assert_eq!(decode(&[0x66, 0x89, 0xC0], 0), None, "prefixed: left to the interpreter");
-        assert_eq!(decode(&[0xD9, 0xE8], 0), Some((2, Dop::Fpu { opc: 0xD9, reg: 5, rm: Ea::Reg(0) })), "fld1, ModRM decoded");
+        assert_eq!(
+            decode(&[0x8B, 0x05, 0x78, 0x56, 0x34, 0x12], 0).map(|d| d.1),
+            Some(Dop::MovRRm {
+                reg: 0,
+                rm: Ea::Mem {
+                    base: NONE,
+                    index: NONE,
+                    scale: 0,
+                    disp: 0x1234_5678
+                },
+                bits: 32
+            })
+        );
+        assert_eq!(
+            decode(&[0x66, 0x89, 0xC0], 0),
+            None,
+            "prefixed: left to the interpreter"
+        );
+        assert_eq!(
+            decode(&[0xD9, 0xE8], 0),
+            Some((
+                2,
+                Dop::Fpu {
+                    opc: 0xD9,
+                    reg: 5,
+                    rm: Ea::Reg(0)
+                }
+            )),
+            "fld1, ModRM decoded"
+        );
         assert_eq!(decode(&[0x8B], 0), None, "truncated");
     }
 
@@ -671,7 +953,10 @@ mod tests {
     struct Rng(u64);
     impl Rng {
         fn next(&mut self) -> u32 {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (self.0 >> 33) as u32
         }
         fn pick<T: Copy>(&mut self, v: &[T]) -> T {
@@ -693,7 +978,7 @@ mod tests {
         };
         // destination is a written operand: register form only for our "written" regs, or memory
         let modrm_dst = |r: &mut Rng, reg: u8| -> Vec<u8> {
-            if r.next() % 2 == 0 {
+            if r.next().is_multiple_of(2) {
                 vec![0xC0 | (reg << 3) | dst_reg(r)]
             } else {
                 let base = r.pick(&[3u8, 6]);
@@ -703,7 +988,12 @@ mod tests {
         match r.next() % 18 {
             15..=17 => {
                 // x87: memory forms at [ebx/esi + d8] and register forms
-                let mem = |r: &mut Rng, op: u8| vec![0x40 | (op << 3) | r.pick(&[3u8, 6]), (r.next() % 0x78) as u8 & !7];
+                let mem = |r: &mut Rng, op: u8| {
+                    vec![
+                        0x40 | (op << 3) | r.pick(&[3u8, 6]),
+                        (r.next() % 0x78) as u8 & !7,
+                    ]
+                };
                 match r.next() % 9 {
                     0 => {
                         out.push(r.pick(&[0xD9u8, 0xDD]));
@@ -756,7 +1046,7 @@ mod tests {
             }
             13 => {
                 // 8-bit alu with an immediate, or test r/m8, r8
-                if r.next() % 2 == 0 {
+                if r.next().is_multiple_of(2) {
                     out.push(0x80);
                     let op = (r.next() % 8) as u8;
                     out.extend(modrm_dst(r, op));
@@ -769,7 +1059,7 @@ mod tests {
             }
             14 => {
                 // al, imm8 forms and imul with an immediate
-                if r.next() % 2 == 0 {
+                if r.next().is_multiple_of(2) {
                     out.extend([((r.next() % 8) as u8) << 3 | 4, r.next() as u8]);
                 } else {
                     out.push(0x6B);
@@ -855,7 +1145,9 @@ mod tests {
         e.icache_on = cached;
         e.mem.map(0x1000, 0x20000);
         e.mem.write_bytes(0x1000, code).unwrap();
-        e.mem.write_bytes(0x1000 + code.len() as u32, &[0xF4]).unwrap(); // hlt
+        e.mem
+            .write_bytes(0x1000 + code.len() as u32, &[0xF4])
+            .unwrap(); // hlt
         let mut r = Rng(seed);
         for a in (0x10000..0x10400).step_by(4) {
             e.mem.write(a, 4, r.next()).unwrap();
@@ -895,8 +1187,16 @@ mod tests {
             assert_eq!(a.regs, b.regs, "registers (seed {seed})");
             assert_eq!(a.eflags, b.eflags, "flags (seed {seed})");
             assert_eq!(a.steps, b.steps, "instruction count (seed {seed})");
-            assert_eq!(a.mem.read_bytes(0x10000, 0x400).unwrap(), b.mem.read_bytes(0x10000, 0x400).unwrap(), "memory (seed {seed})");
-            assert_eq!(a.mem.read_bytes(0x17F00, 0x100).unwrap(), b.mem.read_bytes(0x17F00, 0x100).unwrap(), "stack (seed {seed})");
+            assert_eq!(
+                a.mem.read_bytes(0x10000, 0x400).unwrap(),
+                b.mem.read_bytes(0x10000, 0x400).unwrap(),
+                "memory (seed {seed})"
+            );
+            assert_eq!(
+                a.mem.read_bytes(0x17F00, 0x100).unwrap(),
+                b.mem.read_bytes(0x17F00, 0x100).unwrap(),
+                "stack (seed {seed})"
+            );
         }
     }
 
@@ -924,12 +1224,27 @@ mod tests {
                 assert_eq!(b.run(100_000), Stop::Halt);
                 assert_eq!(a.regs, b.regs, "registers (seed {seed}, pass {pass})");
                 assert_eq!(a.eflags, b.eflags, "flags (seed {seed}, pass {pass})");
-                assert_eq!(a.fpu.top, b.fpu.top, "x87 stack top (seed {seed}, pass {pass})");
-                assert_eq!(a.fpu.st.map(f64::to_bits), b.fpu.st.map(f64::to_bits), "x87 registers (seed {seed}, pass {pass})");
+                assert_eq!(
+                    a.fpu.top, b.fpu.top,
+                    "x87 stack top (seed {seed}, pass {pass})"
+                );
+                assert_eq!(
+                    a.fpu.st.map(f64::to_bits),
+                    b.fpu.st.map(f64::to_bits),
+                    "x87 registers (seed {seed}, pass {pass})"
+                );
             }
             assert_eq!(a.steps, b.steps, "instruction count (seed {seed})");
-            assert_eq!(a.mem.read_bytes(0x10000, 0x400).unwrap(), b.mem.read_bytes(0x10000, 0x400).unwrap(), "memory (seed {seed})");
-            assert_eq!(a.mem.read_bytes(0x17F00, 0x100).unwrap(), b.mem.read_bytes(0x17F00, 0x100).unwrap(), "stack (seed {seed})");
+            assert_eq!(
+                a.mem.read_bytes(0x10000, 0x400).unwrap(),
+                b.mem.read_bytes(0x10000, 0x400).unwrap(),
+                "memory (seed {seed})"
+            );
+            assert_eq!(
+                a.mem.read_bytes(0x17F00, 0x100).unwrap(),
+                b.mem.read_bytes(0x17F00, 0x100).unwrap(),
+                "stack (seed {seed})"
+            );
             compiled += b.jit.compiled;
         }
         assert!(compiled > 0, "blocks were actually compiled");
@@ -944,7 +1259,10 @@ mod tests {
         e.mem.write(0x1001, 1, 2).unwrap();
         e.eip = 0x1000;
         assert_eq!(e.run(100), Stop::Halt);
-        assert_eq!(e.regs[EAX], 2, "the new instruction ran, not the cached one");
+        assert_eq!(
+            e.regs[EAX], 2,
+            "the new instruction ran, not the cached one"
+        );
     }
 
     #[test]

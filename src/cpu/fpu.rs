@@ -1,7 +1,7 @@
 //! x87 floating-point unit. Registers are `f64` rather than 80-bit extended; that is
 //! enough for game code (and what most emulators aimed at games do).
 
-use crate::cpu::{Emu, Op, Prefix, Res, Stop, CF, EAX, PF, ZF};
+use crate::cpu::{CF, EAX, Emu, Op, PF, Prefix, Res, Stop, ZF};
 
 const C0: u16 = 0x0100;
 const C2: u16 = 0x0400;
@@ -26,7 +26,15 @@ pub struct Fpu {
 
 impl Fpu {
     pub fn new() -> Self {
-        Fpu { st: [0.0; 8], top: 0, cc: 0, cw: 0x037F, mm: [0; 8], xmm: [[0; 4]; 8], mxcsr: 0x1F80 }
+        Fpu {
+            st: [0.0; 8],
+            top: 0,
+            cc: 0,
+            cw: 0x037F,
+            mm: [0; 8],
+            xmm: [[0; 4]; 8],
+            mxcsr: 0x1F80,
+        }
     }
 
     fn get(&self, i: usize) -> f64 {
@@ -107,7 +115,11 @@ fn from_m80(bytes: &[u8]) -> f64 {
     let sign = if se & 0x8000 != 0 { -1.0 } else { 1.0 };
     let exp = (se & 0x7fff) as i32;
     if exp == 0x7fff {
-        return if mant << 1 == 0 { sign * f64::INFINITY } else { f64::NAN };
+        return if mant << 1 == 0 {
+            sign * f64::INFINITY
+        } else {
+            f64::NAN
+        };
     }
     if mant == 0 {
         return sign * 0.0;
@@ -435,7 +447,7 @@ impl Emu {
                 }
             }
             (3, 4) => match i {
-                2 => self.fpu.cc = 0, // fnclex
+                2 => self.fpu.cc = 0,       // fnclex
                 3 => self.fpu = Fpu::new(), // fninit
                 _ => return Err(self.invalid(start)),
             },
@@ -474,7 +486,7 @@ fn _unused(_: Stop) {}
 
 #[cfg(test)]
 mod tests {
-    use crate::cpu::{Emu, Stop, CF, EAX, ZF};
+    use crate::cpu::{CF, EAX, Emu, Stop, ZF};
 
     const CODE: u32 = 0x1000;
     const A: u32 = 0x2000;
@@ -516,7 +528,10 @@ mod tests {
     fn one_plus_one_is_two() {
         let e = run(
             |_| {},
-            &[vec![0xD9, 0xE8, 0xD9, 0xE8, 0xDE, 0xC1], abs(&[0xDB, 0x1D], OUT)], // fld1 fld1 faddp fistp
+            &[
+                vec![0xD9, 0xE8, 0xD9, 0xE8, 0xDE, 0xC1],
+                abs(&[0xDB, 0x1D], OUT),
+            ], // fld1 fld1 faddp fistp
         );
         assert_eq!(e.mem.read(OUT, 4).unwrap(), 2);
     }
@@ -528,7 +543,11 @@ mod tests {
                 e.mem.write(A, 4, 1.5f32.to_bits()).unwrap();
                 e.mem.write(B, 4, 2.0f32.to_bits()).unwrap();
             },
-            &[abs(&[0xD9, 0x05], A), abs(&[0xD8, 0x0D], B), abs(&[0xDD, 0x1D], OUT)],
+            &[
+                abs(&[0xD9, 0x05], A),
+                abs(&[0xD8, 0x0D], B),
+                abs(&[0xDD, 0x1D], OUT),
+            ],
         );
         assert_eq!(read_f64(&e, OUT), 3.0);
     }
@@ -569,18 +588,27 @@ mod tests {
     #[test]
     fn fcomip_sets_cpu_flags() {
         // fld1; fldz; fcomip st0,st1 (0 < 1 -> CF); fstp st0
-        let e = run(|_| {}, &[vec![0xD9, 0xE8, 0xD9, 0xEE, 0xDF, 0xF1, 0xDD, 0xD8]]);
+        let e = run(
+            |_| {},
+            &[vec![0xD9, 0xE8, 0xD9, 0xEE, 0xDF, 0xF1, 0xDD, 0xD8]],
+        );
         assert!(e.eflags & CF != 0);
         assert!(e.eflags & ZF == 0);
         // equal
-        let e = run(|_| {}, &[vec![0xD9, 0xE8, 0xD9, 0xE8, 0xDF, 0xF1, 0xDD, 0xD8]]);
+        let e = run(
+            |_| {},
+            &[vec![0xD9, 0xE8, 0xD9, 0xE8, 0xDF, 0xF1, 0xDD, 0xD8]],
+        );
         assert!(e.eflags & ZF != 0 && e.eflags & CF == 0);
     }
 
     #[test]
     fn fnstsw_sahf_branch_idiom() {
         // fld1 (st1=1); fldz (st0=0); fcompp -> st0 < st1 -> C0; fnstsw ax; sahf -> CF
-        let e = run(|_| {}, &[vec![0xD9, 0xE8, 0xD9, 0xEE, 0xDE, 0xD9, 0xDF, 0xE0, 0x9E]]);
+        let e = run(
+            |_| {},
+            &[vec![0xD9, 0xE8, 0xD9, 0xEE, 0xDE, 0xD9, 0xDF, 0xE0, 0x9E]],
+        );
         assert!(e.eflags & CF != 0);
         assert_eq!(e.regs[EAX] & 0x4500, 0x0100);
     }
@@ -589,7 +617,11 @@ mod tests {
     fn sqrt_of_integer() {
         let e = run(
             |e| e.mem.write(A, 4, 16).unwrap(),
-            &[abs(&[0xDB, 0x05], A), vec![0xD9, 0xFA], abs(&[0xDB, 0x1D], OUT)],
+            &[
+                abs(&[0xDB, 0x05], A),
+                vec![0xD9, 0xFA],
+                abs(&[0xDB, 0x1D], OUT),
+            ],
         );
         assert_eq!(e.mem.read(OUT, 4).unwrap(), 4);
     }
@@ -602,10 +634,18 @@ mod tests {
                     write_f64(e, A, 2.7);
                     e.mem.write(B, 2, cw as u32).unwrap();
                 },
-                &[abs(&[0xD9, 0x2D], B), abs(&[0xDD, 0x05], A), abs(&[0xDB, 0x1D], OUT)],
+                &[
+                    abs(&[0xD9, 0x2D], B),
+                    abs(&[0xDD, 0x05], A),
+                    abs(&[0xDB, 0x1D], OUT),
+                ],
             )
         };
-        assert_eq!(prog(0x037F).mem.read(OUT, 4).unwrap(), 3, "round to nearest");
+        assert_eq!(
+            prog(0x037F).mem.read(OUT, 4).unwrap(),
+            3,
+            "round to nearest"
+        );
         assert_eq!(prog(0x0F7F).mem.read(OUT, 4).unwrap(), 2, "truncate");
     }
 
@@ -633,9 +673,9 @@ mod tests {
             let e = run(
                 |e| write_f64(e, A, v),
                 &[
-                    abs(&[0xDD, 0x05], A),  // fld qword [A]
-                    abs(&[0xDB, 0x3D], B),  // fstp tbyte [B]
-                    abs(&[0xDB, 0x2D], B),  // fld tbyte [B]
+                    abs(&[0xDD, 0x05], A),   // fld qword [A]
+                    abs(&[0xDB, 0x3D], B),   // fstp tbyte [B]
+                    abs(&[0xDB, 0x2D], B),   // fld tbyte [B]
                     abs(&[0xDD, 0x1D], OUT), // fstp qword [OUT]
                 ],
             );
@@ -646,10 +686,19 @@ mod tests {
     #[test]
     fn constants_and_trig() {
         // fldpi; fcos -> -1
-        let e = run(|_| {}, &[vec![0xD9, 0xEB, 0xD9, 0xFF], abs(&[0xDD, 0x1D], OUT)]);
+        let e = run(
+            |_| {},
+            &[vec![0xD9, 0xEB, 0xD9, 0xFF], abs(&[0xDD, 0x1D], OUT)],
+        );
         assert!((read_f64(&e, OUT) + 1.0).abs() < 1e-12);
         // fld1 fld1 fpatan -> pi/4
-        let e = run(|_| {}, &[vec![0xD9, 0xE8, 0xD9, 0xE8, 0xD9, 0xF3], abs(&[0xDD, 0x1D], OUT)]);
+        let e = run(
+            |_| {},
+            &[
+                vec![0xD9, 0xE8, 0xD9, 0xE8, 0xD9, 0xF3],
+                abs(&[0xDD, 0x1D], OUT),
+            ],
+        );
         assert!((read_f64(&e, OUT) - std::f64::consts::FRAC_PI_4).abs() < 1e-12);
     }
 
@@ -657,7 +706,10 @@ mod tests {
     fn fxam_classifies_st0() {
         use super::{C2, C3, CC_MASK};
         // fld1; fchs; fxam; fnstsw ax  -> normal (C2) and negative (C1)
-        let e = run(|_| {}, &[vec![0xD9, 0xE8, 0xD9, 0xE0, 0xD9, 0xE5, 0xDF, 0xE0]]);
+        let e = run(
+            |_| {},
+            &[vec![0xD9, 0xE8, 0xD9, 0xE0, 0xD9, 0xE5, 0xDF, 0xE0]],
+        );
         assert_eq!(e.regs[EAX] as u16 & CC_MASK, C2 | 0x0200);
         // fldz; fxam -> zero (C3), positive
         let e = run(|_| {}, &[vec![0xD9, 0xEE, 0xD9, 0xE5, 0xDF, 0xE0]]);
@@ -669,7 +721,10 @@ mod tests {
         // fld1; fldz; fxch -> st0 = 1; fchs -> -1; fabs -> 1 ; store
         let e = run(
             |_| {},
-            &[vec![0xD9, 0xE8, 0xD9, 0xEE, 0xD9, 0xC9, 0xD9, 0xE0, 0xD9, 0xE1], abs(&[0xDD, 0x1D], OUT)],
+            &[
+                vec![0xD9, 0xE8, 0xD9, 0xEE, 0xD9, 0xC9, 0xD9, 0xE0, 0xD9, 0xE1],
+                abs(&[0xDD, 0x1D], OUT),
+            ],
         );
         assert_eq!(read_f64(&e, OUT), 1.0);
     }
@@ -697,6 +752,10 @@ mod tests {
     #[test]
     fn stack_wraps_after_push_pop() {
         let e = run(|_| {}, &[[0xD9, 0xE8].repeat(3), [0xDD, 0xD8].repeat(3)]);
-        assert_eq!(e.fpu.status_word() >> 11, 0, "balanced push/pop returns TOP to 0");
+        assert_eq!(
+            e.fpu.status_word() >> 11,
+            0,
+            "balanced push/pop returns TOP to 0"
+        );
     }
 }

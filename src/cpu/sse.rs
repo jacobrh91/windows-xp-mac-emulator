@@ -6,7 +6,7 @@
 //! does not claim SSE2, so the 0x66-prefixed double-precision forms are only accepted where
 //! they are bit-for-bit the same operation (moves and the logical ops).
 
-use crate::cpu::{Emu, Op, Prefix, Res, CF, OF, PF, SF, ZF};
+use crate::cpu::{CF, Emu, OF, Op, PF, Prefix, Res, SF, ZF};
 
 /// Four lanes of raw bits.
 pub type Xmm = [u32; 4];
@@ -56,8 +56,8 @@ fn compare(pred: u8, a: f32, b: f32) -> u32 {
         2 => a <= b,
         3 => unordered,
         4 => a != b || unordered,
-        5 => !(a < b),
-        6 => !(a <= b),
+        5 => a >= b || unordered,
+        6 => a > b || unordered,
         _ => !unordered,
     };
     if r { u32::MAX } else { 0 }
@@ -76,7 +76,8 @@ impl Emu {
 
     fn write_xmm_mem(&mut self, a: u32, v: Xmm) -> Res<()> {
         self.mem.write64(a, v[0] as u64 | (v[1] as u64) << 32)?;
-        self.mem.write64(a.wrapping_add(8), v[2] as u64 | (v[3] as u64) << 32)?;
+        self.mem
+            .write64(a.wrapping_add(8), v[2] as u64 | (v[3] as u64) << 32)?;
         Ok(())
     }
 
@@ -126,7 +127,11 @@ impl Emu {
                 let half = match m.rm {
                     Op::Reg(s) => {
                         let s = self.fpu.xmm[s & 7];
-                        if opc == 0x12 { [s[2], s[3]] } else { [s[0], s[1]] } // movhlps / movlhps
+                        if opc == 0x12 {
+                            [s[2], s[3]]
+                        } else {
+                            [s[0], s[1]]
+                        } // movhlps / movlhps
                     }
                     Op::Mem(a) => [self.mem.read(a, 4)?, self.mem.read(a.wrapping_add(4), 4)?],
                 };
@@ -138,13 +143,18 @@ impl Emu {
                 let v = self.fpu.xmm[m.reg & 7];
                 let Op::Mem(a) = m.rm else { return Ok(false) };
                 let at = if opc == 0x13 { 0 } else { 2 };
-                self.mem.write64(a, v[at] as u64 | (v[at + 1] as u64) << 32)?;
+                self.mem
+                    .write64(a, v[at] as u64 | (v[at + 1] as u64) << 32)?;
             }
             // unpcklps / unpckhps
             0x14 | 0x15 => {
                 let m = self.modrm(p)?;
                 let (d, s) = (self.fpu.xmm[m.reg & 7], self.read_xmm(m.rm)?);
-                self.fpu.xmm[m.reg & 7] = if opc == 0x14 { [d[0], s[0], d[1], s[1]] } else { [d[2], s[2], d[3], s[3]] };
+                self.fpu.xmm[m.reg & 7] = if opc == 0x14 {
+                    [d[0], s[0], d[1], s[1]]
+                } else {
+                    [d[2], s[2], d[3], s[3]]
+                };
             }
             // cvtpi2ps xmm, mm/m64 ; cvtsi2ss xmm, r/m32
             0x2A => {
@@ -166,15 +176,24 @@ impl Emu {
             0x2C | 0x2D => {
                 let m = self.modrm(p)?;
                 let to_int = |x: f32| -> u32 {
-                    let x = if opc == 0x2C { x.trunc() } else { x.round_ties_even() };
-                    if x.is_nan() || !(-2147483648.0..2147483648.0).contains(&x) { 0x8000_0000 } else { x as i32 as u32 }
+                    let x = if opc == 0x2C {
+                        x.trunc()
+                    } else {
+                        x.round_ties_even()
+                    };
+                    if x.is_nan() || !(-2147483648.0..2147483648.0).contains(&x) {
+                        0x8000_0000
+                    } else {
+                        x as i32 as u32
+                    }
                 };
                 if scalar {
                     let v = f(self.read_scalar(m.rm)?);
                     self.set_reg32(m.reg, to_int(v));
                 } else {
                     let v = self.read_xmm(m.rm)?;
-                    self.fpu.mm[m.reg & 7] = to_int(f(v[0])) as u64 | (to_int(f(v[1])) as u64) << 32;
+                    self.fpu.mm[m.reg & 7] =
+                        to_int(f(v[0])) as u64 | (to_int(f(v[1])) as u64) << 32;
                 }
             }
             // ucomiss / comiss: compare low lanes into ZF, PF, CF
@@ -244,7 +263,12 @@ impl Emu {
                 let m = self.modrm(p)?;
                 let imm = self.fetch8()? as usize;
                 let (d, s) = (self.fpu.xmm[m.reg & 7], self.read_xmm(m.rm)?);
-                self.fpu.xmm[m.reg & 7] = [d[imm & 3], d[(imm >> 2) & 3], s[(imm >> 4) & 3], s[(imm >> 6) & 3]];
+                self.fpu.xmm[m.reg & 7] = [
+                    d[imm & 3],
+                    d[(imm >> 2) & 3],
+                    s[(imm >> 4) & 3],
+                    s[(imm >> 6) & 3],
+                ];
             }
             // ldmxcsr / stmxcsr, and the fences (which order nothing on one CPU)
             0xAE => {
@@ -280,7 +304,9 @@ mod tests {
         let mut e = Emu::new();
         e.mem.map(0x1000, 0x10000);
         e.mem.write_bytes(0x1000, code).unwrap();
-        e.mem.write_bytes(0x1000 + code.len() as u32, &[0xF4]).unwrap(); // hlt
+        e.mem
+            .write_bytes(0x1000 + code.len() as u32, &[0xF4])
+            .unwrap(); // hlt
         e.eip = 0x1000;
         e.regs[crate::cpu::ESP] = 0x10000;
         setup(&mut e);
@@ -345,7 +371,11 @@ mod tests {
             e.fpu.xmm[1] = xmm([9.0; 4]);
         });
         assert_eq!(get(&e, 0), [1.5, 2.5, 3.5, 4.5]);
-        assert_eq!(get(&e, 1), [2.5, 0.0, 0.0, 0.0], "a scalar load clears the upper lanes");
+        assert_eq!(
+            get(&e, 1),
+            [2.5, 0.0, 0.0, 0.0],
+            "a scalar load clears the upper lanes"
+        );
         assert_eq!(f32::from_bits(e.mem.read(0x300C, 4).unwrap()), 4.5);
         assert_eq!(f32::from_bits(e.mem.read(0x3010, 4).unwrap()), 2.5);
     }
@@ -354,7 +384,10 @@ mod tests {
     fn logic_compare_and_conversions() {
         // xorps xmm0, xmm0 ; cmpps xmm1, xmm2, 1 (lt) ; movmskps eax, xmm1 ;
         // cvttss2si ecx, xmm3 ; comiss xmm3, xmm2
-        let code = [0x0F, 0x57, 0xC0, 0x0F, 0xC2, 0xCA, 0x01, 0x0F, 0x50, 0xC1, 0xF3, 0x0F, 0x2C, 0xCB, 0x0F, 0x2F, 0xDA];
+        let code = [
+            0x0F, 0x57, 0xC0, 0x0F, 0xC2, 0xCA, 0x01, 0x0F, 0x50, 0xC1, 0xF3, 0x0F, 0x2C, 0xCB,
+            0x0F, 0x2F, 0xDA,
+        ];
         let e = run(&code, |e| {
             e.fpu.xmm[0] = xmm([1.0; 4]);
             e.fpu.xmm[1] = xmm([1.0, 5.0, 1.0, 5.0]);
@@ -362,7 +395,11 @@ mod tests {
             e.fpu.xmm[3] = xmm([-7.9, 0.0, 0.0, 0.0]);
         });
         assert_eq!(e.fpu.xmm[0], [0; 4]);
-        assert_eq!(e.regs[crate::cpu::EAX], 0b0101, "lanes 0 and 2 were less than 2");
+        assert_eq!(
+            e.regs[crate::cpu::EAX],
+            0b0101,
+            "lanes 0 and 2 were less than 2"
+        );
         assert_eq!(e.regs[crate::cpu::ECX] as i32, -7, "truncates toward zero");
         assert_ne!(e.eflags & CF, 0, "-7.9 < 2.0 sets CF");
         assert_eq!(e.eflags & ZF, 0);
@@ -371,9 +408,14 @@ mod tests {
     #[test]
     fn mxcsr_round_trips() {
         // ldmxcsr [0x2000] ; stmxcsr [0x2004]
-        let e = run(&[0x0F, 0xAE, 0x15, 0x00, 0x20, 0, 0, 0x0F, 0xAE, 0x1D, 0x04, 0x20, 0, 0], |e| {
-            e.mem.write(0x2000, 4, 0x1F80).unwrap();
-        });
+        let e = run(
+            &[
+                0x0F, 0xAE, 0x15, 0x00, 0x20, 0, 0, 0x0F, 0xAE, 0x1D, 0x04, 0x20, 0, 0,
+            ],
+            |e| {
+                e.mem.write(0x2000, 4, 0x1F80).unwrap();
+            },
+        );
         assert_eq!(e.mem.read(0x2004, 4).unwrap(), 0x1F80);
     }
 }

@@ -72,9 +72,18 @@ fn info(path: &str, data: &[u8]) {
             .iter()
             .filter(|f| !win32::Win32::is_supported(&i.dll, f))
             .count();
-        println!("  {} ({} functions, {} not yet emulated)", i.dll, i.functions.len(), missing);
+        println!(
+            "  {} ({} functions, {} not yet emulated)",
+            i.dll,
+            i.functions.len(),
+            missing
+        );
         if env::var_os("SHOW_MISSING").is_some() {
-            for f in i.functions.iter().filter(|f| !win32::Win32::is_supported(&i.dll, f)) {
+            for f in i
+                .functions
+                .iter()
+                .filter(|f| !win32::Win32::is_supported(&i.dll, f))
+            {
                 println!("      missing: {f}");
             }
         }
@@ -87,10 +96,17 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
     if let Some(dir) = std::path::Path::new(path).parent() {
         emu.win.dll_dirs.push(dir.to_path_buf());
         // The guest sees the program's folder as C:\Game, and nothing else on this machine.
-        let dir = if dir.as_os_str().is_empty() { std::path::Path::new(".") } else { dir };
+        let dir = if dir.as_os_str().is_empty() {
+            std::path::Path::new(".")
+        } else {
+            dir
+        };
         emu.win.vfs.mount(r"C:\Game", dir);
         emu.win.vfs.cwd = r"C:\Game".to_string();
-        let file = std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        let file = std::path::Path::new(path)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
         emu.win.exe_path = format!(r"C:\Game\{file}");
     }
     emu.win.trace = env::var_os("TRACE_API").is_some();
@@ -99,7 +115,9 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
     }
     // XP_PROFILE=1 profiles the whole run; XP_PROFILE=<seconds> starts that far in.
     let profile_from: Option<u64> = env::var("XP_PROFILE").ok().map(|v| v.parse().unwrap_or(0));
-    emu.mem.watch = env::var("XP_WATCH").ok().and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+    emu.mem.watch = env::var("XP_WATCH")
+        .ok()
+        .and_then(|v| u32::from_str_radix(v.trim_start_matches("0x"), 16).ok());
     let image = loader::load(&mut emu, data).unwrap_or_else(|e| {
         eprintln!("{path}: {e}");
         process::exit(1);
@@ -118,9 +136,15 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
     });
 
     // XP_MAX_STEPS stops a run early (with the screenshot) for reproducible checks.
-    let max_steps: u64 = env::var("XP_MAX_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(2_000_000_000);
+    let max_steps: u64 = env::var("XP_MAX_STEPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2_000_000_000);
     let mut closing_waits = 0;
-    let dump_after = env::var("XP_DUMP_AFTER").ok().and_then(|v| v.parse::<u64>().ok()).map(std::time::Duration::from_secs);
+    let dump_after = env::var("XP_DUMP_AFTER")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs);
     let started = std::time::Instant::now();
     let mut dumped = false;
     let mut tapped = 0u128;
@@ -129,33 +153,45 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
     let mut idle = std::time::Duration::ZERO;
     // XP_CLICKS=<secs>:<x>:<y>,...  scripted left clicks at desktop coordinates (headless testing).
     let mut clicks: Vec<(u64, i32, i32)> = env::var("XP_CLICKS")
-        .map(|v| v.split(',').filter_map(|c| {
-            let mut p = c.split(':').map(|n| n.trim().parse::<i64>().ok());
-            Some((p.next()?? as u64, p.next()?? as i32, p.next()?? as i32))
-        }).collect())
+        .map(|v| {
+            v.split(',')
+                .filter_map(|c| {
+                    let mut p = c.split(':').map(|n| n.trim().parse::<i64>().ok());
+                    Some((p.next()?? as u64, p.next()?? as i32, p.next()?? as i32))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     clicks.reverse();
     // XP_KEYS=<secs>:<virtual key>,...  scripted key presses (27 is Esc).
     let mut keys: Vec<(u64, u32)> = env::var("XP_KEYS")
-        .map(|v| v.split(',').filter_map(|k| {
-            let (t, vk) = k.split_once(':')?;
-            Some((t.trim().parse().ok()?, vk.trim().parse().ok()?))
-        }).collect())
+        .map(|v| {
+            v.split(',')
+                .filter_map(|k| {
+                    let (t, vk) = k.split_once(':')?;
+                    Some((t.trim().parse().ok()?, vk.trim().parse().ok()?))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     keys.reverse();
     let stop = loop {
         let stop = emu.run(1_000_000);
-        if let Some(s) = env::var("XP_STOP_AFTER").ok().and_then(|v| v.parse::<u64>().ok())
-            && started.elapsed().as_secs() >= s {
-                break stop;
-            }
+        if let Some(s) = env::var("XP_STOP_AFTER")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            && started.elapsed().as_secs() >= s
+        {
+            break stop;
+        }
         // XP_TAP=<vk>: tap that key every two seconds (headless way to skip intro movies).
         if let Some(vk) = env::var("XP_TAP").ok().and_then(|v| v.parse::<u32>().ok())
-            && started.elapsed().as_millis() / 2000 != tapped {
-                tapped = started.elapsed().as_millis() / 2000;
-                emu.wm.post_key(vk, true);
-                emu.wm.post_key(vk, false);
-            }
+            && started.elapsed().as_millis() / 2000 != tapped
+        {
+            tapped = started.elapsed().as_millis() / 2000;
+            emu.wm.post_key(vk, true);
+            emu.wm.post_key(vk, false);
+        }
         if profile_from.is_some_and(|t| started.elapsed().as_secs() >= t) && emu.profile.is_none() {
             emu.profile = Some(Default::default());
         }
@@ -163,9 +199,19 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         if show_fps && fps_mark.0.elapsed().as_secs() >= 5 {
             let frames = emu.win.d3d.frames();
             let secs = fps_mark.0.elapsed().as_secs_f64();
-            let mut gaps = emu.win.d3d.dev.as_mut().map(|d| std::mem::take(&mut d.frame_times)).unwrap_or_default();
+            let mut gaps = emu
+                .win
+                .d3d
+                .dev
+                .as_mut()
+                .map(|d| std::mem::take(&mut d.frame_times))
+                .unwrap_or_default();
             gaps.sort_by(|a, b| a.total_cmp(b));
-            let pct = |p: f32| gaps.get(((gaps.len() as f32 - 1.0) * p) as usize).copied().unwrap_or(0.0);
+            let pct = |p: f32| {
+                gaps.get(((gaps.len() as f32 - 1.0) * p) as usize)
+                    .copied()
+                    .unwrap_or(0.0)
+            };
             eprintln!(
                 "[fps] {:.1} at {:.0}s ({:.0}M instructions/s, idle {:.0}%) frame ms: median {:.0}, 95% {:.0}, worst {:.0}",
                 (frames - fps_mark.1) as f64 / secs,
@@ -177,7 +223,13 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
                 pct(1.0)
             );
             if env::var_os("XP_BLOCK_STATS").is_some() {
-                eprintln!("[blocks] {} built, {} runs ({:.1} instructions per run), {} flushes", emu.icache.built, emu.icache.runs, (emu.steps - fps_mark.2) as f64 / emu.icache.runs.max(1) as f64, emu.icache.flushes);
+                eprintln!(
+                    "[blocks] {} built, {} runs ({:.1} instructions per run), {} flushes",
+                    emu.icache.built,
+                    emu.icache.runs,
+                    (emu.steps - fps_mark.2) as f64 / emu.icache.runs.max(1) as f64,
+                    emu.icache.flushes
+                );
                 emu.icache.flushes = 0;
                 let mut kinds: Vec<_> = emu.jit.helper_kinds.drain().collect();
                 kinds.sort_by(|a, b| b.1.cmp(&a.1));
@@ -187,7 +239,11 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
                     emu.jit.compiled,
                     emu.jit.runs,
                     emu.jit.helper_calls as f64 * 100.0 / total,
-                    kinds.iter().map(|(k, n)| format!("{k} {:.1}%", *n as f64 * 100.0 / total)).collect::<Vec<_>>().join(", ")
+                    kinds
+                        .iter()
+                        .map(|(k, n)| format!("{k} {:.1}%", *n as f64 * 100.0 / total))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
                 emu.jit.helper_calls = 0;
                 emu.jit.runs = 0;
@@ -197,22 +253,30 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             fps_mark = (std::time::Instant::now(), frames, emu.steps);
             idle = std::time::Duration::ZERO;
         }
-        while keys.last().is_some_and(|k| started.elapsed().as_secs() >= k.0) {
+        while keys
+            .last()
+            .is_some_and(|k| started.elapsed().as_secs() >= k.0)
+        {
             let (_, vk) = keys.pop().unwrap();
             emu.wm.post_key(vk, true);
             emu.wm.post_key(vk, false);
         }
-        while clicks.last().is_some_and(|c| started.elapsed().as_secs() >= c.0) {
+        while clicks
+            .last()
+            .is_some_and(|c| started.elapsed().as_secs() >= c.0)
+        {
             let (_, x, y) = clicks.pop().unwrap();
             emu.wm.post_mouse(0x0200, x, y); // WM_MOUSEMOVE
             emu.wm.post_mouse(0x0201, x, y); // WM_LBUTTONDOWN
             emu.wm.post_mouse(0x0202, x, y); // WM_LBUTTONUP
         }
         if let Some(d) = dump_after
-            && !dumped && started.elapsed() >= d {
-                dumped = true;
-                emu.dump_threads();
-            }
+            && !dumped
+            && started.elapsed() >= d
+        {
+            dumped = true;
+            emu.dump_threads();
+        }
         match (&stop, presenter.as_mut()) {
             (cpu::Stop::StepLimit, None) if emu.steps < max_steps => {}
             // Every thread is waiting for a time: let it pass.
@@ -244,28 +308,51 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
         }
     };
     if let Some(p) = emu.profile.take() {
-        let mut ops: Vec<(u32, u32)> = p.iter().filter(|(k, _)| **k & 0x8000_0000 != 0).map(|(k, v)| (*k & 0xFFFF, *v)).collect();
+        let mut ops: Vec<(u32, u32)> = p
+            .iter()
+            .filter(|(k, _)| **k & 0x8000_0000 != 0)
+            .map(|(k, v)| (*k & 0xFFFF, *v))
+            .collect();
         ops.sort_by(|a, b| b.1.cmp(&a.1));
         let all: u64 = ops.iter().map(|o| o.1 as u64).sum();
         for (op, n) in ops.iter().take(60) {
-            eprintln!("[opcodes] {:5.1}% {}{:02x}", *n as f64 * 100.0 / all as f64, if *op >= 0x100 { "0f " } else { "" }, op & 0xFF);
+            eprintln!(
+                "[opcodes] {:5.1}% {}{:02x}",
+                *n as f64 * 100.0 / all as f64,
+                if *op >= 0x100 { "0f " } else { "" },
+                op & 0xFF
+            );
         }
-        let mut rows: Vec<_> = p.into_iter().filter(|(k, _)| *k & 0x8000_0000 == 0).collect();
+        let mut rows: Vec<_> = p
+            .into_iter()
+            .filter(|(k, _)| *k & 0x8000_0000 == 0)
+            .collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1));
         let total: u32 = rows.iter().map(|r| r.1).sum();
         let mut by_module: std::collections::HashMap<String, u32> = Default::default();
         for (addr, n) in &rows {
             let loc = emu.win.locate(*addr).unwrap_or_else(|| "?".into());
-            *by_module.entry(loc.split('+').next().unwrap_or("?").to_string()).or_insert(0) += n;
+            *by_module
+                .entry(loc.split('+').next().unwrap_or("?").to_string())
+                .or_insert(0) += n;
         }
         let mut mods: Vec<_> = by_module.into_iter().collect();
         mods.sort_by(|a, b| b.1.cmp(&a.1));
         for (m, n) in mods.iter().take(8) {
             eprintln!("[module] {:5.1}% {m}", *n as f64 * 100.0 / total as f64);
         }
-        let top = env::var("XP_PROFILE_TOP").ok().and_then(|v| v.parse().ok()).unwrap_or(45);
+        let top = env::var("XP_PROFILE_TOP")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(45);
         for (addr, n) in rows.iter().take(top) {
-            eprintln!("[profile] {:5.1}% {}", *n as f64 * 100.0 / total as f64, emu.win.locate(*addr).unwrap_or_else(|| format!("{addr:#x}")));
+            eprintln!(
+                "[profile] {:5.1}% {}",
+                *n as f64 * 100.0 / total as f64,
+                emu.win
+                    .locate(*addr)
+                    .unwrap_or_else(|| format!("{addr:#x}"))
+            );
         }
     }
     print!("{}", String::from_utf8_lossy(&emu.win.stdout));
@@ -286,10 +373,19 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
             Err(e) => eprintln!("cannot write {out}: {e}"),
         }
     }
-    eprintln!("stopped: {stop:?} at eip={:#x} after {} steps, {} frames presented in {:.1}s", emu.eip, emu.steps, emu.win.d3d.frames(), started.elapsed().as_secs_f64());
+    eprintln!(
+        "stopped: {stop:?} at eip={:#x} after {} steps, {} frames presented in {:.1}s",
+        emu.eip,
+        emu.steps,
+        emu.win.d3d.frames(),
+        started.elapsed().as_secs_f64()
+    );
     // Close devices properly (process::exit skips destructors).
     emu.win.audio.close();
-    if matches!(stop, cpu::Stop::Fault(_) | cpu::Stop::InvalidOpcode { .. } | cpu::Stop::DivideError(_)) {
+    if matches!(
+        stop,
+        cpu::Stop::Fault(_) | cpu::Stop::InvalidOpcode { .. } | cpu::Stop::DivideError(_)
+    ) {
         crash_report(&emu);
     }
     if let cpu::Stop::Exit(code) = stop {
@@ -306,11 +402,20 @@ fn crash_report(emu: &cpu::Emu) {
         "[crash] eip={:#x} ({})  eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x}",
         emu.eip,
         emu.win.locate(emu.eip).unwrap_or_else(|| "unknown".into()),
-        r[cpu::EAX], r[cpu::ECX], r[cpu::EDX], r[cpu::EBX], r[cpu::ESP], r[cpu::EBP], r[cpu::ESI], r[cpu::EDI]
+        r[cpu::EAX],
+        r[cpu::ECX],
+        r[cpu::EDX],
+        r[cpu::EBX],
+        r[cpu::ESP],
+        r[cpu::EBP],
+        r[cpu::ESI],
+        r[cpu::EDI]
     );
     let mut shown = 0;
     for i in 0..256u32 {
-        let Ok(v) = emu.mem.read(r[cpu::ESP].wrapping_add(4 * i), 4) else { break };
+        let Ok(v) = emu.mem.read(r[cpu::ESP].wrapping_add(4 * i), 4) else {
+            break;
+        };
         if let Some(loc) = emu.win.locate(v) {
             eprintln!("[crash]   stack+{:#04x}: {v:#x} = {loc}", 4 * i);
             shown += 1;

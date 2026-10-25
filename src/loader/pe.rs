@@ -118,7 +118,9 @@ impl Pe {
         let mut sections = Vec::with_capacity(num_sections);
         for i in 0..num_sections {
             let s = sec_table + i * 40;
-            let name_bytes = data.get(s..s + 8).ok_or(PeError::Truncated("section name"))?;
+            let name_bytes = data
+                .get(s..s + 8)
+                .ok_or(PeError::Truncated("section name"))?;
             let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(8);
             sections.push(Section {
                 name: String::from_utf8_lossy(&name_bytes[..end]).into_owned(),
@@ -172,7 +174,9 @@ impl Pe {
                 break;
             }
             for i in 0..(block as usize - 8) / 2 {
-                let Ok(entry) = u16_at(data, off + 8 + 2 * i, "") else { break };
+                let Ok(entry) = u16_at(data, off + 8 + 2 * i, "") else {
+                    break;
+                };
                 if entry >> 12 == 3 {
                     out.push(page + (entry & 0xfff) as u32); // IMAGE_REL_BASED_HIGHLOW
                 }
@@ -209,14 +213,20 @@ impl Pe {
             if frva == 0 || (frva >= rva && frva < rva + size) {
                 continue; // unused slot or forwarder
             }
-            out.push(Export { name: name_of.remove(&i), ordinal: ord_base + i as u32, rva: frva });
+            out.push(Export {
+                name: name_of.remove(&i),
+                ordinal: ord_base + i as u32,
+                rva: frva,
+            });
         }
         out
     }
 
     fn read_imports(&self, data: &[u8], import_rva: u32) -> Vec<Import> {
         let mut out = Vec::new();
-        let Some(mut off) = (import_rva != 0).then(|| self.rva_to_offset(import_rva)).flatten()
+        let Some(mut off) = (import_rva != 0)
+            .then(|| self.rva_to_offset(import_rva))
+            .flatten()
         else {
             return out;
         };
@@ -250,7 +260,11 @@ impl Pe {
                     t += 4;
                 }
             }
-            out.push(Import { dll, iat_rva: first_thunk, functions });
+            out.push(Import {
+                dll,
+                iat_rva: first_thunk,
+                functions,
+            });
             off += 20;
         }
         out

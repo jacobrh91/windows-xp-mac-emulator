@@ -13,7 +13,7 @@
 //! hidden stub) instead of host recursion, so a handler that abandons the stack costs
 //! nothing and a wait inside a handler stays resumable.
 
-use crate::cpu::{Emu, Res, Stop, EAX, EBP, EBX, ECX, EDI, EDX, ESI, ESP};
+use crate::cpu::{EAX, EBP, EBX, ECX, EDI, EDX, ESI, ESP, Emu, Res, Stop};
 use crate::memory::Fault;
 use crate::win32::Args;
 
@@ -63,9 +63,17 @@ pub struct SehState {
 impl Emu {
     /// A hardware fault from the instruction at `start`. If a handler deals with it, the
     /// guest carries on (and this returns Ok); if not, the original stop is returned.
-    pub(crate) fn raise_hardware(&mut self, stop: Stop, start: u32, saved: ([u32; 8], u32)) -> Res<()> {
+    pub(crate) fn raise_hardware(
+        &mut self,
+        stop: Stop,
+        start: u32,
+        saved: ([u32; 8], u32),
+    ) -> Res<()> {
         let (code, params): (u32, Vec<u32>) = match &stop {
-            Stop::Fault(Fault(addr)) => (STATUS_ACCESS_VIOLATION, vec![self.mem.fault_write.get() as u32, *addr]),
+            Stop::Fault(Fault(addr)) => (
+                STATUS_ACCESS_VIOLATION,
+                vec![self.mem.fault_write.get() as u32, *addr],
+            ),
             Stop::DivideError(_) => (STATUS_INTEGER_DIVIDE_BY_ZERO, vec![]),
             Stop::InvalidOpcode { .. } => (STATUS_ILLEGAL_INSTRUCTION, vec![]),
             _ => return Err(stop),
@@ -79,20 +87,41 @@ impl Emu {
 
     /// Begin dispatching an exception: build its records on the guest stack and call the
     /// first handler. `Err(unhandled)` means there was nothing to call.
-    pub(crate) fn start_exception(&mut self, code: u32, flags: u32, address: u32, params: &[u32], unhandled: Stop) -> Res<()> {
+    pub(crate) fn start_exception(
+        &mut self,
+        code: u32,
+        flags: u32,
+        address: u32,
+        params: &[u32],
+        unhandled: Stop,
+    ) -> Res<()> {
         // Hardware faults are worth reporting even without tracing (C++ throws are routine).
         let hardware = matches!(code, 0xC000_0005 | 0xC000_001D | 0xC000_0094);
         if self.win.trace || hardware {
-            let at = self.win.locate(address).unwrap_or_else(|| format!("{address:#x}"));
-            let bytes: Vec<String> = (0..8).filter_map(|i| self.mem.read_u8(address.wrapping_add(i)).ok()).map(|b| format!("{b:02x}")).collect();
-            eprintln!("[exception] {code:#x} at {at} (bytes {}) params {params:x?}", bytes.join(" "));
-            let mut hist: Vec<String> = (1..=16u64).map(|i| self.recent[((self.steps + 16 - i) & 15) as usize]).map(|a| self.win.locate(a).unwrap_or_else(|| format!("{a:#x}"))).collect();
+            let at = self
+                .win
+                .locate(address)
+                .unwrap_or_else(|| format!("{address:#x}"));
+            let bytes: Vec<String> = (0..8)
+                .filter_map(|i| self.mem.read_u8(address.wrapping_add(i)).ok())
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            eprintln!(
+                "[exception] {code:#x} at {at} (bytes {}) params {params:x?}",
+                bytes.join(" ")
+            );
+            let mut hist: Vec<String> = (1..=16u64)
+                .map(|i| self.recent[((self.steps + 16 - i) & 15) as usize])
+                .map(|a| self.win.locate(a).unwrap_or_else(|| format!("{a:#x}")))
+                .collect();
             hist.reverse();
             eprintln!("[exception]   recent: {}", hist.join(" "));
             // Return addresses on the stack that point into loaded modules.
             let mut shown = 0;
             for i in 0..128u32 {
-                let Ok(v) = self.mem.read(self.regs[ESP].wrapping_add(4 * i), 4) else { break };
+                let Ok(v) = self.mem.read(self.regs[ESP].wrapping_add(4 * i), 4) else {
+                    break;
+                };
                 if let Some(loc) = self.win.locate(v) {
                     eprintln!("[exception]   stack+{:#04x}: {v:#x} = {loc}", 4 * i);
                     shown += 1;
@@ -101,7 +130,17 @@ impl Emu {
                     }
                 }
             }
-            eprintln!("[exception]   regs eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esi={:#x} edi={:#x} ebp={:#x} esp={:#x}", self.regs[EAX], self.regs[ECX], self.regs[EDX], self.regs[EBX], self.regs[ESI], self.regs[EDI], self.regs[EBP], self.regs[ESP]);
+            eprintln!(
+                "[exception]   regs eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esi={:#x} edi={:#x} ebp={:#x} esp={:#x}",
+                self.regs[EAX],
+                self.regs[ECX],
+                self.regs[EDX],
+                self.regs[EBX],
+                self.regs[ESI],
+                self.regs[EDI],
+                self.regs[EBP],
+                self.regs[ESP]
+            );
         }
         let esp0 = self.regs[ESP];
         // Exceptions whose stack was unwound by a catch leave their state behind; drop it.
@@ -110,8 +149,15 @@ impl Emu {
             return Err(unhandled); // exceptions inside exception handlers, all the way down
         }
         let ctx = esp0.wrapping_sub(CTX_SIZE + REC_SIZE + 16 + 8 + 16) & !0xF;
-        let (rec, dispatcher, pointers) = (ctx + CTX_SIZE, ctx + CTX_SIZE + REC_SIZE, ctx + CTX_SIZE + REC_SIZE + 16);
-        if self.write_exception_records(ctx, rec, pointers, code, flags, address, params).is_err() {
+        let (rec, dispatcher, pointers) = (
+            ctx + CTX_SIZE,
+            ctx + CTX_SIZE + REC_SIZE,
+            ctx + CTX_SIZE + REC_SIZE + 16,
+        );
+        if self
+            .write_exception_records(ctx, rec, pointers, code, flags, address, params)
+            .is_err()
+        {
             return Err(unhandled); // no usable stack to dispatch on
         }
         let frame = self.mem.read(self.fs_base, 4).unwrap_or(END_OF_CHAIN);
@@ -131,11 +177,30 @@ impl Emu {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn write_exception_records(&mut self, ctx: u32, rec: u32, pointers: u32, code: u32, flags: u32, address: u32, params: &[u32]) -> Result<(), Fault> {
-        self.mem.map(ctx & !0xFFF, (CTX_SIZE + REC_SIZE + 64 + 0xFFF) & !0xFFF);
-        self.mem.write_bytes(ctx, &vec![0u8; (CTX_SIZE + REC_SIZE + 24) as usize])?;
+    fn write_exception_records(
+        &mut self,
+        ctx: u32,
+        rec: u32,
+        pointers: u32,
+        code: u32,
+        flags: u32,
+        address: u32,
+        params: &[u32],
+    ) -> Result<(), Fault> {
+        self.mem
+            .map(ctx & !0xFFF, (CTX_SIZE + REC_SIZE + 64 + 0xFFF) & !0xFFF);
+        self.mem
+            .write_bytes(ctx, &vec![0u8; (CTX_SIZE + REC_SIZE + 24) as usize])?;
         self.mem.write(ctx, 4, CONTEXT_FULL)?;
-        for (off, reg) in [(CTX_EDI, EDI), (CTX_ESI, ESI), (CTX_EBX, EBX), (CTX_EDX, EDX), (CTX_ECX, ECX), (CTX_EAX, EAX), (CTX_EBP, EBP)] {
+        for (off, reg) in [
+            (CTX_EDI, EDI),
+            (CTX_ESI, ESI),
+            (CTX_EBX, EBX),
+            (CTX_EDX, EDX),
+            (CTX_ECX, ECX),
+            (CTX_EAX, EAX),
+            (CTX_EBP, EBP),
+        ] {
             self.mem.write(ctx + off, 4, self.regs[reg])?;
         }
         self.mem.write(ctx + CTX_EIP, 4, self.eip)?;
@@ -158,9 +223,14 @@ impl Emu {
     /// the dispatcher stub. With no records left, the exception is unhandled.
     fn seh_next(&mut self) -> Res<()> {
         loop {
-            let Some(st) = self.seh.last() else { return Ok(()) };
+            let Some(st) = self.seh.last() else {
+                return Ok(());
+            };
             let frame = st.frame;
-            let readable = frame != END_OF_CHAIN && frame != 0 && self.mem.is_mapped(frame) && self.mem.is_mapped(frame + 7);
+            let readable = frame != END_OF_CHAIN
+                && frame != 0
+                && self.mem.is_mapped(frame)
+                && self.mem.is_mapped(frame + 7);
             if !readable {
                 return self.seh_unhandled();
             }
@@ -187,7 +257,9 @@ impl Emu {
         let disposition = self.regs[EAX];
         self.regs[ESP] = self.regs[ESP].wrapping_add(16); // the handler's cdecl arguments
         let Some(st) = self.seh.last() else {
-            return Err(Stop::Unimplemented("returned to the exception dispatcher with no exception".into()));
+            return Err(Stop::Unimplemented(
+                "returned to the exception dispatcher with no exception".into(),
+            ));
         };
         if disposition == 0 && !st.noncontinuable {
             let ctx = st.ctx;
@@ -210,9 +282,19 @@ impl Emu {
                 0xFFFF_FFFF => return self.load_context(st.ctx), // EXCEPTION_CONTINUE_EXECUTION
                 1 => {
                     // EXCEPTION_EXECUTE_HANDLER: the program's crash handler ends the process.
-                    let at = self.win.locate(st.address).unwrap_or_else(|| format!("{:#x}", st.address));
-                    let bytes: Vec<String> = (0..8).filter_map(|i| self.mem.read_u8(st.address.wrapping_add(i)).ok()).map(|b| format!("{b:02x}")).collect();
-                    eprintln!("[exception] {:#x} at {at} (bytes {}) ended the program via its unhandled-exception filter", st.code, bytes.join(" "));
+                    let at = self
+                        .win
+                        .locate(st.address)
+                        .unwrap_or_else(|| format!("{:#x}", st.address));
+                    let bytes: Vec<String> = (0..8)
+                        .filter_map(|i| self.mem.read_u8(st.address.wrapping_add(i)).ok())
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
+                    eprintln!(
+                        "[exception] {:#x} at {at} (bytes {}) ended the program via its unhandled-exception filter",
+                        st.code,
+                        bytes.join(" ")
+                    );
                     return Err(Stop::Exit(st.code));
                 }
                 _ => {}
@@ -223,7 +305,15 @@ impl Emu {
 
     /// Resume the guest from a CONTEXT record (which a handler may have edited).
     fn load_context(&mut self, ctx: u32) -> Res<()> {
-        for (off, reg) in [(CTX_EDI, EDI), (CTX_ESI, ESI), (CTX_EBX, EBX), (CTX_EDX, EDX), (CTX_ECX, ECX), (CTX_EAX, EAX), (CTX_EBP, EBP)] {
+        for (off, reg) in [
+            (CTX_EDI, EDI),
+            (CTX_ESI, ESI),
+            (CTX_EBX, EBX),
+            (CTX_EDX, EDX),
+            (CTX_ECX, ECX),
+            (CTX_EAX, EAX),
+            (CTX_EBP, EBP),
+        ] {
             self.regs[reg] = self.mem.read(ctx + off, 4)?;
         }
         self.eip = self.mem.read(ctx + CTX_EIP, 4)?;
@@ -247,7 +337,13 @@ pub fn raise_exception(e: &mut Emu, a: &Args) -> Res<u32> {
         }
     }
     e.control_transferred = true;
-    e.start_exception(code, flags, ret, &params, Stop::Exception { code, address: ret })?;
+    e.start_exception(
+        code,
+        flags,
+        ret,
+        &params,
+        Stop::Exception { code, address: ret },
+    )?;
     Ok(0)
 }
 
@@ -260,16 +356,37 @@ pub fn rtl_unwind(e: &mut Emu, a: &Args) -> Res<u32> {
     // Scratch records on the stack, below everything live.
     let ctx = esp0.wrapping_sub(CTX_SIZE + REC_SIZE + 16 + 64) & !0xF;
     let (rec, dispatcher) = (ctx + CTX_SIZE, ctx + CTX_SIZE + REC_SIZE);
-    e.mem.map(ctx & !0xFFF, (CTX_SIZE + REC_SIZE + 64 + 0xFFF) & !0xFFF);
-    e.mem.write_bytes(ctx, &vec![0u8; (CTX_SIZE + REC_SIZE + 24) as usize])?;
+    e.mem
+        .map(ctx & !0xFFF, (CTX_SIZE + REC_SIZE + 64 + 0xFFF) & !0xFFF);
+    e.mem
+        .write_bytes(ctx, &vec![0u8; (CTX_SIZE + REC_SIZE + 24) as usize])?;
     e.mem.write(ctx, 4, CONTEXT_FULL)?;
     if rec_in != 0 {
         // Mark the caller's record as an unwind in progress, as Windows does.
         let flags = e.mem.read(rec_in + 4, 4)?;
-        e.mem.write(rec_in + 4, 4, flags | EXCEPTION_UNWINDING | if target == END_OF_CHAIN { EXCEPTION_EXIT_UNWIND } else { 0 })?;
+        e.mem.write(
+            rec_in + 4,
+            4,
+            flags
+                | EXCEPTION_UNWINDING
+                | if target == END_OF_CHAIN {
+                    EXCEPTION_EXIT_UNWIND
+                } else {
+                    0
+                },
+        )?;
     } else {
         e.mem.write(rec, 4, STATUS_UNWIND)?;
-        e.mem.write(rec + 4, 4, EXCEPTION_UNWINDING | if target == END_OF_CHAIN { EXCEPTION_EXIT_UNWIND } else { 0 })?;
+        e.mem.write(
+            rec + 4,
+            4,
+            EXCEPTION_UNWINDING
+                | if target == END_OF_CHAIN {
+                    EXCEPTION_EXIT_UNWIND
+                } else {
+                    0
+                },
+        )?;
     }
     let record = if rec_in != 0 { rec_in } else { rec };
     let mut frame = e.mem.read(e.fs_base, 4)?;
@@ -294,7 +411,7 @@ mod tests {
     use crate::cpu::{Emu, Stop};
     use crate::loader;
     use crate::memory::Fault;
-    use crate::tests::util::{build_pe, CODE_VA};
+    use crate::tests::util::{CODE_VA, build_pe};
     use std::collections::HashMap;
 
     const DATA: u32 = 0x300; // code-section offset of the test's scratch variables
@@ -333,7 +450,8 @@ mod tests {
         /// mov [DATA + slot*4], eax
         fn store(&mut self, slot: u32) -> &mut Self {
             self.e(&[0xA3]);
-            self.b.extend_from_slice(&(CODE_VA + DATA + 4 * slot).to_le_bytes());
+            self.b
+                .extend_from_slice(&(CODE_VA + DATA + 4 * slot).to_le_bytes());
             self
         }
         fn finish(mut self) -> Vec<u8> {
@@ -351,7 +469,12 @@ mod tests {
         emu.mem.read(CODE_VA + DATA + 4 * slot, 4).unwrap()
     }
 
-    const K32: &[&str] = &["RaiseException", "RtlUnwind", "ExitProcess", "SetUnhandledExceptionFilter"];
+    const K32: &[&str] = &[
+        "RaiseException",
+        "RtlUnwind",
+        "ExitProcess",
+        "SetUnhandledExceptionFilter",
+    ];
 
     /// The handler that records the exception into DATA slots 0..4 and resumes after the
     /// faulting instruction (`skip` bytes), by editing the context's EIP.
@@ -372,9 +495,13 @@ mod tests {
     fn fault_program(setup: &[u8], fault: &[u8], extra_inner_handler: bool) -> Vec<u8> {
         build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = A::default();
-            a.push_va("outer").e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0]).e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]); // outer frame
+            a.push_va("outer")
+                .e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0])
+                .e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]); // outer frame
             if extra_inner_handler {
-                a.push_va("inner").e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0]).e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]); // inner frame
+                a.push_va("inner")
+                    .e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0])
+                    .e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]); // inner frame
             }
             a.e(setup);
             a.label("fault").e(fault);
@@ -403,7 +530,10 @@ mod tests {
     }
 
     fn fault_va(image: &[u8], fault: &[u8]) -> u32 {
-        let start = image.windows(fault.len() + 5).position(|w| w[..fault.len()] == *fault && w[fault.len()] == 0xBB).expect("fault bytes");
+        let start = image
+            .windows(fault.len() + 5)
+            .position(|w| w[..fault.len()] == *fault && w[fault.len()] == 0xBB)
+            .expect("fault bytes");
         // The image is the PE file; code begins at file offset 0x200 and maps to CODE_VA.
         CODE_VA + (start as u32 - 0x200)
     }
@@ -413,12 +543,28 @@ mod tests {
         let fault = [0x8B, 0x08]; // mov ecx,[eax] with eax = 0
         let image = fault_program(&[0x31, 0xC0], &fault, false);
         let (emu, stop) = run(&image);
-        assert_eq!(stop, Stop::Exit(0x1234), "execution resumed after the faulting instruction");
+        assert_eq!(
+            stop,
+            Stop::Exit(0x1234),
+            "execution resumed after the faulting instruction"
+        );
         assert_eq!(data(&emu, 0), STATUS_ACCESS_VIOLATION);
         assert_eq!(data(&emu, 1), 0, "continuable");
-        assert_eq!(data(&emu, 2), fault_va(&image, &fault), "ExceptionAddress is the faulting instruction");
-        assert_eq!((data(&emu, 3), data(&emu, 4)), (0, 0), "a read of address 0");
-        assert_eq!(emu.mem.read(emu.fs_base, 4).unwrap(), END_OF_CHAIN, "the chain is back to empty");
+        assert_eq!(
+            data(&emu, 2),
+            fault_va(&image, &fault),
+            "ExceptionAddress is the faulting instruction"
+        );
+        assert_eq!(
+            (data(&emu, 3), data(&emu, 4)),
+            (0, 0),
+            "a read of address 0"
+        );
+        assert_eq!(
+            emu.mem.read(emu.fs_base, 4).unwrap(),
+            END_OF_CHAIN,
+            "the chain is back to empty"
+        );
         assert!(emu.seh.is_empty(), "no dispatch state left over");
     }
 
@@ -428,12 +574,20 @@ mod tests {
         let image = fault_program(&[0xB8, 0x34, 0x12, 0, 0], &fault, false);
         let (emu, stop) = run(&image);
         assert_eq!(stop, Stop::Exit(0x1234));
-        assert_eq!((data(&emu, 3), data(&emu, 4)), (1, 0x1234), "information[0] = write, [1] = the address");
+        assert_eq!(
+            (data(&emu, 3), data(&emu, 4)),
+            (1, 0x1234),
+            "information[0] = write, [1] = the address"
+        );
     }
 
     #[test]
     fn integer_divide_by_zero() {
-        let image = fault_program(&[0xB8, 5, 0, 0, 0, 0x31, 0xD2, 0x31, 0xC9], &[0xF7, 0xF1], false); // div ecx, ecx = 0
+        let image = fault_program(
+            &[0xB8, 5, 0, 0, 0, 0x31, 0xD2, 0x31, 0xC9],
+            &[0xF7, 0xF1],
+            false,
+        ); // div ecx, ecx = 0
         let (emu, stop) = run(&image);
         assert_eq!(stop, Stop::Exit(0x1234));
         assert_eq!(data(&emu, 0), STATUS_INTEGER_DIVIDE_BY_ZERO);
@@ -452,8 +606,16 @@ mod tests {
         let image = fault_program(&[0x31, 0xC0], &[0x8B, 0x08], true);
         let (emu, stop) = run(&image);
         assert_eq!(stop, Stop::Exit(0x1234));
-        assert_eq!(data(&emu, 6), 1, "the inner handler ran once, said ContinueSearch");
-        assert_eq!(data(&emu, 0), STATUS_ACCESS_VIOLATION, "and the outer one then handled it");
+        assert_eq!(
+            data(&emu, 6),
+            1,
+            "the inner handler ran once, said ContinueSearch"
+        );
+        assert_eq!(
+            data(&emu, 0),
+            STATUS_ACCESS_VIOLATION,
+            "and the outer one then handled it"
+        );
     }
 
     #[test]
@@ -461,7 +623,11 @@ mod tests {
         let image = build_pe(&[], |_| vec![0x31, 0xC0, 0x8B, 0x08, 0xC3]); // mov ecx,[0]
         let (emu, stop) = run(&image);
         assert_eq!(stop, Stop::Fault(Fault(0)));
-        assert_eq!(emu.eip, CODE_VA + 2, "eip is back on the faulting instruction");
+        assert_eq!(
+            emu.eip,
+            CODE_VA + 2,
+            "eip is back on the faulting instruction"
+        );
         assert!(emu.seh.is_empty());
     }
 
@@ -472,13 +638,20 @@ mod tests {
         build_pe(&[("KERNEL32.dll", K32)], |l| {
             let mut a = A::default();
             // outer (catching) frame
-            a.push_va("catcher").e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0]).e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]);
+            a.push_va("catcher")
+                .e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0])
+                .e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]);
             a.e(&[0x89, 0x25]); // mov [DATA+0x20], esp   ; remember the frame address
             a.b.extend_from_slice(&(CODE_VA + DATA + 0x20).to_le_bytes());
             // inner frame with a cleanup handler
-            a.push_va("cleanup").e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0]).e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]);
+            a.push_va("cleanup")
+                .e(&[0x64, 0xFF, 0x35, 0, 0, 0, 0])
+                .e(&[0x64, 0x89, 0x25, 0, 0, 0, 0]);
             // throw: RaiseException(0xE06D7363, NONCONTINUABLE, 0, NULL)
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 1]).e(&[0x68]).b.extend_from_slice(&0xE06D_7363u32.to_le_bytes());
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 1])
+                .e(&[0x68])
+                .b
+                .extend_from_slice(&0xE06D_7363u32.to_le_bytes());
             a.call(l.iat_va(0, 0));
             // not caught: exit with a recognisable failure code
             a.e(&[0x68, 0xAD, 0x0B, 0, 0]).call(l.iat_va(0, 2));
@@ -513,8 +686,16 @@ mod tests {
     #[test]
     fn throw_unwind_and_catch_runs_cleanup_handlers_and_lands_in_the_catch_block() {
         let (emu, stop) = run(&throw_catch_program());
-        assert_eq!(stop, Stop::Exit(0x55), "caught (0xbad would mean it was not)");
-        assert_eq!(data(&emu, 6), 1, "the inner cleanup handler ran exactly once, during the unwind");
+        assert_eq!(
+            stop,
+            Stop::Exit(0x55),
+            "caught (0xbad would mean it was not)"
+        );
+        assert_eq!(
+            data(&emu, 6),
+            1,
+            "the inner cleanup handler ran exactly once, during the unwind"
+        );
         assert_eq!(emu.mem.read(emu.fs_base, 4).unwrap(), END_OF_CHAIN);
     }
 
@@ -524,7 +705,8 @@ mod tests {
             if with_filter.is_some() {
                 a.push_va("filter").call(l.iat_va(0, 3)); // SetUnhandledExceptionFilter
             }
-            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x68, 0x34, 0x12, 0, 0]).call(l.iat_va(0, 0)); // RaiseException(0x1234, 0, 0, 0)
+            a.e(&[0x6A, 0, 0x6A, 0, 0x6A, 0, 0x68, 0x34, 0x12, 0, 0])
+                .call(l.iat_va(0, 0)); // RaiseException(0x1234, 0, 0, 0)
             a.e(&[0x6A, 77]).call(l.iat_va(0, 2)); // ExitProcess(77): reached only if execution continues
             a.label("filter");
             if let Some(code) = with_filter {
@@ -537,13 +719,22 @@ mod tests {
     #[test]
     fn unhandled_software_exception_reports_its_code_and_address() {
         let (_, stop) = run(&raise_program(None));
-        assert!(matches!(stop, Stop::Exception { code: 0x1234, .. }), "{stop:?}");
+        assert!(
+            matches!(stop, Stop::Exception { code: 0x1234, .. }),
+            "{stop:?}"
+        );
     }
 
     #[test]
     fn unhandled_exception_filter_can_continue_execution() {
-        let (_, stop) = run(&raise_program(Some(&[0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC2, 4, 0]))); // return -1
-        assert_eq!(stop, Stop::Exit(77), "CONTINUE_EXECUTION resumed after RaiseException");
+        let (_, stop) = run(&raise_program(Some(&[
+            0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xC2, 4, 0,
+        ]))); // return -1
+        assert_eq!(
+            stop,
+            Stop::Exit(77),
+            "CONTINUE_EXECUTION resumed after RaiseException"
+        );
     }
 
     #[test]
@@ -555,6 +746,9 @@ mod tests {
     #[test]
     fn unhandled_exception_filter_returning_search_falls_through_to_the_default() {
         let (_, stop) = run(&raise_program(Some(&[0x31, 0xC0, 0xC2, 4, 0])));
-        assert!(matches!(stop, Stop::Exception { code: 0x1234, .. }), "{stop:?}");
+        assert!(
+            matches!(stop, Stop::Exception { code: 0x1234, .. }),
+            "{stop:?}"
+        );
     }
 }

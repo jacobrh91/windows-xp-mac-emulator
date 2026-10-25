@@ -39,7 +39,11 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             }
             // Handles we never issued (pseudo handles, emulated objects) close quietly;
             // a closed-twice object handle is an error.
-            if (0x1000..0x8000_0000).contains(&h) { fail(e, ERROR_INVALID_HANDLE, 0) } else { Ok(1) }
+            if (0x1000..0x8000_0000).contains(&h) {
+                fail(e, ERROR_INVALID_HANDLE, 0)
+            } else {
+                Ok(1)
+            }
         }),
         "GetFileType" => (1, |e, a| {
             Ok(if (0x10..=0x12).contains(&a[0]) {
@@ -78,8 +82,12 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "GetFullPathNameW" => (4, |e, a| full_path_name(e, a, true)),
         "SetCurrentDirectoryA" => (1, |e, a| set_current_directory(e, a[0], false)),
         "SetCurrentDirectoryW" => (1, |e, a| set_current_directory(e, a[0], true)),
-        "GetCurrentDirectoryA" => (2, |e, a| put_path(e, a[1], a[0], &e.win.vfs.cwd.clone(), false)),
-        "GetCurrentDirectoryW" => (2, |e, a| put_path(e, a[1], a[0], &e.win.vfs.cwd.clone(), true)),
+        "GetCurrentDirectoryA" => (2, |e, a| {
+            put_path(e, a[1], a[0], &e.win.vfs.cwd.clone(), false)
+        }),
+        "GetCurrentDirectoryW" => (2, |e, a| {
+            put_path(e, a[1], a[0], &e.win.vfs.cwd.clone(), true)
+        }),
         "GetModuleFileNameA" => (3, |e, a| module_file_name(e, a, false)),
         "GetModuleFileNameW" => (3, |e, a| module_file_name(e, a, true)),
         "GetModuleHandleW" => (1, get_module_handle_w),
@@ -129,7 +137,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "CompareStringW" => (6, |e, a| compare_string(e, a, true)),
         "LCMapStringA" => (6, |e, a| lc_map_string(e, a, false)),
         "LCMapStringW" => (6, |e, a| lc_map_string(e, a, true)),
-        "GetStringTypeA" | "GetStringTypeExA" => (5, |e, a| get_string_type(e, a[2], a[3] as i32, a[4], false)),
+        "GetStringTypeA" | "GetStringTypeExA" => {
+            (5, |e, a| get_string_type(e, a[2], a[3] as i32, a[4], false))
+        }
         "GetStringTypeW" => (4, |e, a| get_string_type(e, a[1], a[2] as i32, a[3], true)),
         "GetLocaleInfoA" => (4, |e, a| get_locale_info(e, a, false)),
         "GetLocaleInfoW" => (4, |e, a| get_locale_info(e, a, true)),
@@ -167,20 +177,32 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "FreeEnvironmentStringsA" | "FreeEnvironmentStringsW" => (1, |_, _| Ok(1)),
 
         // ---- INI files ----
-        "GetPrivateProfileStringA" => (6, |e, a| profile_string(e, a[0], a[1], a[2], a[3], a[4], Some(a[5]))),
-        "GetProfileStringA" => (5, |e, a| profile_string(e, a[0], a[1], a[2], a[3], a[4], None)),
+        "GetPrivateProfileStringA" => (6, |e, a| {
+            profile_string(e, a[0], a[1], a[2], a[3], a[4], Some(a[5]))
+        }),
+        "GetProfileStringA" => (5, |e, a| {
+            profile_string(e, a[0], a[1], a[2], a[3], a[4], None)
+        }),
         "GetPrivateProfileIntA" => (4, |e, a| {
             let text = read_ini(e, Some(a[3]))?;
             let (app, key) = (e.mem.read_cstr(a[0])?, e.mem.read_cstr(a[1])?);
-            Ok(ini_lookup(&text, &app, &key).and_then(|v| v.trim().parse::<i32>().ok()).map_or(a[2], |v| v as u32))
+            Ok(ini_lookup(&text, &app, &key)
+                .and_then(|v| v.trim().parse::<i32>().ok())
+                .map_or(a[2], |v| v as u32))
         }),
         "WritePrivateProfileStringA" => (4, |_, _| Ok(1)),
 
         // ---- events, mutexes, waiting, threads ----
-        "CreateEventA" | "CreateEventW" => (4, |e, a| Ok(e.win.vfs.create_event(a[1] != 0, a[2] != 0))),
+        "CreateEventA" | "CreateEventW" => {
+            (4, |e, a| Ok(e.win.vfs.create_event(a[1] != 0, a[2] != 0)))
+        }
         "SetEvent" => (1, |e, a| set_event(e, a[0], true)),
         "ResetEvent" => (1, |e, a| set_event(e, a[0], false)),
-        "CreateMutexA" | "CreateMutexW" => (3, |e, a| Ok(e.win.vfs.create_mutex(if a[1] != 0 { MAIN_THREAD } else { 0 }))),
+        "CreateMutexA" | "CreateMutexW" => (3, |e, a| {
+            Ok(e.win
+                .vfs
+                .create_mutex(if a[1] != 0 { MAIN_THREAD } else { 0 }))
+        }),
         "ReleaseMutex" => (1, |e, a| {
             if let Some(Obj::Mutex { owner, count }) = e.win.vfs.get_mut(a[0]) {
                 *count = count.saturating_sub(1);
@@ -221,8 +243,12 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "FatalAppExitA" => (2, |_, _| Err(Stop::Exit(1))),
 
         // ---- console ----
-        "GetConsoleMode" | "GetNumberOfConsoleInputEvents" => (2, |e, _| fail(e, ERROR_INVALID_HANDLE, 0)),
-        "PeekConsoleInputA" | "ReadConsoleInputA" | "ReadConsoleInputW" => (4, |e, _| fail(e, ERROR_INVALID_HANDLE, 0)),
+        "GetConsoleMode" | "GetNumberOfConsoleInputEvents" => {
+            (2, |e, _| fail(e, ERROR_INVALID_HANDLE, 0))
+        }
+        "PeekConsoleInputA" | "ReadConsoleInputA" | "ReadConsoleInputW" => {
+            (4, |e, _| fail(e, ERROR_INVALID_HANDLE, 0))
+        }
         "ReadConsoleA" | "ReadConsoleW" => (5, |e, _| fail(e, ERROR_INVALID_HANDLE, 0)),
         "SetConsoleMode" | "SetConsoleCtrlHandler" | "Beep" => (2, |_, _| Ok(1)),
         "WriteConsoleA" => (5, |e, a| {
@@ -256,7 +282,19 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(1)
         }),
         "GlobalMemoryStatus" => (1, |e, a| {
-            for (i, v) in [32u32, 10, 512 << 20, 256 << 20, 1 << 30, 512 << 20, 2 << 30, 1536 << 20].iter().enumerate() {
+            for (i, v) in [
+                32u32,
+                10,
+                512 << 20,
+                256 << 20,
+                1 << 30,
+                512 << 20,
+                2 << 30,
+                1536 << 20,
+            ]
+            .iter()
+            .enumerate()
+            {
                 e.mem.write(a[0] + 4 * i as u32, 4, *v)?;
             }
             Ok(0)
@@ -293,10 +331,19 @@ fn ok_or_err(e: &mut Emu, h: u32, f: impl FnOnce(&mut Vfs, u32) -> Result<(), u3
 }
 
 fn path_arg(e: &Emu, p: u32, wide: bool) -> Res<String> {
-    Ok(if wide { e.mem.read_wstr(p)? } else { e.mem.read_cstr(p)? })
+    Ok(if wide {
+        e.mem.read_wstr(p)?
+    } else {
+        e.mem.read_cstr(p)?
+    })
 }
 
-fn path_op(e: &mut Emu, p: u32, wide: bool, f: impl FnOnce(&Vfs, &str) -> Result<(), u32>) -> Res<u32> {
+fn path_op(
+    e: &mut Emu,
+    p: u32,
+    wide: bool,
+    f: impl FnOnce(&Vfs, &str) -> Result<(), u32>,
+) -> Res<u32> {
     let path = path_arg(e, p, wide)?;
     match f(&e.win.vfs, &path) {
         Ok(()) => Ok(1),
@@ -307,7 +354,11 @@ fn path_op(e: &mut Emu, p: u32, wide: bool, f: impl FnOnce(&Vfs, &str) -> Result
 /// Write `s` to a guest buffer like GetCurrentDirectory: returns the length, or the size
 /// needed (including NUL) when the buffer is too small.
 fn put_path(e: &mut Emu, buf: u32, size: u32, s: &str, wide: bool) -> Res<u32> {
-    let len = if wide { s.encode_utf16().count() } else { s.len() } as u32;
+    let len = if wide {
+        s.encode_utf16().count()
+    } else {
+        s.len()
+    } as u32;
     if len + 1 > size {
         return Ok(len + 1);
     }
@@ -371,7 +422,19 @@ fn write_system_time(e: &mut Emu, p: u32, filetime: u64) -> Res<()> {
     let (y, m, d) = civil_from_days(days);
     let dow = (days + 4).rem_euclid(7) as u32; // 1970-01-01 was a Thursday
     let ms = ((filetime / 10_000) % 1000) as u32;
-    for (i, v) in [y as u32, m, dow, d, (rem / 3600) as u32, (rem % 3600 / 60) as u32, (rem % 60) as u32, ms].iter().enumerate() {
+    for (i, v) in [
+        y as u32,
+        m,
+        dow,
+        d,
+        (rem / 3600) as u32,
+        (rem % 3600 / 60) as u32,
+        (rem % 60) as u32,
+        ms,
+    ]
+    .iter()
+    .enumerate()
+    {
         e.mem.write(p + 2 * i as u32, 2, *v)?;
     }
     Ok(())
@@ -380,7 +443,8 @@ fn write_system_time(e: &mut Emu, p: u32, filetime: u64) -> Res<()> {
 fn read_system_time(e: &Emu, p: u32) -> Res<u64> {
     let f = |i: u32| e.mem.read(p + 2 * i, 2);
     let (y, m, d, h, mi, s, ms) = (f(0)?, f(1)?, f(3)?, f(4)?, f(5)?, f(6)?, f(7)?);
-    let secs = days_from_civil(y as i64, m.max(1), d.max(1)) * 86_400 + (h * 3600 + mi * 60 + s) as i64;
+    let secs =
+        days_from_civil(y as i64, m.max(1), d.max(1)) * 86_400 + (h * 3600 + mi * 60 + s) as i64;
     Ok((secs + 11_644_473_600) as u64 * 10_000_000 + ms as u64 * 10_000)
 }
 
@@ -416,8 +480,16 @@ fn read_file(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 fn set_file_pointer(e: &mut Emu, a: &Args) -> Res<u32> {
-    let high = if a[2] != 0 { e.mem.read(a[2], 4)? as u64 } else { 0 };
-    let offset = if a[2] != 0 { ((high << 32) | a[1] as u64) as i64 } else { a[1] as i32 as i64 };
+    let high = if a[2] != 0 {
+        e.mem.read(a[2], 4)? as u64
+    } else {
+        0
+    };
+    let offset = if a[2] != 0 {
+        ((high << 32) | a[1] as u64) as i64
+    } else {
+        a[1] as i32 as i64
+    };
     match e.win.vfs.seek(a[0], offset, a[3]) {
         Ok(pos) => {
             if a[2] != 0 {
@@ -434,14 +506,20 @@ fn get_attributes(e: &mut Emu, p: u32, wide: bool) -> Res<u32> {
     match e.win.vfs.attributes(&path) {
         Some(a) => Ok(a),
         None => {
-            let code = if e.win.vfs.resolve(&path).is_ok() { ERROR_FILE_NOT_FOUND } else { ERROR_PATH_NOT_FOUND };
+            let code = if e.win.vfs.resolve(&path).is_ok() {
+                ERROR_FILE_NOT_FOUND
+            } else {
+                ERROR_PATH_NOT_FOUND
+            };
             fail(e, code, INFINITE)
         }
     }
 }
 
 fn get_file_time(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(path) = e.win.vfs.file_path(a[0]).map(|p| p.to_path_buf()) else { return fail(e, ERROR_INVALID_HANDLE, 0) };
+    let Some(path) = e.win.vfs.file_path(a[0]).map(|p| p.to_path_buf()) else {
+        return fail(e, ERROR_INVALID_HANDLE, 0);
+    };
     let secs = std::fs::metadata(path)
         .ok()
         .and_then(|m| m.modified().ok())
@@ -488,11 +566,16 @@ fn map_view_of_file(e: &mut Emu, a: &Args) -> Res<u32> {
     }) else {
         return fail(e, ERROR_INVALID_HANDLE, 0);
     };
-    let len = if a[4] != 0 { a[4] as u64 } else { total.saturating_sub(offset) };
+    let len = if a[4] != 0 {
+        a[4] as u64
+    } else {
+        total.saturating_sub(offset)
+    };
     let base = e.alloc_virtual(len as u32);
     if !path.as_os_str().is_empty() {
         use std::io::{Read, Seek, SeekFrom};
-        let mut f = std::fs::File::open(&path).map_err(|_| Stop::Unimplemented("MapViewOfFile: cannot reopen file".into()))?;
+        let mut f = std::fs::File::open(&path)
+            .map_err(|_| Stop::Unimplemented("MapViewOfFile: cannot reopen file".into()))?;
         f.seek(SeekFrom::Start(offset)).ok();
         let mut buf = vec![0u8; len as usize];
         let mut got = 0;
@@ -512,7 +595,11 @@ fn map_view_of_file(e: &mut Emu, a: &Args) -> Res<u32> {
 fn write_find_data(e: &mut Emu, out: u32, entry: &FindEntry, wide: bool) -> Res<()> {
     let size = if wide { 592 } else { 318 };
     e.mem.write_bytes(out, &vec![0; size])?;
-    let attrs = if entry.is_dir { FILE_ATTRIBUTE_DIRECTORY } else { FILE_ATTRIBUTE_NORMAL };
+    let attrs = if entry.is_dir {
+        FILE_ATTRIBUTE_DIRECTORY
+    } else {
+        FILE_ATTRIBUTE_NORMAL
+    };
     e.mem.write(out, 4, attrs)?;
     let ft = filetime_from_unix(entry.mtime);
     for off in [4, 12, 20] {
@@ -601,7 +688,11 @@ fn get_module_handle_w(e: &mut Emu, a: &Args) -> Res<u32> {
     if let Some(m) = e.win.find_module(&name) {
         return Ok(m.handle);
     }
-    Ok(if crate::win32::Win32::is_emulated_dll(&name) { e.win.emulated_handle(&name) } else { 0 })
+    Ok(if crate::win32::Win32::is_emulated_dll(&name) {
+        e.win.emulated_handle(&name)
+    } else {
+        0
+    })
 }
 
 // ---- strings & locale ---------------------------------------------------------------------
@@ -613,7 +704,11 @@ fn read_counted(e: &Emu, p: u32, n: i32, wide: bool) -> Res<Vec<u32>> {
         if n >= 0 && i >= n as u32 {
             break;
         }
-        let c = if wide { e.mem.read(p + 2 * i, 2)? } else { e.mem.read(p + i, 1)? };
+        let c = if wide {
+            e.mem.read(p + 2 * i, 2)?
+        } else {
+            e.mem.read(p + i, 1)?
+        };
         if n < 0 && c == 0 {
             break;
         }
@@ -624,10 +719,17 @@ fn read_counted(e: &Emu, p: u32, n: i32, wide: bool) -> Res<Vec<u32>> {
 }
 
 fn compare_string(e: &mut Emu, a: &Args, wide: bool) -> Res<u32> {
-    let (x, y) = (read_counted(e, a[2], a[3] as i32, wide)?, read_counted(e, a[4], a[5] as i32, wide)?);
+    let (x, y) = (
+        read_counted(e, a[2], a[3] as i32, wide)?,
+        read_counted(e, a[4], a[5] as i32, wide)?,
+    );
     let fold = |v: Vec<u32>| -> Vec<u32> {
         if a[1] & 1 != 0 {
-            v.into_iter().map(|c| char::from_u32(c).map_or(c, |ch| ch.to_lowercase().next().unwrap_or(ch) as u32)).collect()
+            v.into_iter()
+                .map(|c| {
+                    char::from_u32(c).map_or(c, |ch| ch.to_lowercase().next().unwrap_or(ch) as u32)
+                })
+                .collect()
         } else {
             v
         }
@@ -778,11 +880,16 @@ fn env_block(e: &mut Emu, wide: bool) -> Res<u32> {
 }
 
 fn read_ini(e: &mut Emu, file_ptr: Option<u32>) -> Res<String> {
-    let Some(p) = file_ptr else { return Ok(String::new()) };
+    let Some(p) = file_ptr else {
+        return Ok(String::new());
+    };
     let name = e.mem.read_cstr(p)?;
     // A bare name lives in the Windows directory; ours is the current directory's mount.
     let host = e.win.vfs.resolve(&name).ok();
-    Ok(host.and_then(|h| std::fs::read(h).ok()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default())
+    Ok(host
+        .and_then(|h| std::fs::read(h).ok())
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default())
 }
 
 /// Look up `key` in section `app` of INI text (case-insensitive; `;` comments).
@@ -797,16 +904,29 @@ pub fn ini_lookup(text: &str, app: &str, key: &str) -> Option<String> {
             in_section = sec.0.trim().eq_ignore_ascii_case(app);
         } else if in_section
             && let Some((k, v)) = line.split_once('=')
-                && k.trim().eq_ignore_ascii_case(key) {
-                    return Some(v.trim().to_string());
-                }
+            && k.trim().eq_ignore_ascii_case(key)
+        {
+            return Some(v.trim().to_string());
+        }
     }
     None
 }
 
-fn profile_string(e: &mut Emu, app: u32, key: u32, def: u32, buf: u32, size: u32, file: Option<u32>) -> Res<u32> {
+fn profile_string(
+    e: &mut Emu,
+    app: u32,
+    key: u32,
+    def: u32,
+    buf: u32,
+    size: u32,
+    file: Option<u32>,
+) -> Res<u32> {
     let text = read_ini(e, file)?;
-    let default = if def != 0 { e.mem.read_cstr(def)? } else { String::new() };
+    let default = if def != 0 {
+        e.mem.read_cstr(def)?
+    } else {
+        String::new()
+    };
     let value = if app != 0 && key != 0 {
         ini_lookup(&text, &e.mem.read_cstr(app)?, &e.mem.read_cstr(key)?).unwrap_or(default)
     } else {
@@ -846,11 +966,22 @@ fn virtual_query(e: &mut Emu, addr: u32, out: u32) -> Res<u32> {
     let committed = e.mem.is_mapped(addr);
     let mut size = 0x1000u32;
     // Extend over following pages in the same state (bounded to keep the scan cheap).
-    while size < 0x4000_0000 && base.checked_add(size).is_some_and(|next| e.mem.is_mapped(next) == committed) {
+    while size < 0x4000_0000
+        && base
+            .checked_add(size)
+            .is_some_and(|next| e.mem.is_mapped(next) == committed)
+    {
         size += 0x1000;
     }
-    let (state, protect) = if committed { (0x1000u32, 4u32) } else { (0x10000, 1) };
-    for (i, v) in [base, base, protect, size, state, protect, 0x20000].iter().enumerate() {
+    let (state, protect) = if committed {
+        (0x1000u32, 4u32)
+    } else {
+        (0x10000, 1)
+    };
+    for (i, v) in [base, base, protect, size, state, protect, 0x20000]
+        .iter()
+        .enumerate()
+    {
         e.mem.write(out + 4 * i as u32, 4, *v)?;
     }
     Ok(28)
@@ -890,7 +1021,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("Data")).unwrap();
         std::fs::write(root.join("Data/file.txt"), b"hello world").unwrap();
-        std::fs::write(root.join("ic.ini"), "[global]\ngameVersion = 1.1\n; c\nlang = english\n[other]\nlang = french\n").unwrap();
+        std::fs::write(
+            root.join("ic.ini"),
+            "[global]\ngameVersion = 1.1\n; c\nlang = english\n[other]\nlang = french\n",
+        )
+        .unwrap();
         let mut e = Emu::new();
         e.win.vfs.mount(r"C:\Game", &root);
         e.win.vfs.cwd = r"C:\Game".into();
@@ -907,7 +1042,11 @@ mod tests {
     fn create_read_seek_through_the_guest_api() {
         let (mut e, _) = emu_with_game_dir("rw");
         let path = put(&mut e, 0x20000, r"Data\FILE.TXT");
-        let h = call(&mut e, "CreateFileA", &[path, 0x8000_0000, 1, 0, 3, 0x80, 0]);
+        let h = call(
+            &mut e,
+            "CreateFileA",
+            &[path, 0x8000_0000, 1, 0, 3, 0x80, 0],
+        );
         assert_ne!(h, INVALID_HANDLE);
         assert_eq!(call(&mut e, "GetFileSize", &[h, 0]), 11);
         assert_eq!(call(&mut e, "ReadFile", &[h, 0x21000, 5, 0x22000, 0]), 1);
@@ -923,12 +1062,22 @@ mod tests {
     fn missing_file_sets_last_error() {
         let (mut e, _) = emu_with_game_dir("miss");
         let path = put(&mut e, 0x20000, "nope.bin");
-        assert_eq!(call(&mut e, "CreateFileA", &[path, 0x8000_0000, 1, 0, 3, 0x80, 0]), INVALID_HANDLE);
+        assert_eq!(
+            call(
+                &mut e,
+                "CreateFileA",
+                &[path, 0x8000_0000, 1, 0, 3, 0x80, 0]
+            ),
+            INVALID_HANDLE
+        );
         assert_eq!(e.win.last_error, ERROR_FILE_NOT_FOUND);
         assert_eq!(call(&mut e, "GetFileAttributesA", &[path]), INFINITE);
         let outside = put(&mut e, 0x20100, r"C:\Windows\win.ini");
         assert_eq!(call(&mut e, "GetFileAttributesA", &[outside]), INFINITE);
-        assert_eq!(e.win.last_error, ERROR_PATH_NOT_FOUND, "unmounted paths do not exist for the guest");
+        assert_eq!(
+            e.win.last_error, ERROR_PATH_NOT_FOUND,
+            "unmounted paths do not exist for the guest"
+        );
     }
 
     #[test]
@@ -945,7 +1094,11 @@ mod tests {
         let w = 0x23000;
         e.mem.write_wstr(w, r"Data\*").unwrap();
         let hw = call(&mut e, "FindFirstFileW", &[w, 0x24000]);
-        assert_eq!(e.mem.read_wstr(0x24000 + 44).unwrap(), ".", "wide search lists . first");
+        assert_eq!(
+            e.mem.read_wstr(0x24000 + 44).unwrap(),
+            ".",
+            "wide search lists . first"
+        );
         call(&mut e, "FindClose", &[hw]);
     }
 
@@ -956,26 +1109,70 @@ mod tests {
         let n = call(&mut e, "GetFullPathNameA", &[p, 260, 0x21000, 0x22000]);
         assert_eq!(e.mem.read_cstr(0x21000).unwrap(), r"C:\Game\ic.ini");
         assert_eq!(n, 14);
-        assert_eq!(e.mem.read_cstr(e.mem.read(0x22000, 4).unwrap()).unwrap(), "ic.ini", "lpFilePart");
+        assert_eq!(
+            e.mem.read_cstr(e.mem.read(0x22000, 4).unwrap()).unwrap(),
+            "ic.ini",
+            "lpFilePart"
+        );
         assert_eq!(call(&mut e, "GetCurrentDirectoryA", &[260, 0x21000]), 7);
         assert_eq!(e.mem.read_cstr(0x21000).unwrap(), r"C:\Game");
-        assert_eq!(call(&mut e, "GetCurrentDirectoryA", &[3, 0x21000]), 8, "too small: required size incl. NUL");
+        assert_eq!(
+            call(&mut e, "GetCurrentDirectoryA", &[3, 0x21000]),
+            8,
+            "too small: required size incl. NUL"
+        );
     }
 
     #[test]
     fn ini_files_are_read_through_the_vfs() {
         let (mut e, _) = emu_with_game_dir("ini");
-        let (app, key, def, file) = (put(&mut e, 0x20000, "GLOBAL"), put(&mut e, 0x20100, "Lang"), put(&mut e, 0x20200, "none"), put(&mut e, 0x20300, "ic.ini"));
-        let n = call(&mut e, "GetPrivateProfileStringA", &[app, key, def, 0x21000, 64, file]);
-        assert_eq!((n, e.mem.read_cstr(0x21000).unwrap().as_str()), (7, "english"));
+        let (app, key, def, file) = (
+            put(&mut e, 0x20000, "GLOBAL"),
+            put(&mut e, 0x20100, "Lang"),
+            put(&mut e, 0x20200, "none"),
+            put(&mut e, 0x20300, "ic.ini"),
+        );
+        let n = call(
+            &mut e,
+            "GetPrivateProfileStringA",
+            &[app, key, def, 0x21000, 64, file],
+        );
+        assert_eq!(
+            (n, e.mem.read_cstr(0x21000).unwrap().as_str()),
+            (7, "english")
+        );
         let other = put(&mut e, 0x20400, "other");
-        call(&mut e, "GetPrivateProfileStringA", &[other, key, def, 0x21000, 64, file]);
-        assert_eq!(e.mem.read_cstr(0x21000).unwrap(), "french", "sections are separate");
+        call(
+            &mut e,
+            "GetPrivateProfileStringA",
+            &[other, key, def, 0x21000, 64, file],
+        );
+        assert_eq!(
+            e.mem.read_cstr(0x21000).unwrap(),
+            "french",
+            "sections are separate"
+        );
         let missing = put(&mut e, 0x20500, "zzz");
-        call(&mut e, "GetPrivateProfileStringA", &[app, missing, def, 0x21000, 64, file]);
-        assert_eq!(e.mem.read_cstr(0x21000).unwrap(), "none", "default for a missing key");
-        call(&mut e, "GetPrivateProfileStringA", &[app, key, def, 0x21000, 4, file]);
-        assert_eq!(e.mem.read_cstr(0x21000).unwrap(), "eng", "truncated to the buffer");
+        call(
+            &mut e,
+            "GetPrivateProfileStringA",
+            &[app, missing, def, 0x21000, 64, file],
+        );
+        assert_eq!(
+            e.mem.read_cstr(0x21000).unwrap(),
+            "none",
+            "default for a missing key"
+        );
+        call(
+            &mut e,
+            "GetPrivateProfileStringA",
+            &[app, key, def, 0x21000, 4, file],
+        );
+        assert_eq!(
+            e.mem.read_cstr(0x21000).unwrap(),
+            "eng",
+            "truncated to the buffer"
+        );
         assert_eq!(ini_lookup("[a]\nx=1", "A", "X").as_deref(), Some("1"));
     }
 
@@ -983,25 +1180,64 @@ mod tests {
     fn file_mapping_copies_the_file_into_memory() {
         let (mut e, _) = emu_with_game_dir("map");
         let path = put(&mut e, 0x20000, r"Data\file.txt");
-        let f = call(&mut e, "CreateFileA", &[path, 0x8000_0000, 1, 0, 3, 0x80, 0]);
+        let f = call(
+            &mut e,
+            "CreateFileA",
+            &[path, 0x8000_0000, 1, 0, 3, 0x80, 0],
+        );
         let m = call(&mut e, "CreateFileMappingA", &[f, 0, 2, 0, 0, 0]);
         assert_ne!(m, 0);
         let view = call(&mut e, "MapViewOfFile", &[m, 4, 0, 0, 0]);
         assert_eq!(e.mem.read_bytes(view, 11).unwrap(), b"hello world");
-        let anon = call(&mut e, "CreateFileMappingA", &[INVALID_HANDLE, 0, 4, 0, 0x1000, 0]);
+        let anon = call(
+            &mut e,
+            "CreateFileMappingA",
+            &[INVALID_HANDLE, 0, 4, 0, 0x1000, 0],
+        );
         let v2 = call(&mut e, "MapViewOfFile", &[anon, 6, 0, 0, 0]);
-        assert_eq!(e.mem.read(v2, 4).unwrap(), 0, "anonymous mappings are zeroed");
+        assert_eq!(
+            e.mem.read(v2, 4).unwrap(),
+            0,
+            "anonymous mappings are zeroed"
+        );
     }
 
     #[test]
     fn string_functions() {
         let (mut e, _) = emu_with_game_dir("str");
         let (a, b) = (put(&mut e, 0x20000, "Hello"), put(&mut e, 0x20100, "hello"));
-        assert_eq!(call(&mut e, "CompareStringA", &[0x409, 0, a, u32::MAX, b, u32::MAX]), 1, "'H' < 'h'");
-        assert_eq!(call(&mut e, "CompareStringA", &[0x409, 1, a, u32::MAX, b, u32::MAX]), 2, "NORM_IGNORECASE");
-        assert_eq!(call(&mut e, "LCMapStringA", &[0x409, 0x200, a, u32::MAX, 0x21000, 16]), 6);
+        assert_eq!(
+            call(
+                &mut e,
+                "CompareStringA",
+                &[0x409, 0, a, u32::MAX, b, u32::MAX]
+            ),
+            1,
+            "'H' < 'h'"
+        );
+        assert_eq!(
+            call(
+                &mut e,
+                "CompareStringA",
+                &[0x409, 1, a, u32::MAX, b, u32::MAX]
+            ),
+            2,
+            "NORM_IGNORECASE"
+        );
+        assert_eq!(
+            call(
+                &mut e,
+                "LCMapStringA",
+                &[0x409, 0x200, a, u32::MAX, 0x21000, 16]
+            ),
+            6
+        );
         assert_eq!(e.mem.read_cstr(0x21000).unwrap(), "HELLO");
-        assert_eq!(call(&mut e, "LCMapStringA", &[0x409, 0x200, a, u32::MAX, 0, 0]), 6, "size query");
+        assert_eq!(
+            call(&mut e, "LCMapStringA", &[0x409, 0x200, a, u32::MAX, 0, 0]),
+            6,
+            "size query"
+        );
         e.mem.write_wstr(0x22000, "a1 ").unwrap();
         call(&mut e, "GetStringTypeW", &[1, 0x22000, 3, 0x23000]);
         let t = |i: u32| e.mem.read(0x23000 + 2 * i, 2).unwrap();
@@ -1022,7 +1258,11 @@ mod tests {
         assert_eq!(call(&mut e, "SystemTimeToFileTime", &[0x20000, 0x21000]), 1);
         assert_eq!(call(&mut e, "FileTimeToSystemTime", &[0x21000, 0x22000]), 1);
         for i in 0..8 {
-            assert_eq!(e.mem.read(0x22000 + 2 * i, 2).unwrap(), e.mem.read(0x20000 + 2 * i, 2).unwrap(), "field {i}");
+            assert_eq!(
+                e.mem.read(0x22000 + 2 * i, 2).unwrap(),
+                e.mem.read(0x20000 + 2 * i, 2).unwrap(),
+                "field {i}"
+            );
         }
         assert_eq!(days_from_civil(1970, 1, 1), 0);
         assert_eq!(civil_from_days(days_from_civil(2000, 2, 29)), (2000, 2, 29));
@@ -1035,16 +1275,27 @@ mod tests {
         assert_eq!(call(&mut e, "WaitForSingleObject", &[ev, 0]), WAIT_TIMEOUT);
         call(&mut e, "SetEvent", &[ev]);
         assert_eq!(call(&mut e, "WaitForSingleObject", &[ev, 0]), 0);
-        assert_eq!(call(&mut e, "WaitForSingleObject", &[ev, 0]), WAIT_TIMEOUT, "auto-reset consumed the signal");
+        assert_eq!(
+            call(&mut e, "WaitForSingleObject", &[ev, 0]),
+            WAIT_TIMEOUT,
+            "auto-reset consumed the signal"
+        );
         let manual = call(&mut e, "CreateEventA", &[0, 1, 1, 0]);
         assert_eq!(call(&mut e, "WaitForSingleObject", &[manual, 0]), 0);
-        assert_eq!(call(&mut e, "WaitForSingleObject", &[manual, 0]), 0, "manual-reset stays signaled");
+        assert_eq!(
+            call(&mut e, "WaitForSingleObject", &[manual, 0]),
+            0,
+            "manual-reset stays signaled"
+        );
         let (_, h) = crate::win32::lookup("kernel32", "WaitForSingleObject").unwrap();
         let mut args = [0u32; MAX_ARGS];
         args[0] = ev;
         args[1] = INFINITE;
         assert!(
-            matches!(h(&mut e, &args), Err(Stop::Blocked(crate::win32::threads::Block::Forever))),
+            matches!(
+                h(&mut e, &args),
+                Err(Stop::Blocked(crate::win32::threads::Block::Forever))
+            ),
             "an unsignaled infinite wait blocks; the scheduler decides whether that is a deadlock"
         );
         let mx = call(&mut e, "CreateMutexA", &[0, 0, 0]);
@@ -1055,22 +1306,40 @@ mod tests {
     #[test]
     fn environment_variables() {
         let (mut e, _) = emu_with_game_dir("env");
-        let (name, val) = (put(&mut e, 0x20000, "Path"), put(&mut e, 0x20100, "C:\\Game"));
-        assert_eq!(call(&mut e, "GetEnvironmentVariableA", &[name, 0x21000, 64]), 0);
+        let (name, val) = (
+            put(&mut e, 0x20000, "Path"),
+            put(&mut e, 0x20100, "C:\\Game"),
+        );
+        assert_eq!(
+            call(&mut e, "GetEnvironmentVariableA", &[name, 0x21000, 64]),
+            0
+        );
         assert_eq!(e.win.last_error, 203);
         call(&mut e, "SetEnvironmentVariableA", &[name, val]);
-        assert_eq!(call(&mut e, "GetEnvironmentVariableA", &[name, 0x21000, 64]), 7);
+        assert_eq!(
+            call(&mut e, "GetEnvironmentVariableA", &[name, 0x21000, 64]),
+            7
+        );
         let block = call(&mut e, "GetEnvironmentStrings", &[]);
         assert_eq!(e.mem.read_cstr(block).unwrap(), "PATH=C:\\Game");
         call(&mut e, "SetEnvironmentVariableA", &[name, 0]);
-        assert_eq!(call(&mut e, "GetEnvironmentVariableA", &[name, 0x21000, 64]), 0);
+        assert_eq!(
+            call(&mut e, "GetEnvironmentVariableA", &[name, 0x21000, 64]),
+            0
+        );
     }
 
     #[test]
     fn virtual_query_reports_committed_and_free() {
         let (mut e, _) = emu_with_game_dir("vq");
-        assert_eq!(call(&mut e, "VirtualQuery", &[0x20000, 0x30000 - 0x1000, 28]), 28);
-        let (state, size) = (e.mem.read(0x30000 - 0x1000 + 16, 4).unwrap(), e.mem.read(0x30000 - 0x1000 + 12, 4).unwrap());
+        assert_eq!(
+            call(&mut e, "VirtualQuery", &[0x20000, 0x30000 - 0x1000, 28]),
+            28
+        );
+        let (state, size) = (
+            e.mem.read(0x30000 - 0x1000 + 16, 4).unwrap(),
+            e.mem.read(0x30000 - 0x1000 + 12, 4).unwrap(),
+        );
         assert_eq!((state, size), (0x1000, 0x10000), "the whole mapped region");
         call(&mut e, "VirtualQuery", &[0x1000_0000, 0x21000, 28]);
         assert_eq!(e.mem.read(0x21000 + 16, 4).unwrap(), 0x10000, "MEM_FREE");

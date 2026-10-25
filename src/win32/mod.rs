@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::cpu::{Emu, Res, Stop, EAX, ESP};
+use crate::cpu::{EAX, ESP, Emu, Res, Stop};
 
 pub const HLE_BASE: u32 = 0x7000_0000;
 const STUB_SIZE: u32 = 4;
@@ -72,10 +72,10 @@ pub struct Exports {
 
 /// DLLs we implement ourselves, so they are never looked up on disk.
 const EMULATED_DLLS: &[&str] = &[
-    "kernel32", "user32", "gdi32", "advapi32", "ntdll", "shell32", "ole32", "oleaut32",
-    "comctl32", "comdlg32", "version", "winmm", "ws2_32", "wsock32", "msvcrt", "ddraw",
-    "d3d8", "d3d9", "dsound", "dinput", "dinput8", "shlwapi", "imm32", "opengl32", "glu32",
-    "setupapi", "wininet", "winspool", "msacm32", "psapi", "rpcrt4", "mpr", "netapi32", "iphlpapi",
+    "kernel32", "user32", "gdi32", "advapi32", "ntdll", "shell32", "ole32", "oleaut32", "comctl32",
+    "comdlg32", "version", "winmm", "ws2_32", "wsock32", "msvcrt", "ddraw", "d3d8", "d3d9",
+    "dsound", "dinput", "dinput8", "shlwapi", "imm32", "opengl32", "glu32", "setupapi", "wininet",
+    "winspool", "msacm32", "psapi", "rpcrt4", "mpr", "netapi32", "iphlpapi",
 ];
 
 pub struct Win32 {
@@ -132,7 +132,11 @@ pub struct Win32 {
 
 /// "C:\\Game\\SeMiles.dll" -> "semiles": the file name alone, lower-case, no ".dll".
 pub fn normalize_dll(dll: &str) -> String {
-    let d = dll.rsplit(['\\', '/', ':']).next().unwrap_or(dll).to_ascii_lowercase();
+    let d = dll
+        .rsplit(['\\', '/', ':'])
+        .next()
+        .unwrap_or(dll)
+        .to_ascii_lowercase();
     d.strip_suffix(".dll").unwrap_or(&d).to_string()
 }
 
@@ -215,7 +219,9 @@ fn core_api(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "GetCurrentProcess") => (0, |_, _| Ok(0xFFFF_FFFF)),
         ("kernel32", "GetCurrentProcessId") => (0, |_, _| Ok(0x400)),
         ("kernel32", "lstrlenA") => (1, |e, a| Ok(e.mem.read_cstr(a[0])?.len() as u32)),
-        ("kernel32", "SetUnhandledExceptionFilter") => (1, |e, a| Ok(std::mem::replace(&mut e.win.unhandled_filter, a[0]))),
+        ("kernel32", "SetUnhandledExceptionFilter") => (1, |e, a| {
+            Ok(std::mem::replace(&mut e.win.unhandled_filter, a[0]))
+        }),
         ("kernel32", "GetACP") => (0, |_, _| Ok(1252)),
         ("kernel32", "GetStartupInfoA") => (1, |e, a| {
             e.mem.write_bytes(a[0], &[0; 68])?;
@@ -289,14 +295,22 @@ impl Win32 {
         };
         let addr = HLE_BASE + self.stubs.len() as u32 * STUB_SIZE;
         assert!(addr < HLE_END, "out of HLE stubs");
-        self.stubs.push(Stub { dll, name: name.to_string(), argc, handler });
+        self.stubs.push(Stub {
+            dll,
+            name: name.to_string(),
+            argc,
+            handler,
+        });
         self.stub_index.insert(key, addr);
         addr
     }
 
     /// "module+0xoffset" for an address inside a loaded image, for crash reports.
     pub fn locate(&self, addr: u32) -> Option<String> {
-        if self.image_size != 0 && addr >= self.image_base && addr - self.image_base < self.image_size {
+        if self.image_size != 0
+            && addr >= self.image_base
+            && addr - self.image_base < self.image_size
+        {
             return Some(format!("exe+{:#x}", addr - self.image_base));
         }
         self.modules
@@ -307,7 +321,8 @@ impl Win32 {
 
     /// The emulator's clock in milliseconds: real time since start, or the test override.
     pub fn now_ms(&self) -> u64 {
-        self.virtual_now.unwrap_or_else(|| self.started.elapsed().as_millis() as u64)
+        self.virtual_now
+            .unwrap_or_else(|| self.started.elapsed().as_millis() as u64)
     }
 
     pub fn elapsed_ms(&self) -> u64 {
@@ -331,12 +346,19 @@ impl Win32 {
             if !full.rsplit('\\').next().unwrap_or("").contains('.') {
                 full.push_str(".dll");
             }
-            if let Some(i) = self.modules.iter().position(|m| !m.path.is_empty() && m.path == full) {
+            if let Some(i) = self
+                .modules
+                .iter()
+                .position(|m| !m.path.is_empty() && m.path == full)
+            {
                 return Some(i);
             }
             // A path to a DLL we emulate (C:\\WINDOWS\\system32\\kernel32.dll) is that emulated DLL.
             let base = normalize_dll(name);
-            return self.modules.iter().position(|m| m.path.is_empty() && m.name == base);
+            return self
+                .modules
+                .iter()
+                .position(|m| m.path.is_empty() && m.name == base);
         }
         let base = normalize_dll(name);
         self.modules.iter().position(|m| m.name == base)
@@ -356,7 +378,15 @@ impl Win32 {
             return m.handle;
         }
         let handle = MODULE_BASE + self.modules.len() as u32 * MODULE_STRIDE;
-        self.modules.push(Module { name: normalize_dll(name), path: String::new(), refs: 1, entry: 0, handle, size: 0, exports: None });
+        self.modules.push(Module {
+            name: normalize_dll(name),
+            path: String::new(),
+            refs: 1,
+            entry: 0,
+            handle,
+            size: 0,
+            exports: None,
+        });
         handle
     }
 
@@ -368,15 +398,26 @@ impl Win32 {
         if !last.contains('.') {
             file.push_str(".dll");
         }
-        let exe_dir = self.exe_path.rsplit_once('\\').map_or(r"C:\", |(d, _)| d).to_ascii_lowercase();
+        let exe_dir = self
+            .exe_path
+            .rsplit_once('\\')
+            .map_or(r"C:\", |(d, _)| d)
+            .to_ascii_lowercase();
         // A path (relative to the current directory, or absolute) is resolved through the
         // sandboxed file system the game sees.
         if file.contains(['\\', '/', ':'])
             && let Ok(host) = self.vfs.resolve(&file)
-                && host.is_file() {
-                    return std::fs::read(host).ok().map(|b| (b, self.vfs.normalize(&file).to_ascii_lowercase()));
-                }
-        let lower = file.rsplit(['\\', '/']).next().unwrap_or(&file).to_ascii_lowercase();
+            && host.is_file()
+        {
+            return std::fs::read(host)
+                .ok()
+                .map(|b| (b, self.vfs.normalize(&file).to_ascii_lowercase()));
+        }
+        let lower = file
+            .rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(&file)
+            .to_ascii_lowercase();
         let guest_path = format!("{exe_dir}\\{lower}");
         if let Some(b) = self.virtual_files.get(&lower) {
             return Some((b.clone(), guest_path));
@@ -390,9 +431,12 @@ impl Win32 {
         }
         // Finally, a bare name in the program's current directory.
         if let Ok(host) = self.vfs.resolve(&lower)
-            && host.is_file() {
-                return std::fs::read(host).ok().map(|b| (b, self.vfs.normalize(&lower).to_ascii_lowercase()));
-            }
+            && host.is_file()
+        {
+            return std::fs::read(host)
+                .ok()
+                .map(|b| (b, self.vfs.normalize(&lower).to_ascii_lowercase()));
+        }
         None
     }
 }
@@ -403,7 +447,12 @@ impl Emu {
         let idx = ((self.eip - HLE_BASE) / STUB_SIZE) as usize;
         let (raw_argc, handler, dll, name) = match self.win.stubs.get(idx) {
             Some(s) => (s.argc, s.handler, s.dll.clone(), s.name.clone()),
-            None => return Err(Stop::Unimplemented(format!("unknown stub at {:#x}", self.eip))),
+            None => {
+                return Err(Stop::Unimplemented(format!(
+                    "unknown stub at {:#x}",
+                    self.eip
+                )));
+            }
         };
         let Some(handler) = handler else {
             return Err(Stop::Unimplemented(format!("{dll}!{name}")));
@@ -417,14 +466,30 @@ impl Emu {
         let ret = handler(self, &args);
         if let Err(Stop::Fault(f)) = &ret {
             let ret_addr = self.mem.read(esp, 4).unwrap_or(0);
-            let caller = self.win.locate(ret_addr).unwrap_or_else(|| format!("{ret_addr:#x}"));
+            let caller = self
+                .win
+                .locate(ret_addr)
+                .unwrap_or_else(|| format!("{ret_addr:#x}"));
             let shown: Vec<String> = args.iter().take(argc).map(|a| format!("{a:#x}")).collect();
-            eprintln!("[api fault] {dll}!{name}({}) touched unmapped {:#x} <{caller}> thread {}", shown.join(", "), f.0, self.cur_tid());
-            let mut hist: Vec<String> = (1..=16u64).map(|i| self.recent[((self.steps + 16 - i) & 15) as usize]).map(|a| self.win.locate(a).unwrap_or_else(|| format!("{a:#x}"))).collect();
+            eprintln!(
+                "[api fault] {dll}!{name}({}) touched unmapped {:#x} <{caller}> thread {}",
+                shown.join(", "),
+                f.0,
+                self.cur_tid()
+            );
+            let mut hist: Vec<String> = (1..=16u64)
+                .map(|i| self.recent[((self.steps + 16 - i) & 15) as usize])
+                .map(|a| self.win.locate(a).unwrap_or_else(|| format!("{a:#x}")))
+                .collect();
             hist.reverse();
             eprintln!("[api fault]   recent: {}", hist.join(" "));
             for k in 0..64u32 {
-                if let Some(loc) = self.mem.read(esp.wrapping_add(4 * k), 4).ok().and_then(|v| self.win.locate(v)) {
+                if let Some(loc) = self
+                    .mem
+                    .read(esp.wrapping_add(4 * k), 4)
+                    .ok()
+                    .and_then(|v| self.win.locate(v))
+                {
                     eprintln!("[api fault]   stack+{:#x}: {loc}", 4 * k);
                 }
             }
@@ -435,8 +500,16 @@ impl Emu {
                 Ok(v) => format!("{v:#x}"),
                 Err(s) => format!("{s:?}"),
             };
-            let caller = self.mem.read(esp, 4).ok().and_then(|r| self.win.locate(r)).unwrap_or_default();
-            eprintln!("[api] {dll}!{name}({}) -> {result} <{caller}>", shown.join(", "));
+            let caller = self
+                .mem
+                .read(esp, 4)
+                .ok()
+                .and_then(|r| self.win.locate(r))
+                .unwrap_or_default();
+            eprintln!(
+                "[api] {dll}!{name}({}) -> {result} <{caller}>",
+                shown.join(", ")
+            );
         }
         // A bad pointer passed to an API is an access violation in the program, as on Windows
         // (where it would fault inside the system DLL): its exception handlers get a say.
@@ -516,7 +589,11 @@ impl Emu {
                     let rest = block + total;
                     self.mem.write(rest + 4, 4, found - total)?;
                     self.mem.write(rest + 8, 4, HEAP_TAG_FREE)?;
-                    self.win.heap_free.entry(found - total).or_default().push(rest);
+                    self.win
+                        .heap_free
+                        .entry(found - total)
+                        .or_default()
+                        .push(rest);
                     self.mem.write(block + 4, 4, total)?;
                 } else {
                     self.mem.write(block + 4, 4, found)?;
@@ -524,7 +601,12 @@ impl Emu {
                 block
             }
             None => {
-                if self.win.heap_next.checked_add(total).is_none_or(|end| end > self.win.heap_end) {
+                if self
+                    .win
+                    .heap_next
+                    .checked_add(total)
+                    .is_none_or(|end| end > self.win.heap_end)
+                {
                     // This arena is full: carry on in fresh address space.
                     let chunk = total.max(16 << 20);
                     self.win.heap_next = self.reserve(chunk);
@@ -549,7 +631,9 @@ impl Emu {
             return false;
         }
         let block = p - 16;
-        let Ok(total) = self.mem.read(block + 4, 4) else { return false };
+        let Ok(total) = self.mem.read(block + 4, 4) else {
+            return false;
+        };
         let _ = self.mem.write(block + 8, 4, HEAP_TAG_FREE);
         self.win.heap_free.entry(total).or_default().push(block);
         true
@@ -557,7 +641,8 @@ impl Emu {
 
     /// Usable size of a heap block (its capacity, not just what was asked for).
     pub fn heap_capacity(&self, p: u32) -> Option<u32> {
-        (self.mem.read(p.wrapping_sub(8), 4).ok()? == HEAP_TAG_LIVE).then(|| self.mem.read(p - 12, 4).ok().map(|t| t - 16))?
+        (self.mem.read(p.wrapping_sub(8), 4).ok()? == HEAP_TAG_LIVE)
+            .then(|| self.mem.read(p - 12, 4).ok().map(|t| t - 16))?
     }
 }
 
@@ -569,7 +654,11 @@ fn k32_get_module_handle(e: &mut Emu, a: &Args) -> Res<u32> {
     if let Some(m) = e.win.find_module(&name) {
         return Ok(m.handle);
     }
-    Ok(if Win32::is_emulated_dll(&name) { e.win.emulated_handle(&name) } else { 0 })
+    Ok(if Win32::is_emulated_dll(&name) {
+        e.win.emulated_handle(&name)
+    } else {
+        0
+    })
 }
 
 fn k32_load_library(e: &mut Emu, a: &Args) -> Res<u32> {
@@ -649,11 +738,16 @@ fn k32_heap_realloc(e: &mut Emu, a: &Args) -> Res<u32> {
     let (flags, old, size) = (a[1], a[2], a[3]);
     const HEAP_ZERO_MEMORY: u32 = 8;
     const HEAP_REALLOC_IN_PLACE_ONLY: u32 = 0x10;
-    let old_size = if old != 0 { e.mem.read(old - 16, 4)? } else { 0 };
+    let old_size = if old != 0 {
+        e.mem.read(old - 16, 4)?
+    } else {
+        0
+    };
     // Fits where it is?
     if old != 0 && e.heap_capacity(old).is_some_and(|cap| size <= cap) {
         if flags & HEAP_ZERO_MEMORY != 0 && size > old_size {
-            e.mem.write_bytes(old + old_size, &vec![0; (size - old_size) as usize])?;
+            e.mem
+                .write_bytes(old + old_size, &vec![0; (size - old_size) as usize])?;
         }
         e.mem.write(old - 16, 4, size)?;
         return Ok(old);
@@ -668,7 +762,8 @@ fn k32_heap_realloc(e: &mut Emu, a: &Args) -> Res<u32> {
         e.heap_free(old);
     }
     if flags & HEAP_ZERO_MEMORY != 0 && size > old_size {
-        e.mem.write_bytes(new + old_size, &vec![0; (size - old_size) as usize])?;
+        e.mem
+            .write_bytes(new + old_size, &vec![0; (size - old_size) as usize])?;
     }
     Ok(new)
 }
@@ -708,12 +803,19 @@ mod heap_tests {
         let b = e.heap_alloc(100).unwrap();
         assert_ne!(a, b);
         assert!(e.heap_free(a));
-        assert_eq!(e.heap_alloc(90).unwrap(), a, "a freed block of the right size comes back");
+        assert_eq!(
+            e.heap_alloc(90).unwrap(),
+            a,
+            "a freed block of the right size comes back"
+        );
         assert!(e.heap_free(b));
         let small = e.heap_alloc(10).unwrap();
         assert_eq!(small, b, "a larger free block is used...");
         let rest = e.heap_alloc(10).unwrap();
-        assert!(rest > b && rest < b + 128, "...and split, so its remainder is used next");
+        assert!(
+            rest > b && rest < b + 128,
+            "...and split, so its remainder is used next"
+        );
     }
 
     #[test]
@@ -748,4 +850,3 @@ mod heap_tests {
         assert!(!e.free_virtual(v), "only once");
     }
 }
-

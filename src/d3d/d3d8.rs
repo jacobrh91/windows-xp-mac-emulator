@@ -33,7 +33,15 @@ pub enum Iface {
     SwapChain,
 }
 
-const ALL_IFACES: [Iface; 7] = [Iface::D3d, Iface::Device, Iface::Texture, Iface::Surface, Iface::VertexBuffer, Iface::IndexBuffer, Iface::SwapChain];
+const ALL_IFACES: [Iface; 7] = [
+    Iface::D3d,
+    Iface::Device,
+    Iface::Texture,
+    Iface::Surface,
+    Iface::VertexBuffer,
+    Iface::IndexBuffer,
+    Iface::SwapChain,
+];
 
 impl Iface {
     fn name(self) -> &'static str {
@@ -63,67 +71,200 @@ impl Iface {
 }
 
 const D3D_METHODS: &[(&str, usize)] = &[
-    ("QueryInterface", 3), ("AddRef", 1), ("Release", 1),
-    ("RegisterSoftwareDevice", 2), ("GetAdapterCount", 1), ("GetAdapterIdentifier", 4), ("GetAdapterModeCount", 2),
-    ("EnumAdapterModes", 4), ("GetAdapterDisplayMode", 3), ("CheckDeviceType", 6), ("CheckDeviceFormat", 7),
-    ("CheckDeviceMultiSampleType", 6), ("CheckDepthStencilMatch", 6), ("GetDeviceCaps", 4), ("GetAdapterMonitor", 2),
+    ("QueryInterface", 3),
+    ("AddRef", 1),
+    ("Release", 1),
+    ("RegisterSoftwareDevice", 2),
+    ("GetAdapterCount", 1),
+    ("GetAdapterIdentifier", 4),
+    ("GetAdapterModeCount", 2),
+    ("EnumAdapterModes", 4),
+    ("GetAdapterDisplayMode", 3),
+    ("CheckDeviceType", 6),
+    ("CheckDeviceFormat", 7),
+    ("CheckDeviceMultiSampleType", 6),
+    ("CheckDepthStencilMatch", 6),
+    ("GetDeviceCaps", 4),
+    ("GetAdapterMonitor", 2),
     ("CreateDevice", 7),
 ];
 
 const DEVICE_METHODS: &[(&str, usize)] = &[
-    ("QueryInterface", 3), ("AddRef", 1), ("Release", 1),
-    ("TestCooperativeLevel", 1), ("GetAvailableTextureMem", 1), ("ResourceManagerDiscardBytes", 2), ("GetDirect3D", 2),
-    ("GetDeviceCaps", 2), ("GetDisplayMode", 2), ("GetCreationParameters", 2), ("SetCursorProperties", 4),
-    ("SetCursorPosition", 4), ("ShowCursor", 2), ("CreateAdditionalSwapChain", 3), ("Reset", 2), ("Present", 5),
-    ("GetBackBuffer", 4), ("GetRasterStatus", 2), ("SetGammaRamp", 3), ("GetGammaRamp", 2), ("CreateTexture", 8),
-    ("CreateVolumeTexture", 9), ("CreateCubeTexture", 7), ("CreateVertexBuffer", 6), ("CreateIndexBuffer", 6),
-    ("CreateRenderTarget", 7), ("CreateDepthStencilSurface", 6), ("CreateImageSurface", 5), ("CopyRects", 6),
-    ("UpdateTexture", 3), ("GetFrontBuffer", 2), ("SetRenderTarget", 3), ("GetRenderTarget", 2),
-    ("GetDepthStencilSurface", 2), ("BeginScene", 1), ("EndScene", 1), ("Clear", 7), ("SetTransform", 3),
-    ("GetTransform", 3), ("MultiplyTransform", 3), ("SetViewport", 2), ("GetViewport", 2), ("SetMaterial", 2),
-    ("GetMaterial", 2), ("SetLight", 3), ("GetLight", 3), ("LightEnable", 3), ("GetLightEnable", 3),
-    ("SetClipPlane", 3), ("GetClipPlane", 3), ("SetRenderState", 3), ("GetRenderState", 3), ("BeginStateBlock", 1),
-    ("EndStateBlock", 2), ("ApplyStateBlock", 2), ("CaptureStateBlock", 2), ("DeleteStateBlock", 2),
-    ("CreateStateBlock", 3), ("SetClipStatus", 2), ("GetClipStatus", 2), ("GetTexture", 3), ("SetTexture", 3),
-    ("GetTextureStageState", 4), ("SetTextureStageState", 4), ("ValidateDevice", 2), ("GetInfo", 4),
-    ("SetPaletteEntries", 3), ("GetPaletteEntries", 3), ("SetCurrentTexturePalette", 2),
-    ("GetCurrentTexturePalette", 2), ("DrawPrimitive", 4), ("DrawIndexedPrimitive", 6), ("DrawPrimitiveUP", 5),
-    ("DrawIndexedPrimitiveUP", 9), ("ProcessVertices", 6), ("CreateVertexShader", 5), ("SetVertexShader", 2),
-    ("GetVertexShader", 2), ("DeleteVertexShader", 2), ("SetVertexShaderConstant", 4), ("GetVertexShaderConstant", 4),
-    ("GetVertexShaderDeclaration", 4), ("GetVertexShaderFunction", 4), ("SetStreamSource", 4), ("GetStreamSource", 4),
-    ("SetIndices", 3), ("GetIndices", 3), ("CreatePixelShader", 3), ("SetPixelShader", 2), ("GetPixelShader", 2),
-    ("DeletePixelShader", 2), ("SetPixelShaderConstant", 4), ("GetPixelShaderConstant", 4),
-    ("GetPixelShaderFunction", 4), ("DrawRectPatch", 4), ("DrawTriPatch", 4), ("DeletePatch", 2),
+    ("QueryInterface", 3),
+    ("AddRef", 1),
+    ("Release", 1),
+    ("TestCooperativeLevel", 1),
+    ("GetAvailableTextureMem", 1),
+    ("ResourceManagerDiscardBytes", 2),
+    ("GetDirect3D", 2),
+    ("GetDeviceCaps", 2),
+    ("GetDisplayMode", 2),
+    ("GetCreationParameters", 2),
+    ("SetCursorProperties", 4),
+    ("SetCursorPosition", 4),
+    ("ShowCursor", 2),
+    ("CreateAdditionalSwapChain", 3),
+    ("Reset", 2),
+    ("Present", 5),
+    ("GetBackBuffer", 4),
+    ("GetRasterStatus", 2),
+    ("SetGammaRamp", 3),
+    ("GetGammaRamp", 2),
+    ("CreateTexture", 8),
+    ("CreateVolumeTexture", 9),
+    ("CreateCubeTexture", 7),
+    ("CreateVertexBuffer", 6),
+    ("CreateIndexBuffer", 6),
+    ("CreateRenderTarget", 7),
+    ("CreateDepthStencilSurface", 6),
+    ("CreateImageSurface", 5),
+    ("CopyRects", 6),
+    ("UpdateTexture", 3),
+    ("GetFrontBuffer", 2),
+    ("SetRenderTarget", 3),
+    ("GetRenderTarget", 2),
+    ("GetDepthStencilSurface", 2),
+    ("BeginScene", 1),
+    ("EndScene", 1),
+    ("Clear", 7),
+    ("SetTransform", 3),
+    ("GetTransform", 3),
+    ("MultiplyTransform", 3),
+    ("SetViewport", 2),
+    ("GetViewport", 2),
+    ("SetMaterial", 2),
+    ("GetMaterial", 2),
+    ("SetLight", 3),
+    ("GetLight", 3),
+    ("LightEnable", 3),
+    ("GetLightEnable", 3),
+    ("SetClipPlane", 3),
+    ("GetClipPlane", 3),
+    ("SetRenderState", 3),
+    ("GetRenderState", 3),
+    ("BeginStateBlock", 1),
+    ("EndStateBlock", 2),
+    ("ApplyStateBlock", 2),
+    ("CaptureStateBlock", 2),
+    ("DeleteStateBlock", 2),
+    ("CreateStateBlock", 3),
+    ("SetClipStatus", 2),
+    ("GetClipStatus", 2),
+    ("GetTexture", 3),
+    ("SetTexture", 3),
+    ("GetTextureStageState", 4),
+    ("SetTextureStageState", 4),
+    ("ValidateDevice", 2),
+    ("GetInfo", 4),
+    ("SetPaletteEntries", 3),
+    ("GetPaletteEntries", 3),
+    ("SetCurrentTexturePalette", 2),
+    ("GetCurrentTexturePalette", 2),
+    ("DrawPrimitive", 4),
+    ("DrawIndexedPrimitive", 6),
+    ("DrawPrimitiveUP", 5),
+    ("DrawIndexedPrimitiveUP", 9),
+    ("ProcessVertices", 6),
+    ("CreateVertexShader", 5),
+    ("SetVertexShader", 2),
+    ("GetVertexShader", 2),
+    ("DeleteVertexShader", 2),
+    ("SetVertexShaderConstant", 4),
+    ("GetVertexShaderConstant", 4),
+    ("GetVertexShaderDeclaration", 4),
+    ("GetVertexShaderFunction", 4),
+    ("SetStreamSource", 4),
+    ("GetStreamSource", 4),
+    ("SetIndices", 3),
+    ("GetIndices", 3),
+    ("CreatePixelShader", 3),
+    ("SetPixelShader", 2),
+    ("GetPixelShader", 2),
+    ("DeletePixelShader", 2),
+    ("SetPixelShaderConstant", 4),
+    ("GetPixelShaderConstant", 4),
+    ("GetPixelShaderFunction", 4),
+    ("DrawRectPatch", 4),
+    ("DrawTriPatch", 4),
+    ("DeletePatch", 2),
 ];
 
 const RESOURCE_HEAD: [(&str, usize); 11] = [
-    ("QueryInterface", 3), ("AddRef", 1), ("Release", 1),
-    ("GetDevice", 2), ("SetPrivateData", 5), ("GetPrivateData", 4), ("FreePrivateData", 2),
-    ("SetPriority", 2), ("GetPriority", 1), ("PreLoad", 1), ("GetType", 1),
+    ("QueryInterface", 3),
+    ("AddRef", 1),
+    ("Release", 1),
+    ("GetDevice", 2),
+    ("SetPrivateData", 5),
+    ("GetPrivateData", 4),
+    ("FreePrivateData", 2),
+    ("SetPriority", 2),
+    ("GetPriority", 1),
+    ("PreLoad", 1),
+    ("GetType", 1),
 ];
 
 const TEXTURE_METHODS: &[(&str, usize)] = &[
-    RESOURCE_HEAD[0], RESOURCE_HEAD[1], RESOURCE_HEAD[2], RESOURCE_HEAD[3], RESOURCE_HEAD[4], RESOURCE_HEAD[5],
-    RESOURCE_HEAD[6], RESOURCE_HEAD[7], RESOURCE_HEAD[8], RESOURCE_HEAD[9], RESOURCE_HEAD[10],
-    ("SetLOD", 2), ("GetLOD", 1), ("GetLevelCount", 1),
-    ("GetLevelDesc", 3), ("GetSurfaceLevel", 3), ("LockRect", 5), ("UnlockRect", 2), ("AddDirtyRect", 2),
+    RESOURCE_HEAD[0],
+    RESOURCE_HEAD[1],
+    RESOURCE_HEAD[2],
+    RESOURCE_HEAD[3],
+    RESOURCE_HEAD[4],
+    RESOURCE_HEAD[5],
+    RESOURCE_HEAD[6],
+    RESOURCE_HEAD[7],
+    RESOURCE_HEAD[8],
+    RESOURCE_HEAD[9],
+    RESOURCE_HEAD[10],
+    ("SetLOD", 2),
+    ("GetLOD", 1),
+    ("GetLevelCount", 1),
+    ("GetLevelDesc", 3),
+    ("GetSurfaceLevel", 3),
+    ("LockRect", 5),
+    ("UnlockRect", 2),
+    ("AddDirtyRect", 2),
 ];
 
 const SURFACE_METHODS: &[(&str, usize)] = &[
-    ("QueryInterface", 3), ("AddRef", 1), ("Release", 1),
-    ("GetDevice", 2), ("SetPrivateData", 5), ("GetPrivateData", 4), ("FreePrivateData", 2),
-    ("GetContainer", 3), ("GetDesc", 2), ("LockRect", 4), ("UnlockRect", 1),
+    ("QueryInterface", 3),
+    ("AddRef", 1),
+    ("Release", 1),
+    ("GetDevice", 2),
+    ("SetPrivateData", 5),
+    ("GetPrivateData", 4),
+    ("FreePrivateData", 2),
+    ("GetContainer", 3),
+    ("GetDesc", 2),
+    ("LockRect", 4),
+    ("UnlockRect", 1),
 ];
 
 const VB_METHODS: &[(&str, usize)] = &[
-    RESOURCE_HEAD[0], RESOURCE_HEAD[1], RESOURCE_HEAD[2], RESOURCE_HEAD[3], RESOURCE_HEAD[4], RESOURCE_HEAD[5],
-    RESOURCE_HEAD[6], RESOURCE_HEAD[7], RESOURCE_HEAD[8], RESOURCE_HEAD[9], RESOURCE_HEAD[10],
-    ("Lock", 5), ("Unlock", 1), ("GetDesc", 2),
+    RESOURCE_HEAD[0],
+    RESOURCE_HEAD[1],
+    RESOURCE_HEAD[2],
+    RESOURCE_HEAD[3],
+    RESOURCE_HEAD[4],
+    RESOURCE_HEAD[5],
+    RESOURCE_HEAD[6],
+    RESOURCE_HEAD[7],
+    RESOURCE_HEAD[8],
+    RESOURCE_HEAD[9],
+    RESOURCE_HEAD[10],
+    ("Lock", 5),
+    ("Unlock", 1),
+    ("GetDesc", 2),
 ];
 
 const IB_METHODS: &[(&str, usize)] = VB_METHODS;
 
-const SWAPCHAIN_METHODS: &[(&str, usize)] = &[("QueryInterface", 3), ("AddRef", 1), ("Release", 1), ("Present", 5), ("GetBackBuffer", 4)];
+const SWAPCHAIN_METHODS: &[(&str, usize)] = &[
+    ("QueryInterface", 3),
+    ("AddRef", 1),
+    ("Release", 1),
+    ("Present", 5),
+    ("GetBackBuffer", 4),
+];
 
 fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
     let mut g = [0u8; 16];
@@ -136,19 +277,58 @@ fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
 
 fn iid_of(i: Iface) -> [u8; 16] {
     match i {
-        Iface::D3d => guid(0x1DD9E8DA, 0x1C77, 0x4D40, [0xB0, 0xCF, 0x98, 0xFE, 0xFD, 0xFF, 0x95, 0x12]),
-        Iface::Device => guid(0x7385E5DF, 0x8FE8, 0x41D5, [0x86, 0xB6, 0xD7, 0xB4, 0x85, 0x47, 0xB6, 0xCF]),
-        Iface::Texture => guid(0xE4CDD575, 0x2866, 0x4F01, [0xB1, 0x2E, 0x7E, 0xEC, 0xE1, 0xEC, 0x93, 0x58]),
-        Iface::Surface => guid(0xB96EEBCA, 0xB326, 0x4EA5, [0x88, 0x2F, 0x2F, 0xF5, 0xBA, 0xE0, 0x21, 0xDD]),
-        Iface::VertexBuffer => guid(0x8AEEEAC7, 0x05F9, 0x44D4, [0xB5, 0x91, 0x00, 0x0B, 0x0D, 0xF1, 0xCB, 0x95]),
-        Iface::IndexBuffer => guid(0x0E689C9A, 0x053D, 0x44A0, [0x9D, 0x92, 0xDB, 0x0E, 0x3D, 0x75, 0x0F, 0x86]),
-        Iface::SwapChain => guid(0x928C088B, 0x76B9, 0x4C6B, [0xA5, 0x36, 0xA5, 0x90, 0x85, 0x38, 0x76, 0xCD]),
+        Iface::D3d => guid(
+            0x1DD9E8DA,
+            0x1C77,
+            0x4D40,
+            [0xB0, 0xCF, 0x98, 0xFE, 0xFD, 0xFF, 0x95, 0x12],
+        ),
+        Iface::Device => guid(
+            0x7385E5DF,
+            0x8FE8,
+            0x41D5,
+            [0x86, 0xB6, 0xD7, 0xB4, 0x85, 0x47, 0xB6, 0xCF],
+        ),
+        Iface::Texture => guid(
+            0xE4CDD575,
+            0x2866,
+            0x4F01,
+            [0xB1, 0x2E, 0x7E, 0xEC, 0xE1, 0xEC, 0x93, 0x58],
+        ),
+        Iface::Surface => guid(
+            0xB96EEBCA,
+            0xB326,
+            0x4EA5,
+            [0x88, 0x2F, 0x2F, 0xF5, 0xBA, 0xE0, 0x21, 0xDD],
+        ),
+        Iface::VertexBuffer => guid(
+            0x8AEEEAC7,
+            0x05F9,
+            0x44D4,
+            [0xB5, 0x91, 0x00, 0x0B, 0x0D, 0xF1, 0xCB, 0x95],
+        ),
+        Iface::IndexBuffer => guid(
+            0x0E689C9A,
+            0x053D,
+            0x44A0,
+            [0x9D, 0x92, 0xDB, 0x0E, 0x3D, 0x75, 0x0F, 0x86],
+        ),
+        Iface::SwapChain => guid(
+            0x928C088B,
+            0x76B9,
+            0x4C6B,
+            [0xA5, 0x36, 0xA5, 0x90, 0x85, 0x38, 0x76, 0xCD],
+        ),
     }
 }
 
 const IID_IUNKNOWN: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
-const IID_BASE_TEXTURE: [u8; 16] = [0xFA, 0x1C, 0x21, 0xB4, 0xB9, 0x51, 0x9F, 0x4A, 0xAB, 0x78, 0xDB, 0x99, 0xB2, 0xBB, 0x67, 0x8E];
-const IID_RESOURCE: [u8; 16] = [0x7B, 0xBB, 0x36, 0x1B, 0xB7, 0x09, 0x0A, 0x41, 0xB4, 0x45, 0x7D, 0x14, 0x30, 0xD7, 0xB3, 0x3E];
+const IID_BASE_TEXTURE: [u8; 16] = [
+    0xFA, 0x1C, 0x21, 0xB4, 0xB9, 0x51, 0x9F, 0x4A, 0xAB, 0x78, 0xDB, 0x99, 0xB2, 0xBB, 0x67, 0x8E,
+];
+const IID_RESOURCE: [u8; 16] = [
+    0x7B, 0xBB, 0x36, 0x1B, 0xB7, 0x09, 0x0A, 0x41, 0xB4, 0x45, 0x7D, 0x14, 0x30, 0xD7, 0xB3, 0x3E,
+];
 
 // ---- objects ---------------------------------------------------------------------------------
 
@@ -358,7 +538,9 @@ impl D3d8 {
     /// The most recently rendered frame: (w, h, ARGB pixels).
     #[cfg(test)]
     pub fn frame(&self) -> Option<(u32, u32, &[u32])> {
-        self.dev.as_ref().map(|d| (d.target.w, d.target.h, d.target.color.as_slice()))
+        self.dev
+            .as_ref()
+            .map(|d| (d.target.w, d.target.h, d.target.color.as_slice()))
     }
 }
 
@@ -413,7 +595,9 @@ fn add_ref(e: &mut Emu, obj: u32) {
 }
 
 fn with_device<R>(e: &mut Emu, f: impl FnOnce(&mut Emu, &mut Device) -> Res<R>) -> Res<Option<R>> {
-    let Some(mut dev) = e.win.d3d.dev.take() else { return Ok(None) };
+    let Some(mut dev) = e.win.d3d.dev.take() else {
+        return Ok(None);
+    };
     let r = f(e, &mut dev);
     e.win.d3d.dev = Some(dev);
     r.map(Some)
@@ -493,7 +677,9 @@ fn query_interface(e: &mut Emu, a: &Args) -> Res<u32> {
         Obj::VertexBuffer(_) => Iface::VertexBuffer,
         Obj::IndexBuffer(_) => Iface::IndexBuffer,
     });
-    let Some(iface) = this_iface else { return Ok(E_NOINTERFACE) };
+    let Some(iface) = this_iface else {
+        return Ok(E_NOINTERFACE);
+    };
     let matches = want == IID_IUNKNOWN
         || want == iid_of(iface)
         || (iface == Iface::Texture && (want == IID_BASE_TEXTURE || want == IID_RESOURCE))
@@ -509,7 +695,9 @@ fn query_interface(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 fn release(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(o) = e.win.d3d.objects.get_mut(&a[0]) else { return Ok(0) };
+    let Some(o) = e.win.d3d.objects.get_mut(&a[0]) else {
+        return Ok(0);
+    };
     let refs = o.refs();
     *refs = refs.saturating_sub(1);
     let left = *refs;
@@ -519,14 +707,15 @@ fn release(e: &mut Emu, a: &Args) -> Res<u32> {
         // Give the memory back, unless something still holds a piece of it.
         match e.win.d3d.objects.remove(&a[0]) {
             Some(Obj::Texture(t)) => {
-                let levels_in_use = t.surfaces.iter().any(|s| matches!(e.win.d3d.objects.get(s), Some(Obj::Surface(x)) if x.refs > 1));
+                let levels_in_use = t.surfaces.iter().any(
+                    |s| matches!(e.win.d3d.objects.get(s), Some(Obj::Surface(x)) if x.refs > 1),
+                );
                 for s in &t.surfaces {
                     e.win.d3d.objects.remove(s);
                 }
-                if !levels_in_use
-                    && let Some(l) = t.levels.first() {
-                        e.free_virtual(l.ptr);
-                    }
+                if !levels_in_use && let Some(l) = t.levels.first() {
+                    e.free_virtual(l.ptr);
+                }
             }
             Some(Obj::Surface(sf)) if sf.kind != SurfaceKind::TextureLevel && sf.ptr != 0 => {
                 e.free_virtual(sf.ptr);
@@ -552,7 +741,10 @@ fn release(e: &mut Emu, a: &Args) -> Res<u32> {
 const MODES: [(u32, u32); 4] = [(640, 480), (800, 600), (1024, 768), (1280, 1024)];
 
 fn color_format_ok(f: u32) -> bool {
-    matches!(f, FMT_A8R8G8B8 | FMT_X8R8G8B8 | FMT_R5G6B5 | FMT_X1R5G5B5 | FMT_A1R5G5B5 | FMT_A4R4G4B4)
+    matches!(
+        f,
+        FMT_A8R8G8B8 | FMT_X8R8G8B8 | FMT_R5G6B5 | FMT_X1R5G5B5 | FMT_A1R5G5B5 | FMT_A4R4G4B4
+    )
 }
 
 fn depth_format_ok(f: u32) -> bool {
@@ -569,7 +761,8 @@ fn d3d_method(method: &str) -> Handler {
             let p = a[3];
             e.mem.write_bytes(p, &vec![0u8; 1068])?;
             e.mem.write_bytes(p, b"nv4_disp.dll\0")?;
-            e.mem.write_bytes(p + 512, b"NVIDIA GeForce2 MX (emulated)\0")?;
+            e.mem
+                .write_bytes(p + 512, b"NVIDIA GeForce2 MX (emulated)\0")?;
             e.mem.write(p + 1024, 4, 0x0006_000E)?; // driver version, low
             e.mem.write(p + 1028, 4, 0x0006_000E)?;
             e.mem.write(p + 1032, 4, 0x10DE)?; // VendorId: NVIDIA
@@ -577,14 +770,24 @@ fn d3d_method(method: &str) -> Handler {
             e.mem.write(p + 1048, 4, 0x1)?; // DeviceIdentifier (any non-zero)
             Ok(S_OK)
         },
-        "GetAdapterModeCount" => |_, a| Ok(if a[1] == 0 { (MODES.len() * 2) as u32 } else { 0 }),
+        "GetAdapterModeCount" => |_, a| {
+            Ok(if a[1] == 0 {
+                (MODES.len() * 2) as u32
+            } else {
+                0
+            })
+        },
         "EnumAdapterModes" => |e, a| {
             let i = a[2] as usize;
             if a[1] != 0 || i >= MODES.len() * 2 {
                 return Ok(D3DERR_INVALIDCALL);
             }
             let (w, h) = MODES[i / 2];
-            let fmt = if i.is_multiple_of(2) { FMT_X8R8G8B8 } else { FMT_R5G6B5 };
+            let fmt = if i.is_multiple_of(2) {
+                FMT_X8R8G8B8
+            } else {
+                FMT_R5G6B5
+            };
             for (k, v) in [w, h, 60, fmt].iter().enumerate() {
                 e.mem.write(a[3] + 4 * k as u32, 4, *v)?;
             }
@@ -596,7 +799,15 @@ fn d3d_method(method: &str) -> Handler {
             }
             Ok(S_OK)
         },
-        "CheckDeviceType" => |_, a| Ok(if color_format_ok(a[3]) && (color_format_ok(a[4]) || a[4] == 0) { S_OK } else { D3DERR_NOTAVAILABLE }),
+        "CheckDeviceType" => |_, a| {
+            Ok(
+                if color_format_ok(a[3]) && (color_format_ok(a[4]) || a[4] == 0) {
+                    S_OK
+                } else {
+                    D3DERR_NOTAVAILABLE
+                },
+            )
+        },
         "CheckDeviceFormat" => |_, a| {
             // (this, adapter, devtype, adapter format, usage, resource type, check format)
             let (usage, rtype, fmt) = (a[4], a[5], a[6]);
@@ -608,15 +819,27 @@ fn d3d_method(method: &str) -> Handler {
                 color_format_ok(fmt)
             } else {
                 match rtype {
-                    1 | 3 => color_format_ok(fmt) || is_dxt(fmt) || matches!(fmt, FMT_A8 | FMT_L8 | FMT_A8L8 | FMT_X4R4G4B4),
+                    1 | 3 => {
+                        color_format_ok(fmt)
+                            || is_dxt(fmt)
+                            || matches!(fmt, FMT_A8 | FMT_L8 | FMT_A8L8 | FMT_X4R4G4B4)
+                    }
                     6 | 7 => true,
                     _ => false, // volume and cube textures are not supported
                 }
             };
             Ok(if supported { S_OK } else { D3DERR_NOTAVAILABLE })
         },
-        "CheckDeviceMultiSampleType" => |_, a| Ok(if a[5] == 0 { S_OK } else { D3DERR_NOTAVAILABLE }),
-        "CheckDepthStencilMatch" => |_, a| Ok(if depth_format_ok(a[5]) { S_OK } else { D3DERR_NOTAVAILABLE }),
+        "CheckDeviceMultiSampleType" => {
+            |_, a| Ok(if a[5] == 0 { S_OK } else { D3DERR_NOTAVAILABLE })
+        }
+        "CheckDepthStencilMatch" => |_, a| {
+            Ok(if depth_format_ok(a[5]) {
+                S_OK
+            } else {
+                D3DERR_NOTAVAILABLE
+            })
+        },
         "GetDeviceCaps" => |e, a| {
             fill_caps(e, a[3], a[2])?;
             Ok(S_OK)
@@ -718,13 +941,31 @@ fn create_device(e: &mut Emu, a: &Args) -> Res<u32> {
     let back = new_object(
         e,
         Iface::Surface,
-        Obj::Surface(Surface { refs: 1, kind: SurfaceKind::BackBuffer, format: p.format, w: p.width, h: p.height, pitch: p.width * 4, ptr: 0, parent: 0 }),
+        Obj::Surface(Surface {
+            refs: 1,
+            kind: SurfaceKind::BackBuffer,
+            format: p.format,
+            w: p.width,
+            h: p.height,
+            pitch: p.width * 4,
+            ptr: 0,
+            parent: 0,
+        }),
     )?;
     let depth = if p.auto_depth {
         new_object(
             e,
             Iface::Surface,
-            Obj::Surface(Surface { refs: 1, kind: SurfaceKind::DepthStencil, format: p.depth_format, w: p.width, h: p.height, pitch: p.width * 4, ptr: 0, parent: 0 }),
+            Obj::Surface(Surface {
+                refs: 1,
+                kind: SurfaceKind::DepthStencil,
+                format: p.depth_format,
+                w: p.width,
+                h: p.height,
+                pitch: p.width * 4,
+                ptr: 0,
+                parent: 0,
+            }),
         )?
     } else {
         0
@@ -777,21 +1018,42 @@ fn create_texture(e: &mut Emu, a: &Args) -> Res<u32> {
     if w == 0 || h == 0 || w > 4096 || h > 4096 {
         return Ok(D3DERR_INVALIDCALL);
     }
-    if !(color_format_ok(format) || is_dxt(format) || matches!(format, FMT_A8 | FMT_L8 | FMT_A8L8 | FMT_X4R4G4B4)) {
+    if !(color_format_ok(format)
+        || is_dxt(format)
+        || matches!(format, FMT_A8 | FMT_L8 | FMT_A8L8 | FMT_X4R4G4B4))
+    {
         return Ok(D3DERR_NOTAVAILABLE);
     }
     let chain = mip_chain(w, h, levels);
-    let total: u32 = chain.iter().map(|&(cw, ch)| surface_size(format, cw, ch).1).sum();
+    let total: u32 = chain
+        .iter()
+        .map(|&(cw, ch)| surface_size(format, cw, ch).1)
+        .sum();
     let base = e.alloc_virtual(total.max(4));
     let mut off = 0;
     let mut lv = Vec::new();
     for (cw, ch) in chain {
         let (pitch, size) = surface_size(format, cw, ch);
-        lv.push(Level { ptr: base + off, w: cw, h: ch, pitch });
+        lv.push(Level {
+            ptr: base + off,
+            w: cw,
+            h: ch,
+            pitch,
+        });
         off += size;
     }
     let n = lv.len();
-    let p = new_object(e, Iface::Texture, Obj::Texture(Texture { refs: 1, format, usage, levels: lv, surfaces: vec![0; n] }))?;
+    let p = new_object(
+        e,
+        Iface::Texture,
+        Obj::Texture(Texture {
+            refs: 1,
+            format,
+            usage,
+            levels: lv,
+            surfaces: vec![0; n],
+        }),
+    )?;
     e.mem.write(a[7], 4, p)?;
     Ok(S_OK)
 }
@@ -810,7 +1072,16 @@ fn texture_surface(e: &mut Emu, tex: u32, level: u32) -> Res<Option<u32>> {
     let s = new_object(
         e,
         Iface::Surface,
-        Obj::Surface(Surface { refs: 1, kind: SurfaceKind::TextureLevel, format: fmt, w: lv.w, h: lv.h, pitch: lv.pitch, ptr: lv.ptr, parent: tex }),
+        Obj::Surface(Surface {
+            refs: 1,
+            kind: SurfaceKind::TextureLevel,
+            format: fmt,
+            w: lv.w,
+            h: lv.h,
+            pitch: lv.pitch,
+            ptr: lv.ptr,
+            parent: tex,
+        }),
     )?;
     if let Some(Obj::Texture(t)) = e.win.d3d.objects.get_mut(&tex) {
         t.surfaces[level as usize] = s;
@@ -821,7 +1092,9 @@ fn texture_surface(e: &mut Emu, tex: u32, level: u32) -> Res<Option<u32>> {
 /// Pointer to a locked rectangle's first byte and the pitch.
 fn lock_level(lv: &Level, format: u32, rect: Option<(i32, i32)>) -> (u32, u32) {
     let off = match rect {
-        Some((x, y)) if !is_dxt(format) => y.max(0) as u32 * lv.pitch + x.max(0) as u32 * bytes_per_pixel(format),
+        Some((x, y)) if !is_dxt(format) => {
+            y.max(0) as u32 * lv.pitch + x.max(0) as u32 * bytes_per_pixel(format)
+        }
         _ => 0,
     };
     (lv.ptr + off, lv.pitch)
@@ -829,13 +1102,19 @@ fn lock_level(lv: &Level, format: u32, rect: Option<(i32, i32)>) -> (u32, u32) {
 
 fn texture_method(method: &str) -> Handler {
     match method {
-        "GetLevelCount" => |e, a| Ok(match e.win.d3d.objects.get(&a[0]) {
-            Some(Obj::Texture(t)) => t.levels.len() as u32,
-            _ => 0,
-        }),
+        "GetLevelCount" => |e, a| {
+            Ok(match e.win.d3d.objects.get(&a[0]) {
+                Some(Obj::Texture(t)) => t.levels.len() as u32,
+                _ => 0,
+            })
+        },
         "GetLevelDesc" => |e, a| {
-            let Some(Obj::Texture(t)) = e.win.d3d.objects.get(&a[0]) else { return Ok(D3DERR_INVALIDCALL) };
-            let Some(l) = t.levels.get(a[1] as usize).copied() else { return Ok(D3DERR_INVALIDCALL) };
+            let Some(Obj::Texture(t)) = e.win.d3d.objects.get(&a[0]) else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
+            let Some(l) = t.levels.get(a[1] as usize).copied() else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
             let (fmt, usage) = (t.format, t.usage);
             // D3DSURFACE_DESC: Format, Type, Usage, Pool, Size, MultiSampleType, Width, Height
             let (_, size) = surface_size(fmt, l.w, l.h);
@@ -854,10 +1133,18 @@ fn texture_method(method: &str) -> Handler {
         },
         "LockRect" => |e, a| {
             // (this, level, D3DLOCKED_RECT*, RECT*, flags)
-            let Some(Obj::Texture(t)) = e.win.d3d.objects.get(&a[0]) else { return Ok(D3DERR_INVALIDCALL) };
-            let Some(lv) = t.levels.get(a[1] as usize).copied() else { return Ok(D3DERR_INVALIDCALL) };
+            let Some(Obj::Texture(t)) = e.win.d3d.objects.get(&a[0]) else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
+            let Some(lv) = t.levels.get(a[1] as usize).copied() else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
             let fmt = t.format;
-            let rect = if a[3] != 0 { Some((e.mem.read(a[3], 4)? as i32, e.mem.read(a[3] + 4, 4)? as i32)) } else { None };
+            let rect = if a[3] != 0 {
+                Some((e.mem.read(a[3], 4)? as i32, e.mem.read(a[3] + 4, 4)? as i32))
+            } else {
+                None
+            };
             let (ptr, pitch) = lock_level(&lv, fmt, rect);
             e.mem.write(a[2], 4, pitch)?;
             e.mem.write(a[2] + 4, 4, ptr)?;
@@ -881,18 +1168,40 @@ fn texture_method(method: &str) -> Handler {
 fn surface_method(method: &str) -> Handler {
     match method {
         "GetDesc" => |e, a| {
-            let Some(Obj::Surface(s)) = e.win.d3d.objects.get(&a[0]) else { return Ok(D3DERR_INVALIDCALL) };
+            let Some(Obj::Surface(s)) = e.win.d3d.objects.get(&a[0]) else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
             let (fmt, w, h) = (s.format, s.w, s.h);
             let (_, size) = surface_size(fmt, w, h);
-            let usage = if s.kind == SurfaceKind::BackBuffer { 1 } else if s.kind == SurfaceKind::DepthStencil { 2 } else { 0 };
-            for (i, v) in [fmt, 1, usage, if s.kind == SurfaceKind::Plain { 3 } else { 0 }, size, 0, w, h].iter().enumerate() {
+            let usage = if s.kind == SurfaceKind::BackBuffer {
+                1
+            } else if s.kind == SurfaceKind::DepthStencil {
+                2
+            } else {
+                0
+            };
+            for (i, v) in [
+                fmt,
+                1,
+                usage,
+                if s.kind == SurfaceKind::Plain { 3 } else { 0 },
+                size,
+                0,
+                w,
+                h,
+            ]
+            .iter()
+            .enumerate()
+            {
                 e.mem.write(a[1] + 4 * i as u32, 4, *v)?;
             }
             Ok(S_OK)
         },
         "LockRect" => |e, a| {
             // (this, D3DLOCKED_RECT*, RECT*, flags)
-            let Some(s) = surface_snapshot(e, a[0]) else { return Ok(D3DERR_INVALIDCALL) };
+            let Some(s) = surface_snapshot(e, a[0]) else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
             let mut s = s;
             mark_dirty(e, a[0]);
             if s.kind == SurfaceKind::BackBuffer {
@@ -914,17 +1223,29 @@ fn surface_method(method: &str) -> Handler {
                             e.mem.write(s.ptr + 4 * i as u32, 4, *px)?;
                         }
                         Ok(())
-                    })?) {}
+                    })?)
+                {}
             }
-            let lv = Level { ptr: s.ptr, w: s.w, h: s.h, pitch: s.pitch };
-            let rect = if a[2] != 0 { Some((e.mem.read(a[2], 4)? as i32, e.mem.read(a[2] + 4, 4)? as i32)) } else { None };
+            let lv = Level {
+                ptr: s.ptr,
+                w: s.w,
+                h: s.h,
+                pitch: s.pitch,
+            };
+            let rect = if a[2] != 0 {
+                Some((e.mem.read(a[2], 4)? as i32, e.mem.read(a[2] + 4, 4)? as i32))
+            } else {
+                None
+            };
             let (ptr, pitch) = lock_level(&lv, s.format, rect);
             e.mem.write(a[1], 4, pitch)?;
             e.mem.write(a[1] + 4, 4, ptr)?;
             Ok(S_OK)
         },
         "UnlockRect" => |e, a| {
-            let Some(s) = surface_snapshot(e, a[0]) else { return Ok(D3DERR_INVALIDCALL) };
+            let Some(s) = surface_snapshot(e, a[0]) else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
             if s.kind == SurfaceKind::BackBuffer && s.ptr != 0 {
                 with_device(e, |e, d| {
                     for i in 0..d.target.color.len() {
@@ -977,12 +1298,30 @@ fn buffer_method(method: &str) -> Handler {
             let _ = b_ptr;
             // VERTEXBUFFER_DESC: Format, Type, Usage, Pool, Size, FVF
             let fmt = if is_vb { 100 } else { kind };
-            for (i, v) in [fmt, if is_vb { 6 } else { 7 }, usage, 1, len, if is_vb { kind } else { 0 }].iter().enumerate() {
+            for (i, v) in [
+                fmt,
+                if is_vb { 6 } else { 7 },
+                usage,
+                1,
+                len,
+                if is_vb { kind } else { 0 },
+            ]
+            .iter()
+            .enumerate()
+            {
                 e.mem.write(a[1] + 4 * i as u32, 4, *v)?;
             }
             Ok(S_OK)
         },
-        "GetType" => |e, a| Ok(if matches!(e.win.d3d.objects.get(&a[0]), Some(Obj::VertexBuffer(_))) { 6 } else { 7 }),
+        "GetType" => |e, a| {
+            Ok(
+                if matches!(e.win.d3d.objects.get(&a[0]), Some(Obj::VertexBuffer(_))) {
+                    6
+                } else {
+                    7
+                },
+            )
+        },
         "GetDevice" => |e, a| {
             e.mem.write(a[1], 4, e.win.d3d.device_obj)?;
             Ok(S_OK)
@@ -1077,7 +1416,17 @@ fn device_method(method: &str) -> Handler {
                 return Ok(D3DERR_INVALIDCALL);
             }
             let ptr = e.alloc_virtual(a[1]);
-            let p = new_object(e, Iface::VertexBuffer, Obj::VertexBuffer(Buffer { refs: 1, ptr, len: a[1], kind: a[3], usage: a[2] }))?;
+            let p = new_object(
+                e,
+                Iface::VertexBuffer,
+                Obj::VertexBuffer(Buffer {
+                    refs: 1,
+                    ptr,
+                    len: a[1],
+                    kind: a[3],
+                    usage: a[2],
+                }),
+            )?;
             e.mem.write(a[5], 4, p)?;
             Ok(S_OK)
         },
@@ -1087,7 +1436,17 @@ fn device_method(method: &str) -> Handler {
                 return Ok(D3DERR_INVALIDCALL);
             }
             let ptr = e.alloc_virtual(a[1]);
-            let p = new_object(e, Iface::IndexBuffer, Obj::IndexBuffer(Buffer { refs: 1, ptr, len: a[1], kind: a[3], usage: a[2] }))?;
+            let p = new_object(
+                e,
+                Iface::IndexBuffer,
+                Obj::IndexBuffer(Buffer {
+                    refs: 1,
+                    ptr,
+                    len: a[1],
+                    kind: a[3],
+                    usage: a[2],
+                }),
+            )?;
             e.mem.write(a[5], 4, p)?;
             Ok(S_OK)
         },
@@ -1102,7 +1461,20 @@ fn device_method(method: &str) -> Handler {
             }
             let (pitch, size) = surface_size(fmt, w, h);
             let ptr = e.alloc_virtual(size.max(4));
-            let s = new_object(e, Iface::Surface, Obj::Surface(Surface { refs: 1, kind: SurfaceKind::Plain, format: fmt, w, h, pitch, ptr, parent: 0 }))?;
+            let s = new_object(
+                e,
+                Iface::Surface,
+                Obj::Surface(Surface {
+                    refs: 1,
+                    kind: SurfaceKind::Plain,
+                    format: fmt,
+                    w,
+                    h,
+                    pitch,
+                    ptr,
+                    parent: 0,
+                }),
+            )?;
             e.mem.write(out, 4, s)?;
             Ok(S_OK)
         },
@@ -1110,24 +1482,41 @@ fn device_method(method: &str) -> Handler {
             let s = new_object(
                 e,
                 Iface::Surface,
-                Obj::Surface(Surface { refs: 1, kind: SurfaceKind::DepthStencil, format: a[3], w: a[1], h: a[2], pitch: a[1] * 4, ptr: 0, parent: 0 }),
+                Obj::Surface(Surface {
+                    refs: 1,
+                    kind: SurfaceKind::DepthStencil,
+                    format: a[3],
+                    w: a[1],
+                    h: a[2],
+                    pitch: a[1] * 4,
+                    ptr: 0,
+                    parent: 0,
+                }),
             )?;
             e.mem.write(a[5], 4, s)?;
             Ok(S_OK)
         },
-        "CreateVolumeTexture" | "CreateCubeTexture" | "CreateAdditionalSwapChain" => |_, _| Ok(D3DERR_NOTAVAILABLE),
+        "CreateVolumeTexture" | "CreateCubeTexture" | "CreateAdditionalSwapChain" => {
+            |_, _| Ok(D3DERR_NOTAVAILABLE)
+        }
         "CopyRects" => copy_rects,
         "UpdateTexture" => update_texture,
         "GetFrontBuffer" => |e, a| {
             // Copy the displayed frame into an image surface.
-            let Some(s) = surface_snapshot(e, a[1]) else { return Ok(D3DERR_INVALIDCALL) };
+            let Some(s) = surface_snapshot(e, a[1]) else {
+                return Ok(D3DERR_INVALIDCALL);
+            };
             sync_back_buffer(e);
             with_device(e, |e, d| {
                 let bpp = bytes_per_pixel(s.format).max(1);
                 for y in 0..s.h.min(d.target.h) {
                     for x in 0..s.w.min(d.target.w) {
                         let px = d.target.color[(y * d.target.w + x) as usize];
-                        e.mem.write(s.ptr + y * s.pitch + x * bpp, bpp.min(4), store_pixel(s.format, px))?;
+                        e.mem.write(
+                            s.ptr + y * s.pitch + x * bpp,
+                            bpp.min(4),
+                            store_pixel(s.format, px),
+                        )?;
                     }
                 }
                 Ok(())
@@ -1136,7 +1525,9 @@ fn device_method(method: &str) -> Handler {
         },
         "SetRenderTarget" => set_render_target,
         "GetRenderTarget" => |e, a| {
-            let (rt, back) = e.win.d3d.dev.as_ref().map_or((0, 0), |d| (d.rt.as_ref().map_or(0, |r| r.0), d.back_surface));
+            let (rt, back) = e.win.d3d.dev.as_ref().map_or((0, 0), |d| {
+                (d.rt.as_ref().map_or(0, |r| r.0), d.back_surface)
+            });
             let s = if rt != 0 { rt } else { back };
             add_ref(e, s);
             e.mem.write(a[1], 4, s)?;
@@ -1235,7 +1626,12 @@ fn device_method(method: &str) -> Handler {
             Ok(S_OK)
         },
         "GetLight" => |e, a| {
-            let raw = e.win.d3d.dev.as_ref().and_then(|d| d.lights.get(&a[1]).map(|l| l.raw));
+            let raw = e
+                .win
+                .d3d
+                .dev
+                .as_ref()
+                .and_then(|d| d.lights.get(&a[1]).map(|l| l.raw));
             match raw {
                 Some(r) => {
                     e.mem.write_bytes(a[2], &r)?;
@@ -1246,13 +1642,25 @@ fn device_method(method: &str) -> Handler {
         },
         "LightEnable" => |e, a| {
             with_device(e, |_, d| {
-                d.lights.entry(a[1]).or_insert(Light { raw: [0; 104], enabled: false }).enabled = a[2] != 0;
+                d.lights
+                    .entry(a[1])
+                    .or_insert(Light {
+                        raw: [0; 104],
+                        enabled: false,
+                    })
+                    .enabled = a[2] != 0;
                 Ok(())
             })?;
             Ok(S_OK)
         },
         "GetLightEnable" => |e, a| {
-            let on = e.win.d3d.dev.as_ref().and_then(|d| d.lights.get(&a[1]).map(|l| l.enabled)).unwrap_or(false);
+            let on = e
+                .win
+                .d3d
+                .dev
+                .as_ref()
+                .and_then(|d| d.lights.get(&a[1]).map(|l| l.enabled))
+                .unwrap_or(false);
             e.mem.write(a[2], 4, on as u32)?;
             Ok(S_OK)
         },
@@ -1266,16 +1674,22 @@ fn device_method(method: &str) -> Handler {
             Ok(S_OK)
         },
         "GetRenderState" => |e, a| {
-            let v = e.win.d3d.dev.as_ref().map_or(0, |d| d.rs[(a[1] & 0xFF) as usize]);
+            let v = e
+                .win
+                .d3d
+                .dev
+                .as_ref()
+                .map_or(0, |d| d.rs[(a[1] & 0xFF) as usize]);
             e.mem.write(a[2], 4, v)?;
             Ok(S_OK)
         },
         "SetTextureStageState" => |e, a| {
             with_device(e, |_, d| {
                 if let Some(stage) = d.ts.get_mut(a[1] as usize)
-                    && let Some(slot) = stage.get_mut(a[2] as usize) {
-                        *slot = a[3];
-                    }
+                    && let Some(slot) = stage.get_mut(a[2] as usize)
+                {
+                    *slot = a[3];
+                }
                 if let Some(rec) = d.recording.as_mut() {
                     rec.ts.push((a[1], a[2], a[3]));
                 }
@@ -1284,7 +1698,17 @@ fn device_method(method: &str) -> Handler {
             Ok(S_OK)
         },
         "GetTextureStageState" => |e, a| {
-            let v = e.win.d3d.dev.as_ref().and_then(|d| d.ts.get(a[1] as usize).and_then(|s| s.get(a[2] as usize)).copied()).unwrap_or(0);
+            let v = e
+                .win
+                .d3d
+                .dev
+                .as_ref()
+                .and_then(|d| {
+                    d.ts.get(a[1] as usize)
+                        .and_then(|s| s.get(a[2] as usize))
+                        .copied()
+                })
+                .unwrap_or(0);
             e.mem.write(a[3], 4, v)?;
             Ok(S_OK)
         },
@@ -1292,7 +1716,12 @@ fn device_method(method: &str) -> Handler {
             if a[1] >= 8 {
                 return Ok(D3DERR_INVALIDCALL);
             }
-            let old = e.win.d3d.dev.as_ref().map_or(0, |d| d.textures[a[1] as usize]);
+            let old = e
+                .win
+                .d3d
+                .dev
+                .as_ref()
+                .map_or(0, |d| d.textures[a[1] as usize]);
             if a[2] != 0 {
                 add_ref(e, a[2]);
             }
@@ -1311,7 +1740,12 @@ fn device_method(method: &str) -> Handler {
             Ok(S_OK)
         },
         "GetTexture" => |e, a| {
-            let t = e.win.d3d.dev.as_ref().map_or(0, |d| d.textures.get(a[1] as usize).copied().unwrap_or(0));
+            let t = e
+                .win
+                .d3d
+                .dev
+                .as_ref()
+                .map_or(0, |d| d.textures.get(a[1] as usize).copied().unwrap_or(0));
             if t != 0 {
                 add_ref(e, t);
             }
@@ -1324,7 +1758,11 @@ fn device_method(method: &str) -> Handler {
         },
         "BeginStateBlock" => |e, _| {
             with_device(e, |_, d| {
-                d.recording = Some(StateBlock { rs: vec![], ts: vec![], textures: vec![] });
+                d.recording = Some(StateBlock {
+                    rs: vec![],
+                    ts: vec![],
+                    textures: vec![],
+                });
                 Ok(())
             })?;
             Ok(S_OK)
@@ -1346,7 +1784,11 @@ fn device_method(method: &str) -> Handler {
             let token = with_device(e, |_, d| {
                 let t = d.next_token;
                 d.next_token += 1;
-                let mut rec = StateBlock { rs: vec![], ts: vec![], textures: vec![] };
+                let mut rec = StateBlock {
+                    rs: vec![],
+                    ts: vec![],
+                    textures: vec![],
+                };
                 for (i, v) in d.rs.iter().enumerate() {
                     rec.rs.push((i as u32, *v));
                 }
@@ -1370,7 +1812,10 @@ fn device_method(method: &str) -> Handler {
                         d.rs[(s & 0xFF) as usize] = v;
                     }
                     for (s, k, v) in ts {
-                        if let Some(slot) = d.ts.get_mut(s as usize).and_then(|st| st.get_mut(k as usize)) {
+                        if let Some(slot) =
+                            d.ts.get_mut(s as usize)
+                                .and_then(|st| st.get_mut(k as usize))
+                        {
                             *slot = v;
                         }
                     }
@@ -1389,16 +1834,59 @@ fn device_method(method: &str) -> Handler {
             })?;
             Ok(S_OK)
         },
-        "DrawPrimitive" => |e, a| draw(e, &DrawCall::Stream { ptype: a[1], start: a[2], count: a[3], indexed: None }),
-        "DrawIndexedPrimitive" => |e, a| draw(e, &DrawCall::Stream { ptype: a[1], start: a[2], count: a[5], indexed: Some((a[4], a[3], a[2])) }),
-        "DrawPrimitiveUP" => |e, a| draw(e, &DrawCall::UserData { ptype: a[1], count: a[2], vertices: a[3], stride: a[4], indices: None }),
+        "DrawPrimitive" => |e, a| {
+            draw(
+                e,
+                &DrawCall::Stream {
+                    ptype: a[1],
+                    start: a[2],
+                    count: a[3],
+                    indexed: None,
+                },
+            )
+        },
+        "DrawIndexedPrimitive" => |e, a| {
+            draw(
+                e,
+                &DrawCall::Stream {
+                    ptype: a[1],
+                    start: a[2],
+                    count: a[5],
+                    indexed: Some((a[4], a[3], a[2])),
+                },
+            )
+        },
+        "DrawPrimitiveUP" => |e, a| {
+            draw(
+                e,
+                &DrawCall::UserData {
+                    ptype: a[1],
+                    count: a[2],
+                    vertices: a[3],
+                    stride: a[4],
+                    indices: None,
+                },
+            )
+        },
         "DrawIndexedPrimitiveUP" => |e, a| {
             // (this, type, minIndex, numVertices, primCount, indexData, indexFormat, vertexData, stride)
-            draw(e, &DrawCall::UserData { ptype: a[1], count: a[4], vertices: a[7], stride: a[8], indices: Some((a[5], a[6])) })
+            draw(
+                e,
+                &DrawCall::UserData {
+                    ptype: a[1],
+                    count: a[4],
+                    vertices: a[7],
+                    stride: a[8],
+                    indices: Some((a[5], a[6])),
+                },
+            )
         },
         "CreateVertexShader" | "CreatePixelShader" => |e, a| {
             // Programmable shaders are not supported (the caps say so); hand out a handle anyway.
-            let h = 0x8000_0000 | { e.win.d3d.next_shader += 1; e.win.d3d.next_shader };
+            let h = 0x8000_0000 | {
+                e.win.d3d.next_shader += 1;
+                e.win.d3d.next_shader
+            };
             let out = if a[4] != 0 || a[2] == 0 { a[3] } else { a[2] };
             e.mem.write(out, 4, h)?;
             Ok(S_OK)
@@ -1485,7 +1973,13 @@ fn surface_snapshot(e: &Emu, ptr: u32) -> Option<Surface> {
     }
 }
 
-fn copy_surface_memory(e: &mut Emu, src: &Surface, dst: &Surface, rect: Option<(i32, i32, i32, i32)>, point: (u32, u32)) -> Res<()> {
+fn copy_surface_memory(
+    e: &mut Emu,
+    src: &Surface,
+    dst: &Surface,
+    rect: Option<(i32, i32, i32, i32)>,
+    point: (u32, u32),
+) -> Res<()> {
     if src.format != dst.format {
         return Ok(()); // format conversion on copy is not supported
     }
@@ -1503,7 +1997,9 @@ fn copy_surface_memory(e: &mut Emu, src: &Surface, dst: &Surface, rect: Option<(
         if y0 as u32 + row >= src.h || point.1 + row >= dst.h {
             break;
         }
-        let cols = w.min(src.w.saturating_sub(x0 as u32)).min(dst.w.saturating_sub(point.0));
+        let cols = w
+            .min(src.w.saturating_sub(x0 as u32))
+            .min(dst.w.saturating_sub(point.0));
         let from = src.ptr + (y0 as u32 + row) * src.pitch + x0 as u32 * bpp;
         let to = dst.ptr + (point.1 + row) * dst.pitch + point.0 * bpp;
         let bytes = e.mem.read_bytes(from, cols * bpp)?;
@@ -1515,7 +2011,9 @@ fn copy_surface_memory(e: &mut Emu, src: &Surface, dst: &Surface, rect: Option<(
 fn copy_rects(e: &mut Emu, a: &Args) -> Res<u32> {
     // (this, src surface, src rects*, count, dst surface, dst points*)
     mark_dirty(e, a[4]);
-    let (Some(src), Some(dst)) = (surface_snapshot(e, a[1]), surface_snapshot(e, a[4])) else { return Ok(D3DERR_INVALIDCALL) };
+    let (Some(src), Some(dst)) = (surface_snapshot(e, a[1]), surface_snapshot(e, a[4])) else {
+        return Ok(D3DERR_INVALIDCALL);
+    };
     if src.ptr == 0 || dst.ptr == 0 {
         return Ok(S_OK);
     }
@@ -1530,7 +2028,14 @@ fn copy_rects(e: &mut Emu, a: &Args) -> Res<u32> {
             e.mem.read(a[2] + 16 * i + 8, 4)? as i32,
             e.mem.read(a[2] + 16 * i + 12, 4)? as i32,
         );
-        let pt = if a[5] != 0 { (e.mem.read(a[5] + 8 * i, 4)?, e.mem.read(a[5] + 8 * i + 4, 4)?) } else { (r.0 as u32, r.1 as u32) };
+        let pt = if a[5] != 0 {
+            (
+                e.mem.read(a[5] + 8 * i, 4)?,
+                e.mem.read(a[5] + 8 * i + 4, 4)?,
+            )
+        } else {
+            (r.0 as u32, r.1 as u32)
+        };
         copy_surface_memory(e, &src, &dst, Some(r), pt)?;
     }
     Ok(S_OK)
@@ -1538,7 +2043,9 @@ fn copy_rects(e: &mut Emu, a: &Args) -> Res<u32> {
 
 fn update_texture(e: &mut Emu, a: &Args) -> Res<u32> {
     let (src, dst) = match (e.win.d3d.objects.get(&a[1]), e.win.d3d.objects.get(&a[2])) {
-        (Some(Obj::Texture(s)), Some(Obj::Texture(d))) => (s.levels.clone(), (d.levels.clone(), d.format)),
+        (Some(Obj::Texture(s)), Some(Obj::Texture(d))) => {
+            (s.levels.clone(), (d.levels.clone(), d.format))
+        }
         _ => return Ok(D3DERR_INVALIDCALL),
     };
     // Match levels by size: the destination may have fewer levels than the source.
@@ -1555,7 +2062,12 @@ fn update_texture(e: &mut Emu, a: &Args) -> Res<u32> {
 
 /// Encode an ARGB pixel into `format`'s storage.
 fn store_pixel(format: u32, argb: u32) -> u32 {
-    let (a, r, g, b) = ((argb >> 24) & 0xFF, (argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF);
+    let (a, r, g, b) = (
+        (argb >> 24) & 0xFF,
+        (argb >> 16) & 0xFF,
+        (argb >> 8) & 0xFF,
+        argb & 0xFF,
+    );
     match format {
         FMT_R5G6B5 => ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3),
         FMT_X1R5G5B5 => ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3),
@@ -1567,14 +2079,22 @@ fn store_pixel(format: u32, argb: u32) -> u32 {
 
 /// Write a texture render target's pixels back into its guest memory.
 fn flush_render_target(e: &mut Emu, d: &mut Device) -> Res<()> {
-    let Some((surf, target)) = d.rt.as_ref() else { return Ok(()) };
-    let Some(s) = surface_snapshot(e, *surf) else { return Ok(()) };
+    let Some((surf, target)) = d.rt.as_ref() else {
+        return Ok(());
+    };
+    let Some(s) = surface_snapshot(e, *surf) else {
+        return Ok(());
+    };
     mark_dirty(e, *surf);
     let bpp = bytes_per_pixel(s.format).max(1);
     for y in 0..s.h.min(target.h) {
         for x in 0..s.w.min(target.w) {
             let px = target.color[(y * target.w + x) as usize];
-            e.mem.write(s.ptr + y * s.pitch + x * bpp, bpp.min(4), store_pixel(s.format, px))?;
+            e.mem.write(
+                s.ptr + y * s.pitch + x * bpp,
+                bpp.min(4),
+                store_pixel(s.format, px),
+            )?;
         }
     }
     Ok(())
@@ -1615,14 +2135,44 @@ fn clear(e: &mut Emu, a: &Args) -> Res<u32> {
         if d.rt.is_none() && d.gpu.is_some() {
             let g = d.gpu.as_mut().unwrap();
             if regions.is_empty() {
-                g.clear((flags & 1 != 0).then_some(color), (flags & 2 != 0).then_some(z));
+                g.clear(
+                    (flags & 1 != 0).then_some(color),
+                    (flags & 2 != 0).then_some(z),
+                );
             } else {
                 // A rectangle clear is a quad that ignores the depth test and writes the clear values.
-                let rs = RenderState { zenable: flags & 2 != 0, zwrite: flags & 2 != 0, zfunc: 8, cull: 1, color_write: if flags & 1 != 0 { 0xF } else { 0 }, ..RenderState::default() };
-                let stg = [StageState { color_op: 1, ..StageState::default_for(0) }, StageState::default_for(1)];
+                let rs = RenderState {
+                    zenable: flags & 2 != 0,
+                    zwrite: flags & 2 != 0,
+                    zfunc: 8,
+                    cull: 1,
+                    color_write: if flags & 1 != 0 { 0xF } else { 0 },
+                    ..RenderState::default()
+                };
+                let stg = [
+                    StageState {
+                        color_op: 1,
+                        ..StageState::default_for(0)
+                    },
+                    StageState::default_for(1),
+                ];
                 for (x0, y0, x1, y1) in &regions {
-                    let v = |x: i32, y: i32| Vertex { x: x as f32, y: y as f32, z, rhw: 1.0, color: unpack(color), ..Vertex::default() };
-                    let quad = [v(*x0, *y0), v(*x1, *y0), v(*x0, *y1), v(*x1, *y0), v(*x1, *y1), v(*x0, *y1)];
+                    let v = |x: i32, y: i32| Vertex {
+                        x: x as f32,
+                        y: y as f32,
+                        z,
+                        rhw: 1.0,
+                        color: unpack(color),
+                        ..Vertex::default()
+                    };
+                    let quad = [
+                        v(*x0, *y0),
+                        v(*x1, *y0),
+                        v(*x0, *y1),
+                        v(*x1, *y0),
+                        v(*x1, *y1),
+                        v(*x0, *y1),
+                    ];
                     g.draw(&e.mem, &rs, &stg, &[None, None], &quad);
                 }
             }
@@ -1633,7 +2183,10 @@ fn clear(e: &mut Emu, a: &Args) -> Res<u32> {
             None => &mut d.target,
         };
         if regions.is_empty() {
-            t.clear((flags & 1 != 0).then_some(color), (flags & 2 != 0).then_some(z));
+            t.clear(
+                (flags & 1 != 0).then_some(color),
+                (flags & 2 != 0).then_some(z),
+            );
         } else {
             for (x0, y0, x1, y1) in &regions {
                 for y in (*y0).max(0)..(*y1).min(t.h as i32) {
@@ -1659,9 +2212,10 @@ fn sync_back_buffer(e: &mut Emu) {
     finish_present(e, true);
     if let Some(d) = e.win.d3d.dev.as_mut()
         && let Some(g) = d.gpu.as_mut()
-            && d.target.color.len() == (g.w * g.h) as usize {
-                g.read_color(&mut d.target.color);
-            }
+        && d.target.color.len() == (g.w * g.h) as usize
+    {
+        g.read_color(&mut d.target.color);
+    }
 }
 
 /// The texture a texture or one of its level surfaces belongs to has new contents.
@@ -1678,12 +2232,21 @@ fn mark_dirty(e: &mut Emu, obj: u32) {
 /// With the GPU, the frame is only submitted here: its pixels reach the window when it is
 /// done (`finish_present`), so the CPU goes on with the next frame meanwhile.
 fn present(e: &mut Emu, override_hwnd: u32) -> Res<()> {
-    let Some(hwnd) = e.win.d3d.dev.as_ref().map(|d| if override_hwnd != 0 { override_hwnd } else { d.hwnd }) else {
+    let Some(hwnd) = e.win.d3d.dev.as_ref().map(|d| {
+        if override_hwnd != 0 {
+            override_hwnd
+        } else {
+            d.hwnd
+        }
+    }) else {
         return Ok(());
     };
     // Some(the previous frame's window, if that frame was collected just now)
     let submitted = e.win.d3d.dev.as_mut().and_then(|d| {
-        let g = d.gpu.as_mut().filter(|g| d.target.color.len() == (g.w * g.h) as usize)?;
+        let g = d
+            .gpu
+            .as_mut()
+            .filter(|g| d.target.color.len() == (g.w * g.h) as usize)?;
         let collected = g.submit_frame(&mut d.target.color);
         Some(std::mem::replace(&mut d.pending_present, Some(hwnd)).filter(|_| collected))
     });
@@ -1705,8 +2268,12 @@ fn present(e: &mut Emu, override_hwnd: u32) -> Res<()> {
 /// Put a frame submitted by Present into its window once the GPU has finished it (without
 /// `wait`, only if it already has).
 pub fn finish_present(e: &mut Emu, wait: bool) {
-    let Some(d) = e.win.d3d.dev.as_mut() else { return };
-    let Some(hwnd) = d.pending_present else { return };
+    let Some(d) = e.win.d3d.dev.as_mut() else {
+        return;
+    };
+    let Some(hwnd) = d.pending_present else {
+        return;
+    };
     let Some(g) = d.gpu.as_mut() else { return };
     if g.finish_frame(&mut d.target.color, wait) {
         d.pending_present = None;
@@ -1718,7 +2285,9 @@ pub fn finish_present(e: &mut Emu, wait: bool) {
 
 /// Copy (scaling if the sizes differ) the device's frame into the window.
 fn show_frame(e: &mut Emu, hwnd: u32) {
-    let Some((w, h)) = e.win.d3d.dev.as_ref().map(|d| (d.target.w, d.target.h)) else { return };
+    let Some((w, h)) = e.win.d3d.dev.as_ref().map(|d| (d.target.w, d.target.h)) else {
+        return;
+    };
     if let (Some(d), Some(win)) = (e.win.d3d.dev.as_ref(), e.wm.window_mut(hwnd)) {
         let pixels = &d.target.color;
         let (sw, sh) = (win.surface.width as usize, win.surface.height as usize);
@@ -1782,9 +2351,18 @@ fn parse_fvf(fvf: u32) -> FvfLayout {
         tex_floats: [2; 8],
         stride: 0,
     };
-    let mut stride = if xyzrhw { 16 } else if pos != 0 { 12 } else { 0 };
+    let mut stride = if xyzrhw {
+        16
+    } else if pos != 0 {
+        12
+    } else {
+        0
+    };
     stride += 4 * weights;
-    stride += if l.normal { 12 } else { 0 } + if l.psize { 4 } else { 0 } + if l.diffuse { 4 } else { 0 } + if l.specular { 4 } else { 0 };
+    stride += if l.normal { 12 } else { 0 }
+        + if l.psize { 4 } else { 0 }
+        + if l.diffuse { 4 } else { 0 }
+        + if l.specular { 4 } else { 0 };
     for i in 0..l.tex_count as usize {
         l.tex_floats[i] = match (fvf >> (16 + 2 * i)) & 3 {
             0 => 2,
@@ -1829,7 +2407,11 @@ fn mat_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
 
 fn normalize3(v: [f32; 3]) -> [f32; 3] {
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if l > 1e-12 { [v[0] / l, v[1] / l, v[2] / l] } else { v }
+    if l > 1e-12 {
+        [v[0] / l, v[1] / l, v[2] / l]
+    } else {
+        v
+    }
 }
 
 impl Device {
@@ -1843,10 +2425,22 @@ impl Device {
             .values()
             .filter(|l| l.enabled)
             .map(|light| {
-                let f = |off: usize| f32::from_bits(u32::from_le_bytes([light.raw[off], light.raw[off + 1], light.raw[off + 2], light.raw[off + 3]]));
+                let f = |off: usize| {
+                    f32::from_bits(u32::from_le_bytes([
+                        light.raw[off],
+                        light.raw[off + 1],
+                        light.raw[off + 2],
+                        light.raw[off + 3],
+                    ]))
+                };
                 let d = normalize3([f(60), f(64), f(68)]);
                 LightParams {
-                    directional: u32::from_le_bytes([light.raw[0], light.raw[1], light.raw[2], light.raw[3]]) == 3,
+                    directional: u32::from_le_bytes([
+                        light.raw[0],
+                        light.raw[1],
+                        light.raw[2],
+                        light.raw[3],
+                    ]) == 3,
                     diffuse: [f(4), f(8), f(12)],
                     ambient: [f(36), f(40), f(44)],
                     pos: [f(48), f(52), f(56)],
@@ -1858,7 +2452,13 @@ impl Device {
             .collect()
     }
 
-    fn lit_color(&self, lights: &[LightParams], world_pos: [f32; 3], world_normal: [f32; 3], vertex_diffuse: Option<[f32; 4]>) -> [f32; 4] {
+    fn lit_color(
+        &self,
+        lights: &[LightParams],
+        world_pos: [f32; 3],
+        world_normal: [f32; 3],
+        vertex_diffuse: Option<[f32; 4]>,
+    ) -> [f32; 4] {
         let m = &self.material;
         let color_vertex = self.rs_bool(141);
         let src = |state: usize, vertex: Option<[f32; 4]>, mat: [f32; 4]| -> [f32; 4] {
@@ -1881,7 +2481,11 @@ impl Device {
             let (l, atten) = if light.directional {
                 (light.to_light, 1.0)
             } else {
-                let v = [pos[0] - world_pos[0], pos[1] - world_pos[1], pos[2] - world_pos[2]];
+                let v = [
+                    pos[0] - world_pos[0],
+                    pos[1] - world_pos[1],
+                    pos[2] - world_pos[2],
+                ];
                 let dist = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
                 if light.range > 0.0 && dist > light.range {
                     continue;
@@ -1892,18 +2496,32 @@ impl Device {
             };
             let ndl = (n[0] * l[0] + n[1] * l[1] + n[2] * l[2]).max(0.0);
             for c in 0..3 {
-                rgb[c] += atten * (light_ambient[c] * ambient_mat[c] + ndl * light_diffuse[c] * diffuse_mat[c]);
+                rgb[c] += atten
+                    * (light_ambient[c] * ambient_mat[c] + ndl * light_diffuse[c] * diffuse_mat[c]);
             }
         }
-        [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0), diffuse_mat[3]]
+        [
+            rgb[0].clamp(0.0, 1.0),
+            rgb[1].clamp(0.0, 1.0),
+            rgb[2].clamp(0.0, 1.0),
+            diffuse_mat[3],
+        ]
     }
 
     fn process(&self, e: &Emu, l: &FvfLayout, setup: &DrawSetup, addr: u32) -> Res<PipeVertex> {
         let mut o = addr;
-        let mut v = PipeVertex { color: [1.0; 4], ..PipeVertex::default() };
+        let mut v = PipeVertex {
+            color: [1.0; 4],
+            ..PipeVertex::default()
+        };
         let mut pos = [0.0f32; 3];
         if l.xyzrhw {
-            v.clip = [read_f32(e, o)?, read_f32(e, o + 4)?, read_f32(e, o + 8)?, read_f32(e, o + 12)?];
+            v.clip = [
+                read_f32(e, o)?,
+                read_f32(e, o + 4)?,
+                read_f32(e, o + 8)?,
+                read_f32(e, o + 12)?,
+            ];
             v.screen = true;
             o += 16;
         } else if l.has_xyz {
@@ -1931,12 +2549,24 @@ impl Device {
         }
         for i in 0..l.tex_count as usize {
             if i < 2 {
-                v.uv[i] = [read_f32(e, o)?, if l.tex_floats[i] >= 2 { read_f32(e, o + 4)? } else { 0.0 }];
+                v.uv[i] = [
+                    read_f32(e, o)?,
+                    if l.tex_floats[i] >= 2 {
+                        read_f32(e, o + 4)?
+                    } else {
+                        0.0
+                    },
+                ];
                 // Texture coordinate transform (2D only).
                 let flags = self.ts[i][24] & 0xFF;
                 if flags != 0 {
-                    let t = mat_mul_point(&self.tex_transform[i], [v.uv[i][0], v.uv[i][1], 0.0, 1.0]);
-                    v.uv[i] = if self.ts[i][24] & 0x100 != 0 && t[2].abs() > 1e-9 { [t[0] / t[2], t[1] / t[2]] } else { [t[0], t[1]] };
+                    let t =
+                        mat_mul_point(&self.tex_transform[i], [v.uv[i][0], v.uv[i][1], 0.0, 1.0]);
+                    v.uv[i] = if self.ts[i][24] & 0x100 != 0 && t[2].abs() > 1e-9 {
+                        [t[0] / t[2], t[1] / t[2]]
+                    } else {
+                        [t[0], t[1]]
+                    };
                 }
             }
             o += 4 * l.tex_floats[i];
@@ -1963,14 +2593,27 @@ impl Device {
     }
 
     fn to_screen(&self, v: &PipeVertex) -> Vertex {
-        let mut out = Vertex { color: v.color, spec: v.spec, uv: v.uv, ..Vertex::default() };
+        let mut out = Vertex {
+            color: v.color,
+            spec: v.spec,
+            uv: v.uv,
+            ..Vertex::default()
+        };
         if v.screen {
             (out.x, out.y, out.z, out.rhw) = (v.clip[0], v.clip[1], v.clip[2], v.clip[3]);
         } else {
             let w = v.clip[3];
             let inv = if w.abs() > 1e-9 { 1.0 / w } else { 1.0 };
-            let (vx, vy, vw, vh) = (self.viewport[0] as f32, self.viewport[1] as f32, self.viewport[2] as f32, self.viewport[3] as f32);
-            let (min_z, max_z) = (f32::from_bits(self.viewport[4]), f32::from_bits(self.viewport[5]));
+            let (vx, vy, vw, vh) = (
+                self.viewport[0] as f32,
+                self.viewport[1] as f32,
+                self.viewport[2] as f32,
+                self.viewport[3] as f32,
+            );
+            let (min_z, max_z) = (
+                f32::from_bits(self.viewport[4]),
+                f32::from_bits(self.viewport[5]),
+            );
             out.x = vx + (v.clip[0] * inv * 0.5 + 0.5) * vw;
             out.y = vy + (0.5 - v.clip[1] * inv * 0.5) * vh;
             out.z = min_z + v.clip[2] * inv * (max_z - min_z);
@@ -2029,7 +2672,11 @@ fn clip_near(tri: [PipeVertex; 3]) -> ([PipeVertex; 4], usize) {
         }
         if ci != ni {
             // Intersect with z = 0 (or w = epsilon if z is fine but w is not).
-            let t = if (cur.clip[2] - next.clip[2]).abs() > 1e-12 { cur.clip[2] / (cur.clip[2] - next.clip[2]) } else { 0.5 };
+            let t = if (cur.clip[2] - next.clip[2]).abs() > 1e-12 {
+                cur.clip[2] / (cur.clip[2] - next.clip[2])
+            } else {
+                0.5
+            };
             out[len] = lerp_pv(cur, next, t.clamp(0.0, 1.0));
             len += 1;
         }
@@ -2038,8 +2685,19 @@ fn clip_near(tri: [PipeVertex; 3]) -> ([PipeVertex; 4], usize) {
 }
 
 enum DrawCall {
-    Stream { ptype: u32, start: u32, count: u32, indexed: Option<(u32, u32, u32)> },
-    UserData { ptype: u32, count: u32, vertices: u32, stride: u32, indices: Option<(u32, u32)> },
+    Stream {
+        ptype: u32,
+        start: u32,
+        count: u32,
+        indexed: Option<(u32, u32, u32)>,
+    },
+    UserData {
+        ptype: u32,
+        count: u32,
+        vertices: u32,
+        stride: u32,
+        indices: Option<(u32, u32)>,
+    },
 }
 
 fn index_count(ptype: u32, prims: u32) -> u32 {
@@ -2074,7 +2732,9 @@ fn triangle_slot(ptype: u32, i: u32) -> [u32; 3] {
 }
 
 fn draw(e: &mut Emu, call: &DrawCall) -> Res<u32> {
-    let Some(()) = with_device(e, |e, d| draw_inner(e, d, call))? else { return Ok(D3DERR_INVALIDCALL) };
+    let Some(()) = with_device(e, |e, d| draw_inner(e, d, call))? else {
+        return Ok(D3DERR_INVALIDCALL);
+    };
     Ok(S_OK)
 }
 
@@ -2090,37 +2750,64 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         return Ok(());
     }
     let (ptype, prims) = match call {
-        DrawCall::Stream { ptype, count, .. } | DrawCall::UserData { ptype, count, .. } => (*ptype, *count),
+        DrawCall::Stream { ptype, count, .. } | DrawCall::UserData { ptype, count, .. } => {
+            (*ptype, *count)
+        }
     };
     let n = index_count(ptype, prims);
     // Where do vertex data and indices live?
     let (vbase, stride, index_source): (u32, u32, Option<(u32, bool, u32)>) = match call {
         DrawCall::Stream { start, indexed, .. } => {
             let (vb, vstride) = d.stream;
-            let Some(Obj::VertexBuffer(buf)) = e.win.d3d.objects.get(&vb) else { return Ok(()) };
+            let Some(Obj::VertexBuffer(buf)) = e.win.d3d.objects.get(&vb) else {
+                return Ok(());
+            };
             let stride = if vstride != 0 { vstride } else { layout.stride };
             match indexed {
                 None => (buf.ptr + start * stride, stride, None),
                 Some((start_index, _min, _)) => {
                     let (ib, base) = d.indices;
-                    let Some(Obj::IndexBuffer(ibuf)) = e.win.d3d.objects.get(&ib) else { return Ok(()) };
+                    let Some(Obj::IndexBuffer(ibuf)) = e.win.d3d.objects.get(&ib) else {
+                        return Ok(());
+                    };
                     let wide = ibuf.kind == 102;
                     let isz = if wide { 4 } else { 2 };
-                    (buf.ptr + base * stride, stride, Some((ibuf.ptr + start_index * isz, wide, 0)))
+                    (
+                        buf.ptr + base * stride,
+                        stride,
+                        Some((ibuf.ptr + start_index * isz, wide, 0)),
+                    )
                 }
             }
         }
-        DrawCall::UserData { vertices, stride, indices, .. } => (*vertices, *stride, indices.map(|(p, fmt)| (p, fmt == 102, 0))),
+        DrawCall::UserData {
+            vertices,
+            stride,
+            indices,
+            ..
+        } => (
+            *vertices,
+            *stride,
+            indices.map(|(p, fmt)| (p, fmt == 102, 0)),
+        ),
     };
     let slot_to_vertex = |e: &Emu, slot: u32| -> Res<u32> {
         match index_source {
             None => Ok(slot),
-            Some((ptr, wide, _)) => Ok(if wide { e.mem.read(ptr + 4 * slot, 4)? } else { e.mem.read(ptr + 2 * slot, 2)? }),
+            Some((ptr, wide, _)) => Ok(if wide {
+                e.mem.read(ptr + 4 * slot, 4)?
+            } else {
+                e.mem.read(ptr + 2 * slot, 2)?
+            }),
         }
     };
     let setup = DrawSetup {
         wvp: mat_mul(&mat_mul(&d.world, &d.view), &d.proj),
-        lights: if d.rs_bool(137) && layout.normal { d.light_params() } else { Vec::new() },
+        lights: if d.rs_bool(137) && layout.normal {
+            d.light_params()
+        } else {
+            Vec::new()
+        },
     };
     // Indexed meshes reuse vertices; each is transformed once per draw. The cache and the
     // GPU vertex list live in the device between draws so drawing allocates nothing; a cache
@@ -2138,9 +2825,10 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         let vi = slot_to_vertex(e, slot)?;
         let i = vi as usize;
         if let Some((s, v)) = cache.get(i)
-            && *s == stamp {
-                return Ok(*v);
-            }
+            && *s == stamp
+        {
+            return Ok(*v);
+        }
         let v = d.process(e, &layout, &setup, vbase + vi * stride)?;
         if i < CACHE_LIMIT {
             if cache.len() <= i {
@@ -2187,7 +2875,10 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
     let mut texs: [Option<TextureRef>; 2] = [None, None];
     for (s, slot) in texs.iter_mut().enumerate() {
         if let Some(Obj::Texture(t)) = e.win.d3d.objects.get(&d.textures[s]) {
-            *slot = Some(TextureRef { format: t.format, levels: t.levels.clone() });
+            *slot = Some(TextureRef {
+                format: t.format,
+                levels: t.levels.clone(),
+            });
         }
     }
 
@@ -2210,58 +2901,84 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
             None => &mut main,
         };
         let dev_view: &Device = d;
-    if ptype >= 4 {
-        for t in 0..triangle_count(ptype, n) {
-            let tri = triangle_slot(ptype, t);
-            let v = [fetch(e, dev_view, tri[0])?, fetch(e, dev_view, tri[1])?, fetch(e, dev_view, tri[2])?];
-            let (poly, len) = if v.iter().all(|x| x.screen) { ([v[0], v[1], v[2], v[2]], 3) } else { clip_near(v) };
-            if len < 3 {
-                continue;
-            }
-            let mut scr = [Vertex::default(); 4];
-            for (o, p) in scr.iter_mut().zip(&poly[..len]) {
-                *o = dev_view.to_screen(p);
-            }
-            for i in 1..len - 1 {
-                if use_gpu {
-                    gpu_verts.extend_from_slice(&[scr[0], scr[i], scr[i + 1]]);
+        if ptype >= 4 {
+            for t in 0..triangle_count(ptype, n) {
+                let tri = triangle_slot(ptype, t);
+                let v = [
+                    fetch(e, dev_view, tri[0])?,
+                    fetch(e, dev_view, tri[1])?,
+                    fetch(e, dev_view, tri[2])?,
+                ];
+                let (poly, len) = if v.iter().all(|x| x.screen) {
+                    ([v[0], v[1], v[2], v[2]], 3)
                 } else {
-                    draw_triangle(target, &e.mem, &rs, &stages, &texs, [&scr[0], &scr[i], &scr[i + 1]]);
+                    clip_near(v)
+                };
+                if len < 3 {
+                    continue;
+                }
+                let mut scr = [Vertex::default(); 4];
+                for (o, p) in scr.iter_mut().zip(&poly[..len]) {
+                    *o = dev_view.to_screen(p);
+                }
+                for i in 1..len - 1 {
+                    if use_gpu {
+                        gpu_verts.extend_from_slice(&[scr[0], scr[i], scr[i + 1]]);
+                    } else {
+                        draw_triangle(
+                            target,
+                            &e.mem,
+                            &rs,
+                            &stages,
+                            &texs,
+                            [&scr[0], &scr[i], &scr[i + 1]],
+                        );
+                    }
+                }
+            }
+        } else if ptype == 2 || ptype == 3 {
+            let segments: Vec<(u32, u32)> = if ptype == 2 {
+                (0..n / 2).map(|i| (2 * i, 2 * i + 1)).collect()
+            } else {
+                (0..n.saturating_sub(1)).map(|i| (i, i + 1)).collect()
+            };
+            for (a_slot, b_slot) in segments {
+                let (a, b) = (fetch(e, dev_view, a_slot)?, fetch(e, dev_view, b_slot)?);
+                if a.clip[3] <= 1e-6 && !a.screen || b.clip[3] <= 1e-6 && !b.screen {
+                    continue;
+                }
+                let (sa, sb) = (dev_view.to_screen(&a), dev_view.to_screen(&b));
+                if use_gpu {
+                    thin_quad(gpu_verts, &sa, &sb);
+                } else {
+                    draw_line(target, &sa, &sb, &rs);
+                }
+            }
+        } else {
+            for slot in 0..n {
+                let v = fetch(e, dev_view, slot)?;
+                let s = dev_view.to_screen(&v);
+                if use_gpu {
+                    thin_quad(gpu_verts, &s, &s);
+                } else if s.x >= 0.0
+                    && s.y >= 0.0
+                    && (s.x as u32) < target.w
+                    && (s.y as u32) < target.h
+                {
+                    target.color[(s.y as u32 * target.w + s.x as u32) as usize] = pack(s.color);
                 }
             }
         }
-    } else if ptype == 2 || ptype == 3 {
-        let segments: Vec<(u32, u32)> = if ptype == 2 { (0..n / 2).map(|i| (2 * i, 2 * i + 1)).collect() } else { (0..n.saturating_sub(1)).map(|i| (i, i + 1)).collect() };
-        for (a_slot, b_slot) in segments {
-            let (a, b) = (fetch(e, dev_view, a_slot)?, fetch(e, dev_view, b_slot)?);
-            if a.clip[3] <= 1e-6 && !a.screen || b.clip[3] <= 1e-6 && !b.screen {
-                continue;
-            }
-            let (sa, sb) = (dev_view.to_screen(&a), dev_view.to_screen(&b));
-            if use_gpu {
-                thin_quad(gpu_verts, &sa, &sb);
-            } else {
-                draw_line(target, &sa, &sb, &rs);
-            }
-        }
-    } else {
-        for slot in 0..n {
-            let v = fetch(e, dev_view, slot)?;
-            let s = dev_view.to_screen(&v);
-            if use_gpu {
-                thin_quad(gpu_verts, &s, &s);
-            } else if s.x >= 0.0 && s.y >= 0.0 && (s.x as u32) < target.w && (s.y as u32) < target.h {
-                target.color[(s.y as u32 * target.w + s.x as u32) as usize] = pack(s.color);
-            }
-        }
-    }
         Ok(())
     })();
     d.rt = rt;
     d.target = main;
     if r.is_ok() && use_gpu && !scratch.verts.is_empty() {
         let [t0, t1] = texs;
-        let gtex = [t0.map(|t| (d.textures[0], t)), t1.map(|t| (d.textures[1], t))];
+        let gtex = [
+            t0.map(|t| (d.textures[0], t)),
+            t1.map(|t| (d.textures[1], t)),
+        ];
         if let Some(g) = d.gpu.as_mut() {
             g.draw(&e.mem, &rs, &stages, &gtex, &scratch.verts);
         }
@@ -2274,9 +2991,21 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
 fn thin_quad(out: &mut Vec<Vertex>, a: &Vertex, b: &Vertex) {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let len = (dx * dx + dy * dy).sqrt();
-    let (nx, ny) = if len > 1e-6 { (-dy / len * 0.5, dx / len * 0.5) } else { (0.0, 0.5) };
-    let (ex, ey) = if len > 1e-6 { (dx / len * 0.5, dy / len * 0.5) } else { (0.5, 0.0) };
-    let corner = |v: &Vertex, sx: f32, sy: f32| Vertex { x: v.x + sx, y: v.y + sy, ..*v };
+    let (nx, ny) = if len > 1e-6 {
+        (-dy / len * 0.5, dx / len * 0.5)
+    } else {
+        (0.0, 0.5)
+    };
+    let (ex, ey) = if len > 1e-6 {
+        (dx / len * 0.5, dy / len * 0.5)
+    } else {
+        (0.5, 0.0)
+    };
+    let corner = |v: &Vertex, sx: f32, sy: f32| Vertex {
+        x: v.x + sx,
+        y: v.y + sy,
+        ..*v
+    };
     let (p0, p1) = (corner(a, nx - ex, ny - ey), corner(a, -nx - ex, -ny - ey));
     let (p2, p3) = (corner(b, nx + ex, ny + ey), corner(b, -nx + ex, -ny + ey));
     out.extend_from_slice(&[p0, p1, p2, p1, p3, p2]);
@@ -2286,7 +3015,10 @@ fn draw_line(t: &mut Target, a: &Vertex, b: &Vertex, rs: &RenderState) {
     let steps = ((b.x - a.x).abs().max((b.y - a.y).abs()).ceil() as i32).max(1);
     for i in 0..=steps {
         let f = i as f32 / steps as f32;
-        let (x, y) = ((a.x + (b.x - a.x) * f) as i32, (a.y + (b.y - a.y) * f) as i32);
+        let (x, y) = (
+            (a.x + (b.x - a.x) * f) as i32,
+            (a.y + (b.y - a.y) * f) as i32,
+        );
         if x < 0 || y < 0 || x >= t.w as i32 || y >= t.h as i32 {
             continue;
         }
@@ -2310,7 +3042,7 @@ fn draw_line(t: &mut Target, a: &Vertex, b: &Vertex, rs: &RenderState) {
 mod tests {
     use super::*;
     use crate::loader;
-    use crate::tests::util::{build_pe, Asm, CODE_VA};
+    use crate::tests::util::{Asm, CODE_VA, build_pe};
 
     #[test]
     fn vtables_have_the_documented_number_of_entries() {
@@ -2324,7 +3056,9 @@ mod tests {
 
     #[test]
     fn vtable_slots_match_the_header_order() {
-        let slot = |table: &[(&str, usize)], name: &str| table.iter().position(|(n, _)| *n == name).unwrap();
+        let slot = |table: &[(&str, usize)], name: &str| {
+            table.iter().position(|(n, _)| *n == name).unwrap()
+        };
         assert_eq!(slot(D3D_METHODS, "CreateDevice"), 15);
         assert_eq!(slot(D3D_METHODS, "GetAdapterIdentifier"), 5);
         assert_eq!(slot(DEVICE_METHODS, "Present"), 15);
@@ -2352,7 +3086,8 @@ mod tests {
     fn every_method_resolves_with_its_argument_count() {
         for iface in ALL_IFACES {
             for (m, argc) in iface.methods() {
-                let (got, _) = lookup("d3d8", &format!("{}::{}", iface.name(), m)).unwrap_or_else(|| panic!("{}::{m}", iface.name()));
+                let (got, _) = lookup("d3d8", &format!("{}::{}", iface.name(), m))
+                    .unwrap_or_else(|| panic!("{}::{m}", iface.name()));
                 assert_eq!(got, *argc, "{}::{m}", iface.name());
             }
         }
@@ -2386,27 +3121,53 @@ mod tests {
     fn matrix_math_and_perspective_to_screen() {
         let mut t = identity();
         t[12] = 5.0; // translate x by 5
-        assert_eq!(mat_mul_point(&t, [1.0, 2.0, 3.0, 1.0]), [6.0, 2.0, 3.0, 1.0]);
+        assert_eq!(
+            mat_mul_point(&t, [1.0, 2.0, 3.0, 1.0]),
+            [6.0, 2.0, 3.0, 1.0]
+        );
         let a = identity();
         assert_eq!(mat_mul(&a, &t), t);
         // a vertex at the clip-space centre lands in the middle of the viewport
         let dev = test_device(640, 480);
-        let v = PipeVertex { clip: [0.0, 0.0, 0.5, 1.0], ..PipeVertex::default() };
+        let v = PipeVertex {
+            clip: [0.0, 0.0, 0.5, 1.0],
+            ..PipeVertex::default()
+        };
         let s = dev.to_screen(&v);
         assert_eq!((s.x, s.y), (320.0, 240.0));
-        let corner = dev.to_screen(&PipeVertex { clip: [-1.0, 1.0, 0.0, 1.0], ..PipeVertex::default() });
-        assert_eq!((corner.x, corner.y), (0.0, 0.0), "clip (-1, +1) is the top-left pixel");
-        let far = dev.to_screen(&PipeVertex { clip: [2.0, 0.0, 1.0, 2.0], ..PipeVertex::default() });
-        assert_eq!((far.x, far.rhw), (640.0, 0.5), "x/w = 1 is the right edge; 1/w is kept for perspective correction");
+        let corner = dev.to_screen(&PipeVertex {
+            clip: [-1.0, 1.0, 0.0, 1.0],
+            ..PipeVertex::default()
+        });
+        assert_eq!(
+            (corner.x, corner.y),
+            (0.0, 0.0),
+            "clip (-1, +1) is the top-left pixel"
+        );
+        let far = dev.to_screen(&PipeVertex {
+            clip: [2.0, 0.0, 1.0, 2.0],
+            ..PipeVertex::default()
+        });
+        assert_eq!(
+            (far.x, far.rhw),
+            (640.0, 0.5),
+            "x/w = 1 is the right edge; 1/w is kept for perspective correction"
+        );
     }
 
     #[test]
     fn near_plane_clipping_cuts_a_triangle() {
-        let v = |x: f32, z: f32| PipeVertex { clip: [x, 0.0, z, 1.0], ..PipeVertex::default() };
+        let v = |x: f32, z: f32| PipeVertex {
+            clip: [x, 0.0, z, 1.0],
+            ..PipeVertex::default()
+        };
         // one vertex behind the near plane: the triangle becomes a quad
         let (quad, len) = clip_near([v(0.0, 1.0), v(1.0, 1.0), v(0.0, -1.0)]);
         assert_eq!(len, 4);
-        assert!(quad[..len].iter().all(|p| p.clip[2] >= -1e-6), "nothing left behind the plane");
+        assert!(
+            quad[..len].iter().all(|p| p.clip[2] >= -1e-6),
+            "nothing left behind the plane"
+        );
         // all behind: gone; all in front: untouched
         assert!(clip_near([v(0.0, -1.0), v(1.0, -1.0), v(0.0, -2.0)]).1 == 0);
         assert_eq!(clip_near([v(0.0, 1.0), v(1.0, 1.0), v(0.0, 2.0)]).1, 3);
@@ -2414,11 +3175,32 @@ mod tests {
 
     #[test]
     fn primitive_assembly() {
-        let triangle_slots = |p: u32, n: u32| (0..triangle_count(p, n)).map(|i| triangle_slot(p, i)).collect::<Vec<_>>();
+        let triangle_slots = |p: u32, n: u32| {
+            (0..triangle_count(p, n))
+                .map(|i| triangle_slot(p, i))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(triangle_slots(4, 6), vec![[0, 1, 2], [3, 4, 5]], "list");
-        assert_eq!(triangle_slots(5, 5), vec![[0, 1, 2], [2, 1, 3], [2, 3, 4]], "strip alternates winding");
-        assert_eq!(triangle_slots(6, 5), vec![[0, 1, 2], [0, 2, 3], [0, 3, 4]], "fan");
-        assert_eq!((index_count(4, 2), index_count(5, 2), index_count(2, 3), index_count(3, 3), index_count(1, 3)), (6, 4, 6, 4, 3));
+        assert_eq!(
+            triangle_slots(5, 5),
+            vec![[0, 1, 2], [2, 1, 3], [2, 3, 4]],
+            "strip alternates winding"
+        );
+        assert_eq!(
+            triangle_slots(6, 5),
+            vec![[0, 1, 2], [0, 2, 3], [0, 3, 4]],
+            "fan"
+        );
+        assert_eq!(
+            (
+                index_count(4, 2),
+                index_count(5, 2),
+                index_count(2, 3),
+                index_count(3, 3),
+                index_count(1, 3)
+            ),
+            (6, 4, 6, 4, 3)
+        );
     }
 
     fn test_device(w: u32, h: u32) -> Device {
@@ -2458,7 +3240,9 @@ mod tests {
     #[test]
     fn directional_lighting_follows_the_normal() {
         let mut d = test_device(4, 4);
-        d.material = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        d.material = [
+            1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ];
         let mut raw = [0u8; 104];
         raw[0..4].copy_from_slice(&3u32.to_le_bytes()); // directional
         for (i, v) in [1.0f32, 1.0, 1.0, 1.0].iter().enumerate() {
@@ -2473,11 +3257,18 @@ mod tests {
         let facing = d.lit_color(&lights, [0.0; 3], [0.0, 0.0, 1.0], None);
         let away = d.lit_color(&lights, [0.0; 3], [0.0, 0.0, -1.0], None);
         let side = d.lit_color(&lights, [0.0; 3], [1.0, 0.0, 0.0], None);
-        assert!((facing[0] - 1.0).abs() < 1e-5, "a surface facing the light is fully lit");
+        assert!(
+            (facing[0] - 1.0).abs() < 1e-5,
+            "a surface facing the light is fully lit"
+        );
         assert_eq!(away[0], 0.0, "facing away: dark");
         assert_eq!(side[0], 0.0, "edge-on: dark");
         d.lights.get_mut(&0).unwrap().enabled = false;
-        assert_eq!(d.lit_color(&d.light_params(), [0.0; 3], [0.0, 0.0, 1.0], None)[0], 0.0, "disabled lights contribute nothing");
+        assert_eq!(
+            d.lit_color(&d.light_params(), [0.0; 3], [0.0, 0.0, 1.0], None)[0],
+            0.0,
+            "disabled lights contribute nothing"
+        );
     }
 
     // ---- guest-level: call everything through real vtables ----------------------------------
@@ -2503,15 +3294,28 @@ mod tests {
             let mut a = Asm::new();
             // params block at slot 0x10 (13 dwords): 64x48 windowed X8R8G8B8
             let params = crate::tests::util::data_va(0x10);
-            a.e(&[0xC7, 0x05]).e(&crate::tests::util::data_va(0x10).to_le_bytes()).e(&64u32.to_le_bytes()); // width
-            a.e(&[0xC7, 0x05]).e(&crate::tests::util::data_va(0x11).to_le_bytes()).e(&48u32.to_le_bytes()); // height
-            a.e(&[0xC7, 0x05]).e(&crate::tests::util::data_va(0x12).to_le_bytes()).e(&FMT_X8R8G8B8.to_le_bytes());
-            a.e(&[0xC7, 0x05]).e(&crate::tests::util::data_va(0x17).to_le_bytes()).e(&1u32.to_le_bytes()); // Windowed
+            a.e(&[0xC7, 0x05])
+                .e(&crate::tests::util::data_va(0x10).to_le_bytes())
+                .e(&64u32.to_le_bytes()); // width
+            a.e(&[0xC7, 0x05])
+                .e(&crate::tests::util::data_va(0x11).to_le_bytes())
+                .e(&48u32.to_le_bytes()); // height
+            a.e(&[0xC7, 0x05])
+                .e(&crate::tests::util::data_va(0x12).to_le_bytes())
+                .e(&FMT_X8R8G8B8.to_le_bytes());
+            a.e(&[0xC7, 0x05])
+                .e(&crate::tests::util::data_va(0x17).to_le_bytes())
+                .e(&1u32.to_le_bytes()); // Windowed
             // pd3d = Direct3DCreate8(220)
             a.e(&[0x68]).e(&220u32.to_le_bytes()).call(l.iat_va(0, 0));
             a.store(0); // data[0] = IDirect3D8*
             // d3d->CreateDevice(0, HAL=1, hwnd=0, flags=0x20, &params, &data[1])
-            com_call(&mut a, 0, 15, &[0, 1, 0, 0x20, params, crate::tests::util::data_va(1)]);
+            com_call(
+                &mut a,
+                0,
+                15,
+                &[0, 1, 0, 0x20, params, crate::tests::util::data_va(1)],
+            );
             a.store(2); // data[2] = HRESULT of CreateDevice
             // device->Clear(0, NULL, TARGET, 0xFF0000FF, 1.0f, 0)
             com_call(&mut a, 1, 36, &[0, 0, 1, 0xFF00_00FF, 1.0f32.to_bits(), 0]);
@@ -2521,7 +3325,12 @@ mod tests {
             com_call(&mut a, 1, 50, &[22, 1]);
             com_call(&mut a, 1, 50, &[7, 0]);
             // DrawPrimitiveUP(TRIANGLELIST, 1, &verts, 20)
-            com_call(&mut a, 1, 72, &[4, 1, crate::tests::util::data_va(0x40), 20]);
+            com_call(
+                &mut a,
+                1,
+                72,
+                &[4, 1, crate::tests::util::data_va(0x40), 20],
+            );
             // device->Present(0,0,0,0)
             com_call(&mut a, 1, 15, &[0, 0, 0, 0]);
             a.e(&[0x50]).call(l.iat_va(1, 0)); // ExitProcess(Present's HRESULT)
@@ -2533,13 +3342,27 @@ mod tests {
     fn a_guest_program_can_create_a_device_clear_draw_and_present_through_vtables() {
         let mut emu = Emu::new();
         // The game's window: 64x48 client area.
-        let hwnd = emu.wm.add_window("GameWin", "game", crate::gui::wm::WS_VISIBLE, 0, (0, 0, 64, 48), 0, 0);
+        let hwnd = emu.wm.add_window(
+            "GameWin",
+            "game",
+            crate::gui::wm::WS_VISIBLE,
+            0,
+            (0, 0, 64, 48),
+            0,
+            0,
+        );
         emu.wm.window_mut(hwnd).unwrap().visible = true;
         loader::load(&mut emu, &render_program()).unwrap();
         // One triangle in screen space, red, covering the upper-left half: (x, y, z, rhw, diffuse)
-        let verts: [(f32, f32, f32, f32, u32); 3] = [(0.0, 0.0, 0.5, 1.0, 0xFFFF0000), (64.0, 0.0, 0.5, 1.0, 0xFFFF0000), (0.0, 48.0, 0.5, 1.0, 0xFFFF0000)];
+        let verts: [(f32, f32, f32, f32, u32); 3] = [
+            (0.0, 0.0, 0.5, 1.0, 0xFFFF0000),
+            (64.0, 0.0, 0.5, 1.0, 0xFFFF0000),
+            (0.0, 48.0, 0.5, 1.0, 0xFFFF0000),
+        ];
         // device params need hDeviceWindow: slot 0x16
-        emu.mem.write(crate::tests::util::data_va(0x16), 4, hwnd).unwrap();
+        emu.mem
+            .write(crate::tests::util::data_va(0x16), 4, hwnd)
+            .unwrap();
         for (i, v) in verts.iter().enumerate() {
             let base = crate::tests::util::data_va(0x40) + 20 * i as u32;
             for (k, f) in [v.0, v.1, v.2, v.3].iter().enumerate() {
@@ -2549,17 +3372,32 @@ mod tests {
         }
         let stop = emu.run(2_000_000);
         assert_eq!(stop, crate::cpu::Stop::Exit(0), "every call returned S_OK");
-        assert_eq!(emu.mem.read(crate::tests::util::data_va(2), 4).unwrap(), 0, "CreateDevice succeeded");
+        assert_eq!(
+            emu.mem.read(crate::tests::util::data_va(2), 4).unwrap(),
+            0,
+            "CreateDevice succeeded"
+        );
         assert_eq!(emu.win.d3d.frames(), 1);
         if let Some(g) = emu.win.d3d.dev.as_ref().and_then(|d| d.gpu.as_ref()) {
-            assert_eq!(g.draws, 1, "the triangle went through Metal, not the software rasterizer");
+            assert_eq!(
+                g.draws, 1,
+                "the triangle went through Metal, not the software rasterizer"
+            );
         }
 
         finish_present(&mut emu, true);
         let (w, h, px) = emu.win.d3d.frame().unwrap();
         assert_eq!((w, h), (64, 48));
-        assert_eq!(px[(5 * 64 + 5) as usize], 0xFFFF0000, "inside the triangle: red");
-        assert_eq!(px[(40 * 64 + 60) as usize], 0xFF0000FF, "outside: the blue clear colour");
+        assert_eq!(
+            px[(5 * 64 + 5) as usize],
+            0xFFFF0000,
+            "inside the triangle: red"
+        );
+        assert_eq!(
+            px[(40 * 64 + 60) as usize],
+            0xFF0000FF,
+            "outside: the blue clear colour"
+        );
 
         // ...and Present put it on the game's window.
         let surface = &emu.wm.window(hwnd).unwrap().surface;

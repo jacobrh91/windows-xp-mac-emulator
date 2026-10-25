@@ -3,8 +3,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::cpu::{Emu, Res, Stop, EAX};
-use crate::win32::{Handler, CDECL};
+use crate::cpu::{EAX, Emu, Res, Stop};
+use crate::win32::{CDECL, Handler};
 
 pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
     if dll != "msvcrt" {
@@ -31,7 +31,12 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok((e.win.rand_seed >> 16) & 0x7fff)
         }),
         "time" => (CDECL | 1, |e, a| {
-            let t = e.win.fixed_time.unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as u32);
+            let t = e.win.fixed_time.unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as u32
+            });
             if a[0] != 0 {
                 e.mem.write(a[0], 4, t)?;
             }
@@ -44,7 +49,17 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
 
 /// Exported *variables* are imported by address, not called, so they need real memory.
 pub fn is_data_symbol(name: &str) -> bool {
-    matches!(name, "_adjust_fdiv" | "_acmdln" | "_wcmdln" | "_commode" | "_fmode" | "__argc" | "__argv" | "_environ")
+    matches!(
+        name,
+        "_adjust_fdiv"
+            | "_acmdln"
+            | "_wcmdln"
+            | "_commode"
+            | "_fmode"
+            | "__argc"
+            | "__argv"
+            | "_environ"
+    )
 }
 
 pub fn data_symbol(e: &mut Emu, dll: &str, name: &str) -> Res<Option<u32>> {
@@ -133,7 +148,15 @@ mod tests {
 
     #[test]
     fn all_msvcrt_entries_are_cdecl() {
-        for n in ["rand", "srand", "time", "exit", "_initterm", "__getmainargs", "_controlfp"] {
+        for n in [
+            "rand",
+            "srand",
+            "time",
+            "exit",
+            "_initterm",
+            "__getmainargs",
+            "_controlfp",
+        ] {
             assert!(lookup("msvcrt", n).unwrap().0 & CDECL != 0, "{n}");
         }
         assert!(lookup("kernel32", "rand").is_none());
@@ -142,10 +165,21 @@ mod tests {
     #[test]
     fn data_symbols_are_stable_memory() {
         let mut e = Emu::new();
-        let a = data_symbol(&mut e, "msvcrt.dll", "_acmdln").unwrap().unwrap();
-        assert_eq!(a, data_symbol(&mut e, "MSVCRT.DLL", "_acmdln").unwrap().unwrap());
+        let a = data_symbol(&mut e, "msvcrt.dll", "_acmdln")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            a,
+            data_symbol(&mut e, "MSVCRT.DLL", "_acmdln")
+                .unwrap()
+                .unwrap()
+        );
         let s = e.mem.read(a, 4).unwrap();
-        assert_eq!(e.mem.read_cstr(s).unwrap(), "game.exe", "_acmdln holds a char*");
+        assert_eq!(
+            e.mem.read_cstr(s).unwrap(),
+            "game.exe",
+            "_acmdln holds a char*"
+        );
         assert_eq!(data_symbol(&mut e, "msvcrt", "memcpy").unwrap(), None);
         assert_eq!(data_symbol(&mut e, "kernel32", "_acmdln").unwrap(), None);
     }
@@ -154,10 +188,17 @@ mod tests {
     fn getmainargs_fills_argc_argv() {
         let mut e = Emu::new();
         e.mem.map(0x20000, 0x1000);
-        call(&mut e, "__getmainargs", &[0x20000, 0x20004, 0x20008, 0, 0x2000C]);
+        call(
+            &mut e,
+            "__getmainargs",
+            &[0x20000, 0x20004, 0x20008, 0, 0x2000C],
+        );
         assert_eq!(e.mem.read(0x20000, 4).unwrap(), 1);
         let argv = e.mem.read(0x20004, 4).unwrap();
-        assert_eq!(e.mem.read_cstr(e.mem.read(argv, 4).unwrap()).unwrap(), "game.exe");
+        assert_eq!(
+            e.mem.read_cstr(e.mem.read(argv, 4).unwrap()).unwrap(),
+            "game.exe"
+        );
     }
 
     #[test]
@@ -183,6 +224,10 @@ mod tests {
         let esp_before = e.regs[crate::cpu::ESP];
         assert_eq!(e.run(100), Stop::Halt);
         assert_eq!(e.win.rand_seed, 5);
-        assert_eq!(e.regs[crate::cpu::ESP], esp_before, "caller's `add esp,4` balances the push; the callee popped nothing");
+        assert_eq!(
+            e.regs[crate::cpu::ESP],
+            esp_before,
+            "caller's `add esp,4` balances the push; the callee popped nothing"
+        );
     }
 }

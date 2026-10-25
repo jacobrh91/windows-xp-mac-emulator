@@ -17,7 +17,13 @@ pub struct Spec<'a> {
 
 impl Default for Spec<'_> {
     fn default() -> Self {
-        Spec { imports: &[], exports: &[], relocs: &[], dll: false, base: IMAGE_BASE }
+        Spec {
+            imports: &[],
+            exports: &[],
+            relocs: &[],
+            dll: false,
+            base: IMAGE_BASE,
+        }
     }
 }
 
@@ -55,7 +61,13 @@ fn pad_to(v: &mut Vec<u8>, align: usize) {
 }
 
 pub fn build_pe(imports: &[(&str, &[&str])], code: impl Fn(&Layout) -> Vec<u8>) -> Vec<u8> {
-    build(&Spec { imports, ..Spec::default() }, code)
+    build(
+        &Spec {
+            imports,
+            ..Spec::default()
+        },
+        code,
+    )
 }
 
 /// `code` is placed at RVA 0x1000 and is also the entry point. It may contain data
@@ -209,18 +221,27 @@ pub fn build(spec: &Spec, code: impl Fn(&Layout) -> Vec<u8>) -> Vec<u8> {
     set32(&mut f, 136, reloc_rva);
     set32(&mut f, 140, reloc_size);
 
-    let section = |f: &mut Vec<u8>, name: &[u8], vsize: u32, rva: u32, raw: u32, ptr: u32, flags: u32| {
-        let mut n = [0u8; 8];
-        n[..name.len()].copy_from_slice(name);
-        f.extend_from_slice(&n);
-        put32(f, vsize);
-        put32(f, rva);
-        put32(f, raw);
-        put32(f, ptr);
-        f.extend_from_slice(&[0; 12]);
-        put32(f, flags);
-    };
-    section(&mut f, b".text", text_vsize, TEXT_RVA, text.len() as u32, 0x200, 0xE000_0020);
+    let section =
+        |f: &mut Vec<u8>, name: &[u8], vsize: u32, rva: u32, raw: u32, ptr: u32, flags: u32| {
+            let mut n = [0u8; 8];
+            n[..name.len()].copy_from_slice(name);
+            f.extend_from_slice(&n);
+            put32(f, vsize);
+            put32(f, rva);
+            put32(f, raw);
+            put32(f, ptr);
+            f.extend_from_slice(&[0; 12]);
+            put32(f, flags);
+        };
+    section(
+        &mut f,
+        b".text",
+        text_vsize,
+        TEXT_RVA,
+        text.len() as u32,
+        0x200,
+        0xE000_0020,
+    );
     section(
         &mut f,
         b".idata",
@@ -320,7 +341,10 @@ impl Asm {
             let rel = self.labels[n] as i64 - (pos as i64 + 4);
             self.b[pos..pos + 4].copy_from_slice(&(rel as i32).to_le_bytes());
         }
-        assert!(self.b.len() <= DATA_OFFSET as usize, "code overlaps the data area");
+        assert!(
+            self.b.len() <= DATA_OFFSET as usize,
+            "code overlaps the data area"
+        );
         self.b.resize(DATA_OFFSET as usize + 0x100, 0);
         self.b
     }

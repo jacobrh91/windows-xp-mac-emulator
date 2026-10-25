@@ -10,7 +10,11 @@ pub struct Framebuffer {
 
 impl Framebuffer {
     pub fn new(width: u32, height: u32) -> Self {
-        Framebuffer { width, height, pixels: vec![0; (width * height) as usize] }
+        Framebuffer {
+            width,
+            height,
+            pixels: vec![0; (width * height) as usize],
+        }
     }
 
     pub fn set_pixel(&mut self, x: i32, y: i32, color: u32) {
@@ -40,7 +44,11 @@ impl Framebuffer {
     pub fn blit(&mut self, src: &Framebuffer, x: i32, y: i32) {
         for sy in 0..src.height {
             for sx in 0..src.width {
-                self.set_pixel(x + sx as i32, y + sy as i32, src.pixels[(sy * src.width + sx) as usize]);
+                self.set_pixel(
+                    x + sx as i32,
+                    y + sy as i32,
+                    src.pixels[(sy * src.width + sx) as usize],
+                );
             }
         }
     }
@@ -96,7 +104,8 @@ impl Framebuffer {
             for xx in 0..w {
                 let (sx, sy) = (x + xx as i32, y + yy as i32);
                 if sx >= 0 && sy >= 0 {
-                    out.pixels[(yy * w + xx) as usize] = self.get_pixel(sx as u32, sy as u32).unwrap_or(0);
+                    out.pixels[(yy * w + xx) as usize] =
+                        self.get_pixel(sx as u32, sy as u32).unwrap_or(0);
                 }
             }
         }
@@ -122,7 +131,10 @@ impl Framebuffer {
     /// Decode a packed DIB (BITMAPINFOHEADER + palette + pixels), as stored in
     /// RT_BITMAP resources. Supports uncompressed 1/4/8/24/32-bit images.
     pub fn from_dib(dib: &[u8]) -> Option<Framebuffer> {
-        let rd32 = |o: usize| dib.get(o..o + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        let rd32 = |o: usize| {
+            dib.get(o..o + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
         let rd16 = |o: usize| dib.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
         let header = rd32(0)? as usize;
         // OS/2-style BITMAPCOREHEADER: 16-bit dimensions and 3-byte palette entries.
@@ -130,13 +142,31 @@ impl Framebuffer {
         let (width, height, bpp, compression, clr_used) = if core {
             (rd16(4)? as i32, rd16(6)? as i32, rd16(10)? as usize, 0, 0)
         } else {
-            (rd32(4)? as i32, rd32(8)? as i32, rd16(14)? as usize, rd32(16)?, rd32(32)? as usize)
+            (
+                rd32(4)? as i32,
+                rd32(8)? as i32,
+                rd16(14)? as usize,
+                rd32(16)?,
+                rd32(32)? as usize,
+            )
         };
-        if (!core && header < 40) || width <= 0 || height == 0 || compression != 0 || width > 8192 || height.abs() > 8192 {
+        if (!core && header < 40)
+            || width <= 0
+            || height == 0
+            || compression != 0
+            || width > 8192
+            || height.abs() > 8192
+        {
             return None;
         }
         let palette_len = match bpp {
-            1 | 4 | 8 => if clr_used != 0 { clr_used } else { 1 << bpp },
+            1 | 4 | 8 => {
+                if clr_used != 0 {
+                    clr_used
+                } else {
+                    1 << bpp
+                }
+            }
             24 | 32 => 0,
             _ => return None,
         };
@@ -144,7 +174,9 @@ impl Framebuffer {
         let palette: Vec<u32> = (0..palette_len)
             .map(|i| {
                 let o = header + entry * i;
-                dib.get(o..o + 3).map_or(0, |c| ((c[2] as u32) << 16) | ((c[1] as u32) << 8) | c[0] as u32)
+                dib.get(o..o + 3).map_or(0, |c| {
+                    ((c[2] as u32) << 16) | ((c[1] as u32) << 8) | c[0] as u32
+                })
             })
             .collect();
         let bits = header + entry * palette_len;
@@ -152,13 +184,23 @@ impl Framebuffer {
         let (w, h) = (width as u32, height.unsigned_abs());
         let mut fb = Framebuffer::new(w, h);
         for row in 0..h as usize {
-            let src_row = if height > 0 { h as usize - 1 - row } else { row }; // bottom-up by default
+            let src_row = if height > 0 {
+                h as usize - 1 - row
+            } else {
+                row
+            }; // bottom-up by default
             let base = bits + src_row * stride;
             let line = dib.get(base..base + stride.min(dib.len().saturating_sub(base)))?;
             for x in 0..w as usize {
                 let px = match bpp {
-                    1 => palette.get(((*line.get(x / 8)? >> (7 - x % 8)) & 1) as usize).copied()?,
-                    4 => palette.get(((*line.get(x / 2)? >> (if x % 2 == 0 { 4 } else { 0 })) & 15) as usize).copied()?,
+                    1 => palette
+                        .get(((*line.get(x / 8)? >> (7 - x % 8)) & 1) as usize)
+                        .copied()?,
+                    4 => palette
+                        .get(
+                            ((*line.get(x / 2)? >> (if x % 2 == 0 { 4 } else { 0 })) & 15) as usize,
+                        )
+                        .copied()?,
                     8 => palette.get(*line.get(x)? as usize).copied()?,
                     24 => {
                         let p = line.get(3 * x..3 * x + 3)?;
@@ -176,7 +218,10 @@ impl Framebuffer {
     }
 
     fn blend_pixel(&mut self, x: i32, y: i32, color: u32, alpha: u8) {
-        if let Some(dst) = self.get_pixel(x.max(0) as u32, y.max(0) as u32).filter(|_| x >= 0 && y >= 0) {
+        if let Some(dst) = self
+            .get_pixel(x.max(0) as u32, y.max(0) as u32)
+            .filter(|_| x >= 0 && y >= 0)
+        {
             let a = alpha as u32;
             let mix = |s: u32, d: u32| (s * a + d * (255 - a)) / 255;
             let r = mix((color >> 16) & 0xff, (dst >> 16) & 0xff);
@@ -222,17 +267,26 @@ impl Font {
     pub fn measure(&self, text: &str, px: u32) -> (u32, u32) {
         match &self.inner {
             Some(f) => {
-                let w: f32 = text.chars().map(|c| f.metrics(c, px as f32).advance_width).sum();
+                let w: f32 = text
+                    .chars()
+                    .map(|c| f.metrics(c, px as f32).advance_width)
+                    .sum();
                 (w.ceil() as u32, px + px / 4)
             }
-            None => (text.chars().count() as u32 * (px * 6 / 10).max(1), px + px / 4),
+            None => (
+                text.chars().count() as u32 * (px * 6 / 10).max(1),
+                px + px / 4,
+            ),
         }
     }
 
     /// Draw `text` with its top-left at (x, y).
     pub fn draw(&self, fb: &mut Framebuffer, x: i32, y: i32, text: &str, px: u32, color: u32) {
         let Some(f) = &self.inner else { return };
-        let ascent = f.horizontal_line_metrics(px as f32).map(|m| m.ascent).unwrap_or(px as f32 * 0.8);
+        let ascent = f
+            .horizontal_line_metrics(px as f32)
+            .map(|m| m.ascent)
+            .unwrap_or(px as f32 * 0.8);
         let baseline = y + ascent.round() as i32;
         let mut pen = x as f32;
         for c in text.chars() {
@@ -298,7 +352,11 @@ mod tests {
         d.extend_from_slice(&[255, 0, 0, 0]); // top row: blue
         let fb = Framebuffer::from_dib(&d).unwrap();
         assert_eq!((fb.width, fb.height), (1, 2));
-        assert_eq!(fb.get_pixel(0, 0), Some(0x0000FF), "first stored row is the bottom row");
+        assert_eq!(
+            fb.get_pixel(0, 0),
+            Some(0x0000FF),
+            "first stored row is the bottom row"
+        );
         assert_eq!(fb.get_pixel(0, 1), Some(0xFF0000));
     }
 
@@ -315,10 +373,13 @@ mod tests {
     #[test]
     fn dib_4bit_and_1bit_unpack_pixels() {
         let mut d = dib_header(2, 1, 4, 2);
-        d.extend_from_slice(&[0, 0, 0, 0, 255, 255, 255, 0, ]);
+        d.extend_from_slice(&[0, 0, 0, 0, 255, 255, 255, 0]);
         d.extend_from_slice(&[0x01, 0, 0, 0]);
         let fb = Framebuffer::from_dib(&d).unwrap();
-        assert_eq!((fb.get_pixel(0, 0), fb.get_pixel(1, 0)), (Some(0), Some(0xFFFFFF)));
+        assert_eq!(
+            (fb.get_pixel(0, 0), fb.get_pixel(1, 0)),
+            (Some(0), Some(0xFFFFFF))
+        );
 
         let mut d = dib_header(8, 1, 1, 2);
         d.extend_from_slice(&[0, 0, 0, 0, 255, 255, 255, 0]);
@@ -335,7 +396,10 @@ mod tests {
         d.extend_from_slice(&[0, 0, 0, 255, 0, 0]); // black, then BGR=(255,0,0) = blue
         d.extend_from_slice(&[0b0100_0000, 0, 0, 0]);
         let fb = Framebuffer::from_dib(&d).unwrap();
-        assert_eq!((fb.get_pixel(0, 0), fb.get_pixel(1, 0)), (Some(0), Some(0x0000FF)));
+        assert_eq!(
+            (fb.get_pixel(0, 0), fb.get_pixel(1, 0)),
+            (Some(0), Some(0x0000FF))
+        );
     }
 
     #[test]
@@ -355,7 +419,14 @@ mod tests {
         let mut fb = Framebuffer::new(2, 2);
         fb.set_pixel(1, 0, 7);
         let big = fb.scaled(4, 4);
-        assert_eq!((big.get_pixel(2, 0), big.get_pixel(3, 1), big.get_pixel(0, 0)), (Some(7), Some(7), Some(0)));
+        assert_eq!(
+            (
+                big.get_pixel(2, 0),
+                big.get_pixel(3, 1),
+                big.get_pixel(0, 0)
+            ),
+            (Some(7), Some(7), Some(0))
+        );
         let small = big.scaled(1, 1);
         assert_eq!(small.get_pixel(0, 0), Some(0));
         assert_eq!(Framebuffer::new(0, 0).scaled(3, 3).pixels, vec![0; 9]);
@@ -371,7 +442,10 @@ mod tests {
         assert_eq!(fb.get_pixel(3, 5), Some(0));
         let mut h = Framebuffer::new(5, 1);
         h.line(4, 0, 0, 0, 3);
-        assert!(h.pixels.iter().all(|&p| p == 3), "lines draw right-to-left too");
+        assert!(
+            h.pixels.iter().all(|&p| p == 3),
+            "lines draw right-to-left too"
+        );
     }
 
     #[test]

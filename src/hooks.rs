@@ -33,21 +33,83 @@ struct Hook {
 }
 
 const HOOKS: &[Hook] = &[
-    Hook { module: "filesystem", rva: 0xbc1c, expect: &[0xFF, 0x74, 0x24, 0x0C, 0xFF, 0x74, 0x24, 0x0C, 0x6A, 0x0F, 0xFF, 0x74, 0x24, 0x10], name: "inflateInit_", points_to: None },
-    Hook { module: "filesystem", rva: 0xbc32, expect: &[0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10, 0x33, 0xDB, 0x3B, 0xF3, 0x57], name: "inflate", points_to: None },
-    Hook { module: "filesystem", rva: 0xbb01, expect: &[0x56, 0x8B, 0x74, 0x24, 0x08, 0x85, 0xF6, 0x74, 0x2C, 0x8B, 0x46, 0x1C], name: "inflateEnd", points_to: None },
+    Hook {
+        module: "filesystem",
+        rva: 0xbc1c,
+        expect: &[
+            0xFF, 0x74, 0x24, 0x0C, 0xFF, 0x74, 0x24, 0x0C, 0x6A, 0x0F, 0xFF, 0x74, 0x24, 0x10,
+        ],
+        name: "inflateInit_",
+        points_to: None,
+    },
+    Hook {
+        module: "filesystem",
+        rva: 0xbc32,
+        expect: &[
+            0x53, 0x55, 0x56, 0x8B, 0x74, 0x24, 0x10, 0x33, 0xDB, 0x3B, 0xF3, 0x57,
+        ],
+        name: "inflate",
+        points_to: None,
+    },
+    Hook {
+        module: "filesystem",
+        rva: 0xbb01,
+        expect: &[
+            0x56, 0x8B, 0x74, 0x24, 0x08, 0x85, 0xF6, 0x74, 0x2C, 0x8B, 0x46, 0x1C,
+        ],
+        name: "inflateEnd",
+        points_to: None,
+    },
     // Miles' MP3 codec plugin: its ASI stream functions (see `media::miles_mp3`).
-    Hook { module: "mssmp3.asi", rva: 0x1c90, expect: &[0x53, 0x56, 0x57, 0x68, 0x30, 0xAA, 0x00, 0x00], name: "ASI_stream_open", points_to: None },
-    Hook { module: "mssmp3.asi", rva: 0x1dd0, expect: &[0x51, 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x18, 0x56], name: "ASI_stream_process", points_to: None },
-    Hook { module: "mssmp3.asi", rva: 0x1ec0, expect: &[0x8B, 0x54, 0x24, 0x04, 0x8B, 0x44, 0x24, 0x08], name: "ASI_stream_seek", points_to: None },
-    Hook { module: "mssmp3.asi", rva: 0x1da0, expect: &[0x56, 0x8B, 0x74, 0x24, 0x08, 0x8B, 0x86, 0x70], name: "ASI_stream_close", points_to: None },
-    Hook { module: "mssmp3.asi", rva: 0x1f30, expect: &[0x83, 0xEC, 0x48, 0xB8, 0x22, 0x56, 0x00, 0x00], name: "ASI_stream_attribute", points_to: None },
-    Hook { module: "mssmp3.asi", rva: 0x21c0, expect: &[0x8B, 0x4C, 0x24, 0x08, 0x83, 0xC8, 0xFF, 0x83], name: "ASI_stream_set_preference", points_to: None },
+    Hook {
+        module: "mssmp3.asi",
+        rva: 0x1c90,
+        expect: &[0x53, 0x56, 0x57, 0x68, 0x30, 0xAA, 0x00, 0x00],
+        name: "ASI_stream_open",
+        points_to: None,
+    },
+    Hook {
+        module: "mssmp3.asi",
+        rva: 0x1dd0,
+        expect: &[0x51, 0x53, 0x55, 0x8B, 0x6C, 0x24, 0x18, 0x56],
+        name: "ASI_stream_process",
+        points_to: None,
+    },
+    Hook {
+        module: "mssmp3.asi",
+        rva: 0x1ec0,
+        expect: &[0x8B, 0x54, 0x24, 0x04, 0x8B, 0x44, 0x24, 0x08],
+        name: "ASI_stream_seek",
+        points_to: None,
+    },
+    Hook {
+        module: "mssmp3.asi",
+        rva: 0x1da0,
+        expect: &[0x56, 0x8B, 0x74, 0x24, 0x08, 0x8B, 0x86, 0x70],
+        name: "ASI_stream_close",
+        points_to: None,
+    },
+    Hook {
+        module: "mssmp3.asi",
+        rva: 0x1f30,
+        expect: &[0x83, 0xEC, 0x48, 0xB8, 0x22, 0x56, 0x00, 0x00],
+        name: "ASI_stream_attribute",
+        points_to: None,
+    },
+    Hook {
+        module: "mssmp3.asi",
+        rva: 0x21c0,
+        expect: &[0x8B, 0x4C, 0x24, 0x08, 0x83, 0xC8, 0xFF, 0x83],
+        name: "ASI_stream_set_preference",
+        points_to: None,
+    },
     // MathBox (SSE build): the skinned-vertex transform loop.
     Hook {
         module: "mathbox",
         rva: 0x1c59,
-        expect: &[0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0, 0x83, 0xEC, 0x1C, 0x56, 0x8B, 0x0D],
+        expect: &[
+            0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF0, 0x83, 0xEC, 0x1C, 0x56, 0x8B, 0x0D,
+        ],
         name: "MathBox_skin_vertices",
         points_to: Some((0x1c65, MB_SRC)),
     },
@@ -65,19 +127,28 @@ pub struct HookState {
 pub fn apply(emu: &mut Emu, module: &str, base: u32) -> usize {
     // XP_NO_HOOKS=1 turns every hook off; XP_NO_HOOKS=<module>[,<module>] just those modules'.
     let off = std::env::var("XP_NO_HOOKS").ok();
-    if off.as_deref().is_some_and(|v| v.is_empty() || v == "1" || v.split(',').any(|m| m.eq_ignore_ascii_case(module))) {
+    if off.as_deref().is_some_and(|v| {
+        v.is_empty() || v == "1" || v.split(',').any(|m| m.eq_ignore_ascii_case(module))
+    }) {
         return 0;
     }
     let mut n = 0;
     for h in HOOKS.iter().filter(|h| h.module == module) {
         let at = base + h.rva;
-        if emu.mem.read_bytes(at, h.expect.len() as u32).ok().as_deref() != Some(h.expect) {
+        if emu
+            .mem
+            .read_bytes(at, h.expect.len() as u32)
+            .ok()
+            .as_deref()
+            != Some(h.expect)
+        {
             continue;
         }
         if let Some((at_rva, target)) = h.points_to
-            && emu.mem.read(base + at_rva, 4).ok() != Some(base + target) {
-                continue;
-            }
+            && emu.mem.read(base + at_rva, 4).ok() != Some(base + target)
+        {
+            continue;
+        }
         if module == "mathbox" {
             emu.win.hooks.mathbox_base = base;
         }
@@ -91,9 +162,19 @@ pub fn apply(emu: &mut Emu, module: &str, base: u32) -> usize {
     // The C runtime's string and memory functions, found by their export names.
     if module == "msvcr70" {
         for &(export, stub) in CRT_EXPORTS {
-            let Some(at) = emu.win.module_by_handle(base).and_then(|m| m.exports.as_ref()).and_then(|e| e.by_name.get(export)).copied() else { continue };
+            let Some(at) = emu
+                .win
+                .module_by_handle(base)
+                .and_then(|m| m.exports.as_ref())
+                .and_then(|e| e.by_name.get(export))
+                .copied()
+            else {
+                continue;
+            };
             let stub = emu.win.resolve("__hook", stub);
-            if emu.mem.write(at, 1, 0xE9).is_ok() && emu.mem.write(at + 1, 4, stub.wrapping_sub(at + 5)).is_ok() {
+            if emu.mem.write(at, 1, 0xE9).is_ok()
+                && emu.mem.write(at + 1, 4, stub.wrapping_sub(at + 5)).is_ok()
+            {
                 n += 1;
             }
         }
@@ -179,7 +260,10 @@ fn crt_lookup(name: &str) -> Option<(usize, Handler)> {
         "crt_strcmp" => (2, |e, a| Ok(sign(cstr(e, a[0])?.cmp(&cstr(e, a[1])?)))),
         "crt_strncmp" => (3, |e, a| {
             for i in 0..a[2] {
-                let (x, y) = (e.mem.read_u8(a[0].wrapping_add(i))?, e.mem.read_u8(a[1].wrapping_add(i))?);
+                let (x, y) = (
+                    e.mem.read_u8(a[0].wrapping_add(i))?,
+                    e.mem.read_u8(a[1].wrapping_add(i))?,
+                );
                 if x != y {
                     return Ok((x as i32 - y as i32) as u32);
                 }
@@ -198,18 +282,32 @@ fn crt_lookup(name: &str) -> Option<(usize, Handler)> {
         }),
         "crt_strchr" => (2, |e, a| {
             let (s, c) = (cstr(e, a[0])?, a[1] as u8);
-            Ok(if c == 0 { a[0] + s.len() as u32 } else { s.iter().position(|&b| b == c).map_or(0, |i| a[0] + i as u32) })
+            Ok(if c == 0 {
+                a[0] + s.len() as u32
+            } else {
+                s.iter()
+                    .position(|&b| b == c)
+                    .map_or(0, |i| a[0] + i as u32)
+            })
         }),
         "crt_strrchr" => (2, |e, a| {
             let (s, c) = (cstr(e, a[0])?, a[1] as u8);
-            Ok(if c == 0 { a[0] + s.len() as u32 } else { s.iter().rposition(|&b| b == c).map_or(0, |i| a[0] + i as u32) })
+            Ok(if c == 0 {
+                a[0] + s.len() as u32
+            } else {
+                s.iter()
+                    .rposition(|&b| b == c)
+                    .map_or(0, |i| a[0] + i as u32)
+            })
         }),
         "crt_strstr" => (2, |e, a| {
             let (h, n) = (cstr(e, a[0])?, cstr(e, a[1])?);
             if n.is_empty() {
                 return Ok(a[0]);
             }
-            Ok(h.windows(n.len()).position(|w| w == n.as_slice()).map_or(0, |i| a[0] + i as u32))
+            Ok(h.windows(n.len())
+                .position(|w| w == n.as_slice())
+                .map_or(0, |i| a[0] + i as u32))
         }),
         "crt_strcspn" => (2, |e, a| {
             let (s, set) = (cstr(e, a[0])?, cstr(e, a[1])?);
@@ -226,7 +324,9 @@ fn crt_lookup(name: &str) -> Option<(usize, Handler)> {
         "crt_wcscmp" => (2, |e, a| Ok(sign(wstr(e, a[0])?.cmp(&wstr(e, a[1])?)))),
         "crt_wcspbrk" => (2, |e, a| {
             let (s, set) = (wstr(e, a[0])?, wstr(e, a[1])?);
-            Ok(s.iter().position(|c| set.contains(c)).map_or(0, |i| a[0] + 2 * i as u32))
+            Ok(s.iter()
+                .position(|c| set.contains(c))
+                .map_or(0, |i| a[0] + 2 * i as u32))
         }),
         "crt_memmove" => (3, |e, a| {
             let data = e.mem.read_bytes(a[1], a[2])?;
@@ -237,7 +337,13 @@ fn crt_lookup(name: &str) -> Option<(usize, Handler)> {
             e.mem.write_bytes(a[0], &vec![a[1] as u8; a[2] as usize])?;
             Ok(a[0])
         }),
-        "crt_memcmp" => (3, |e, a| Ok(sign(e.mem.read_bytes(a[0], a[2])?.cmp(&e.mem.read_bytes(a[1], a[2])?)))),
+        "crt_memcmp" => (3, |e, a| {
+            Ok(sign(
+                e.mem
+                    .read_bytes(a[0], a[2])?
+                    .cmp(&e.mem.read_bytes(a[1], a[2])?),
+            ))
+        }),
         _ => return None,
     };
     Some((h.0 | CDECL, h.1))
@@ -265,17 +371,26 @@ fn skin_vertices(e: &mut Emu, _: &Args) -> Res<u32> {
     let b = e.win.hooks.mathbox_base;
     let rd = |e: &Emu, a: u32| e.mem.read(a, 4);
     let rf = |e: &Emu, a: u32| -> Res<f32> { Ok(f32::from_bits(e.mem.read(a, 4)?)) };
-    let row = |e: &Emu, m: u32, r: u32| -> Res<[f32; 4]> { Ok([rf(e, m + 16 * r)?, rf(e, m + 16 * r + 4)?, rf(e, m + 16 * r + 8)?, rf(e, m + 16 * r + 12)?]) };
+    let row = |e: &Emu, m: u32, r: u32| -> Res<[f32; 4]> {
+        Ok([
+            rf(e, m + 16 * r)?,
+            rf(e, m + 16 * r + 4)?,
+            rf(e, m + 16 * r + 8)?,
+            rf(e, m + 16 * r + 12)?,
+        ])
+    };
     loop {
         let src = rd(e, b + MB_SRC)?;
         let m = b + MB_PALETTE + 64 * e.mem.read_u8(src + 12)? as u32;
         let (m0, m1, m2, m3) = (row(e, m, 0)?, row(e, m, 1)?, row(e, m, 2)?, row(e, m, 3)?);
         // x*M0 + (y*M1 + z*M2), plus M3 for positions
-        let xform = |x: f32, y: f32, z: f32| [0, 1, 2, 3].map(|i| x * m0[i] + (y * m1[i] + z * m2[i]));
+        let xform =
+            |x: f32, y: f32, z: f32| [0, 1, 2, 3].map(|i| x * m0[i] + (y * m1[i] + z * m2[i]));
         let p = xform(rf(e, src)?, rf(e, src + 4)?, rf(e, src + 8)?);
         let dst = rd(e, b + MB_DST)?;
         for i in 0..4 {
-            e.mem.write(dst + 4 * i as u32, 4, (m3[i] + p[i]).to_bits())?;
+            e.mem
+                .write(dst + 4 * i as u32, 4, (m3[i] + p[i]).to_bits())?;
         }
         // The normal's 16-byte store starts at dst + 12, over the position's fourth lane.
         let n = xform(rf(e, src + 32)?, rf(e, src + 36)?, rf(e, src + 40)?);
@@ -286,8 +401,10 @@ fn skin_vertices(e: &mut Emu, _: &Args) -> Res<u32> {
         let (c0, c1) = (rd(e, from)?, rd(e, from + 4)?);
         e.mem.write(to, 4, c0)?;
         e.mem.write(to + 4, 4, c1)?;
-        e.mem.write(b + MB_SRC, 4, src.wrapping_add(rd(e, b + MB_SRC_STRIDE)?))?;
-        e.mem.write(b + MB_DST, 4, dst.wrapping_add(rd(e, b + MB_DST_STRIDE)?))?;
+        e.mem
+            .write(b + MB_SRC, 4, src.wrapping_add(rd(e, b + MB_SRC_STRIDE)?))?;
+        e.mem
+            .write(b + MB_DST, 4, dst.wrapping_add(rd(e, b + MB_DST_STRIDE)?))?;
         let count = rd(e, b + MB_COUNT)?.wrapping_sub(1);
         e.mem.write(b + MB_COUNT, 4, count)?;
         if count == 0 {
@@ -353,10 +470,17 @@ fn inflate_init(e: &mut Emu, a: &Args) -> Res<u32> {
 fn inflate_call(e: &mut Emu, a: &Args) -> Res<u32> {
     let (strm, flush) = (a[0], a[1]);
     let r = |e: &Emu, off: u32| e.mem.read(strm + off, 4);
-    let (next_in, avail_in, next_out, avail_out) = (r(e, NEXT_IN)?, r(e, AVAIL_IN)?, r(e, NEXT_OUT)?, r(e, AVAIL_OUT)?);
+    let (next_in, avail_in, next_out, avail_out) = (
+        r(e, NEXT_IN)?,
+        r(e, AVAIL_IN)?,
+        r(e, NEXT_OUT)?,
+        r(e, AVAIL_OUT)?,
+    );
     let input = e.mem.read_bytes(next_in, avail_in)?;
     let mut out = vec![0u8; avail_out as usize];
-    let Some(z) = e.win.hooks.inflaters.get_mut(&strm) else { return Ok(Z_STREAM_ERROR) };
+    let Some(z) = e.win.hooks.inflaters.get_mut(&strm) else {
+        return Ok(Z_STREAM_ERROR);
+    };
     // The host's zlib, so consumption and return codes match the game's own copy exactly.
     let (in0, out0) = (z.total_in(), z.total_out());
     let mode = match flush {
@@ -374,15 +498,19 @@ fn inflate_call(e: &mut Emu, a: &Args) -> Res<u32> {
         Err(_) => Z_DATA_ERROR,
     };
     if e.win.trace {
-        eprintln!("[hooks] inflate {strm:#x}: in {avail_in} out {avail_out} -> used {used} made {made} {status:?}");
+        eprintln!(
+            "[hooks] inflate {strm:#x}: in {avail_in} out {avail_out} -> used {used} made {made} {status:?}"
+        );
     }
     e.mem.write_bytes(next_out, &out[..made as usize])?;
     e.mem.write(strm + NEXT_IN, 4, next_in + used)?;
     e.mem.write(strm + AVAIL_IN, 4, avail_in - used)?;
-    e.mem.write(strm + TOTAL_IN, 4, r(e, TOTAL_IN)?.wrapping_add(used))?;
+    e.mem
+        .write(strm + TOTAL_IN, 4, r(e, TOTAL_IN)?.wrapping_add(used))?;
     e.mem.write(strm + NEXT_OUT, 4, next_out + made)?;
     e.mem.write(strm + AVAIL_OUT, 4, avail_out - made)?;
-    e.mem.write(strm + TOTAL_OUT, 4, r(e, TOTAL_OUT)?.wrapping_add(made))?;
+    e.mem
+        .write(strm + TOTAL_OUT, 4, r(e, TOTAL_OUT)?.wrapping_add(made))?;
     Ok(status)
 }
 
@@ -414,7 +542,9 @@ mod tests {
 
     #[test]
     fn inflates_a_guest_stream_in_pieces() {
-        let text: Vec<u8> = (0..20_000u32).map(|i| b"impossible creatures "[(i % 21) as usize]).collect();
+        let text: Vec<u8> = (0..20_000u32)
+            .map(|i| b"impossible creatures "[(i % 21) as usize])
+            .collect();
         let packed = compress(&text);
         let mut e = Emu::new();
         e.mem.map(0x10000, 0x40000);
@@ -423,7 +553,9 @@ mod tests {
         assert_eq!(call(&mut e, inflate_init, &[strm, 0, 56]), Z_OK);
         assert_ne!(e.mem.read(strm + STATE, 4).unwrap(), 0);
         e.mem.write(strm + NEXT_IN, 4, src).unwrap();
-        e.mem.write(strm + AVAIL_IN, 4, packed.len() as u32).unwrap();
+        e.mem
+            .write(strm + AVAIL_IN, 4, packed.len() as u32)
+            .unwrap();
         // Output in 4 KiB pieces, as a streaming reader would ask for it.
         let mut status = Z_OK;
         let mut out_at = dst;
@@ -438,7 +570,11 @@ mod tests {
         assert_eq!(e.mem.read(strm + TOTAL_IN, 4).unwrap(), packed.len() as u32);
         assert_eq!(e.mem.read_bytes(dst, text.len() as u32).unwrap(), text);
         assert_eq!(call(&mut e, inflate_end, &[strm]), Z_OK);
-        assert_eq!(call(&mut e, inflate_end, &[strm]), Z_STREAM_ERROR, "already ended");
+        assert_eq!(
+            call(&mut e, inflate_end, &[strm]),
+            Z_STREAM_ERROR,
+            "already ended"
+        );
     }
 
     #[test]
@@ -451,11 +587,21 @@ mod tests {
         e.mem.write_bytes(src, &packed).unwrap();
         call(&mut e, inflate_init, &[strm, 0, 56]);
         e.mem.write(strm + NEXT_IN, 4, src).unwrap();
-        e.mem.write(strm + AVAIL_IN, 4, packed.len() as u32).unwrap();
+        e.mem
+            .write(strm + AVAIL_IN, 4, packed.len() as u32)
+            .unwrap();
         e.mem.write(strm + NEXT_OUT, 4, dst).unwrap();
         e.mem.write(strm + AVAIL_OUT, 4, 5000).unwrap();
-        assert_eq!(call(&mut e, inflate_call, &[strm, 2]), Z_STREAM_END, "as zlib does");
-        assert_eq!(e.mem.read(strm + AVAIL_IN, 4).unwrap(), 0, "the checksum was consumed");
+        assert_eq!(
+            call(&mut e, inflate_call, &[strm, 2]),
+            Z_STREAM_END,
+            "as zlib does"
+        );
+        assert_eq!(
+            e.mem.read(strm + AVAIL_IN, 4).unwrap(),
+            0,
+            "the checksum was consumed"
+        );
     }
 
     #[test]
@@ -463,7 +609,9 @@ mod tests {
         let mut e = Emu::new();
         e.mem.map(0x10000, 0x20000);
         let (strm, src, dst) = (0x10000, 0x11000, 0x12000);
-        e.mem.write_bytes(src, &[0x78, 0x9C, 0xFF, 0xFF, 0xFF, 0xFF]).unwrap();
+        e.mem
+            .write_bytes(src, &[0x78, 0x9C, 0xFF, 0xFF, 0xFF, 0xFF])
+            .unwrap();
         call(&mut e, inflate_init, &[strm, 0, 56]);
         e.mem.write(strm + NEXT_IN, 4, src).unwrap();
         e.mem.write(strm + AVAIL_IN, 4, 6).unwrap();
@@ -476,12 +624,16 @@ mod tests {
     #[test]
     fn skinning_matches_mathbox_exactly() {
         let path = std::path::Path::new("exe/ic/app/MathBox.dll");
-        let Ok(bytes) = std::fs::read(path) else { return };
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
         let mut e = Emu::new();
         e.win.dll_dirs.push(path.parent().unwrap().to_path_buf());
-        let base = crate::loader::load_dll(&mut e, &bytes, "MathBox.dll", r"C:\Game\MathBox.dll").unwrap();
+        let base =
+            crate::loader::load_dll(&mut e, &bytes, "MathBox.dll", r"C:\Game\MathBox.dll").unwrap();
         assert_eq!(e.win.hooks.mathbox_base, base, "the hook went in");
-        let (src, dst, n, src_stride, dst_stride) = (0x0050_0000u32, 0x0060_0000u32, 37u32, 48u32, 40u32);
+        let (src, dst, n, src_stride, dst_stride) =
+            (0x0050_0000u32, 0x0060_0000u32, 37u32, 48u32, 40u32);
         e.mem.map(src, 0x10000);
         e.mem.map(dst, 0x10000);
         // Pseudo-random but repeatable data.
@@ -491,7 +643,9 @@ mod tests {
             (seed >> 8) as f32 / (1u32 << 24) as f32 * 8.0 - 4.0
         };
         for i in 0..4 * 16 {
-            e.mem.write(base + MB_PALETTE + 4 * i, 4, next().to_bits()).unwrap();
+            e.mem
+                .write(base + MB_PALETTE + 4 * i, 4, next().to_bits())
+                .unwrap();
         }
         for v in 0..n {
             let p = src + v * src_stride;
@@ -501,7 +655,15 @@ mod tests {
             e.mem.write(p + 12, 1, v % 4).unwrap();
         }
         let setup = |e: &mut Emu| {
-            for (off, v) in [(MB_SRC, src), (MB_SRC_STRIDE, src_stride), (MB_SRC_COPY, 16), (MB_DST, dst), (MB_DST_STRIDE, dst_stride), (MB_DST_COPY, 28), (MB_COUNT, n)] {
+            for (off, v) in [
+                (MB_SRC, src),
+                (MB_SRC_STRIDE, src_stride),
+                (MB_SRC_COPY, 16),
+                (MB_DST, dst),
+                (MB_DST_STRIDE, dst_stride),
+                (MB_DST_COPY, 28),
+                (MB_COUNT, n),
+            ] {
                 e.mem.write(base + off, 4, v).unwrap();
             }
             e.mem.write_bytes(dst, &[0; 0x2000]).unwrap();
@@ -511,11 +673,28 @@ mod tests {
         let native = e.mem.read_bytes(dst, n * dst_stride).unwrap();
         let after = [MB_SRC, MB_DST, MB_COUNT].map(|o| e.mem.read(base + o, 4).unwrap());
         // Put the original code back and run it on the same input.
-        e.mem.write_bytes(base + 0x1c59, &HOOKS.iter().find(|h| h.name == "MathBox_skin_vertices").unwrap().expect[..5]).unwrap();
+        e.mem
+            .write_bytes(
+                base + 0x1c59,
+                &HOOKS
+                    .iter()
+                    .find(|h| h.name == "MathBox_skin_vertices")
+                    .unwrap()
+                    .expect[..5],
+            )
+            .unwrap();
         setup(&mut e);
         e.call_function(base + 0x1c59, &[0]).unwrap();
-        assert_eq!(e.mem.read_bytes(dst, n * dst_stride).unwrap(), native, "identical output, bit for bit");
-        assert_eq!([MB_SRC, MB_DST, MB_COUNT].map(|o| e.mem.read(base + o, 4).unwrap()), after, "and identical loop state afterwards");
+        assert_eq!(
+            e.mem.read_bytes(dst, n * dst_stride).unwrap(),
+            native,
+            "identical output, bit for bit"
+        );
+        assert_eq!(
+            [MB_SRC, MB_DST, MB_COUNT].map(|o| e.mem.read(base + o, 4).unwrap()),
+            after,
+            "and identical loop state afterwards"
+        );
     }
 
     #[test]
@@ -535,17 +714,33 @@ mod tests {
         assert_eq!(cstr(&e, 0x10000).unwrap(), b"hello, world");
         assert_eq!(run(&mut e, "crt_strchr", &[0x10000, b'o' as u32]), 0x10004);
         assert_eq!(run(&mut e, "crt_strrchr", &[0x10000, b'o' as u32]), 0x10008);
-        assert_eq!(run(&mut e, "crt_strchr", &[0x10000, 0]), 0x1000C, "the terminator can be found");
+        assert_eq!(
+            run(&mut e, "crt_strchr", &[0x10000, 0]),
+            0x1000C,
+            "the terminator can be found"
+        );
         assert_eq!(run(&mut e, "crt_strstr", &[0x10000, 0x10102]), 0x10007);
-        assert_eq!(run(&mut e, "crt_strcspn", &[0x10000, 0x10100]), 2, "the set \", world\" includes l");
+        assert_eq!(
+            run(&mut e, "crt_strcspn", &[0x10000, 0x10100]),
+            2,
+            "the set \", world\" includes l"
+        );
         put(&mut e, 0x10200, b"abc\0abd\0");
         assert_eq!(run(&mut e, "crt_strcmp", &[0x10200, 0x10204]) as i32, -1);
         assert_eq!(run(&mut e, "crt_strncmp", &[0x10200, 0x10204, 2]), 0);
         run(&mut e, "crt_strncpy", &[0x10300, 0x10200, 6]);
-        assert_eq!(e.mem.read_bytes(0x10300, 6).unwrap(), b"abc\0\0\0", "zero-padded");
+        assert_eq!(
+            e.mem.read_bytes(0x10300, 6).unwrap(),
+            b"abc\0\0\0",
+            "zero-padded"
+        );
         run(&mut e, "crt_memset", &[0x10400, 0x7F, 3]);
         run(&mut e, "crt_memmove", &[0x10401, 0x10400, 3]);
-        assert_eq!(e.mem.read_bytes(0x10400, 4).unwrap(), [0x7F; 4], "overlapping moves are safe");
+        assert_eq!(
+            e.mem.read_bytes(0x10400, 4).unwrap(),
+            [0x7F; 4],
+            "overlapping moves are safe"
+        );
         for (i, c) in "wide\0".encode_utf16().enumerate() {
             e.mem.write(0x10500 + 2 * i as u32, 2, c as u32).unwrap();
         }
@@ -558,11 +753,19 @@ mod tests {
     fn only_matching_code_is_patched() {
         let mut e = Emu::new();
         e.mem.map(0x40030000, 0x20000);
-        assert_eq!(apply(&mut e, "filesystem", 0x40030000), 0, "zeros do not look like zlib");
+        assert_eq!(
+            apply(&mut e, "filesystem", 0x40030000),
+            0,
+            "zeros do not look like zlib"
+        );
         let h = &HOOKS[1];
         e.mem.write_bytes(0x40030000 + h.rva, h.expect).unwrap();
         assert_eq!(apply(&mut e, "filesystem", 0x40030000), 1);
-        assert_eq!(e.mem.read_u8(0x40030000 + h.rva).unwrap(), 0xE9, "now a jump to the stub");
+        assert_eq!(
+            e.mem.read_u8(0x40030000 + h.rva).unwrap(),
+            0xE9,
+            "now a jump to the stub"
+        );
         assert_eq!(apply(&mut e, "otherdll", 0x40030000), 0);
     }
 }

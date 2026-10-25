@@ -10,8 +10,8 @@ use std::ffi::c_void;
 
 use metal::*;
 
+use crate::d3d::raster::{RenderState, StageState, TextureRef, Vertex, texel};
 use crate::memory::Memory;
-use crate::d3d::raster::{texel, RenderState, StageState, TextureRef, Vertex};
 
 const SHADERS: &str = r#"
 #include <metal_stdlib>
@@ -209,19 +209,41 @@ pub struct Gpu {
     pub draws: u64,
 }
 
-fn new_texture(device: &Device, w: u32, h: u32, format: MTLPixelFormat, private: bool, target: bool) -> Texture {
+fn new_texture(
+    device: &Device,
+    w: u32,
+    h: u32,
+    format: MTLPixelFormat,
+    private: bool,
+    target: bool,
+) -> Texture {
     let d = TextureDescriptor::new();
     d.set_texture_type(MTLTextureType::D2);
     d.set_pixel_format(format);
     d.set_width(w.max(1) as u64);
     d.set_height(h.max(1) as u64);
-    d.set_storage_mode(if private { MTLStorageMode::Private } else { MTLStorageMode::Shared });
-    d.set_usage(if target { MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead } else { MTLTextureUsage::ShaderRead });
+    d.set_storage_mode(if private {
+        MTLStorageMode::Private
+    } else {
+        MTLStorageMode::Shared
+    });
+    d.set_usage(if target {
+        MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead
+    } else {
+        MTLTextureUsage::ShaderRead
+    });
     device.new_texture(&d)
 }
 
 fn region(w: u32, h: u32) -> MTLRegion {
-    MTLRegion { origin: MTLOrigin { x: 0, y: 0, z: 0 }, size: MTLSize { width: w as u64, height: h as u64, depth: 1 } }
+    MTLRegion {
+        origin: MTLOrigin { x: 0, y: 0, z: 0 },
+        size: MTLSize {
+            width: w as u64,
+            height: h as u64,
+            depth: 1,
+        },
+    }
 }
 
 fn blend_factor(f: u32) -> MTLBlendFactor {
@@ -269,14 +291,23 @@ impl Gpu {
         }
         let device = Device::system_default()?;
         let queue = device.new_command_queue();
-        let lib = device.new_library_with_source(SHADERS, &CompileOptions::new()).map_err(|e| eprintln!("[metal] shader error: {e}")).ok()?;
+        let lib = device
+            .new_library_with_source(SHADERS, &CompileOptions::new())
+            .map_err(|e| eprintln!("[metal] shader error: {e}"))
+            .ok()?;
         let vs = lib.get_function("vs_main", None).ok()?;
         let fs = lib.get_function("fs_main", None).ok()?;
         let white = new_texture(&device, 1, 1, MTLPixelFormat::BGRA8Unorm, false, false);
         white.replace_region(region(1, 1), 0, [255u8; 4].as_ptr() as *const c_void, 4);
-        let ring = [0; 2].map(|_| device.new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared));
+        let ring = [0; 2]
+            .map(|_| device.new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared));
         let color = new_texture(&device, w, h, MTLPixelFormat::BGRA8Unorm, true, true);
-        let stage = [0; 2].map(|_| device.new_buffer((w.max(1) * h.max(1) * 4) as u64, MTLResourceOptions::StorageModeShared));
+        let stage = [0; 2].map(|_| {
+            device.new_buffer(
+                (w.max(1) * h.max(1) * 4) as u64,
+                MTLResourceOptions::StorageModeShared,
+            )
+        });
         let depth = new_texture(&device, w, h, MTLPixelFormat::Depth32Float, true, true);
         Some(Gpu {
             device,
@@ -311,7 +342,12 @@ impl Gpu {
         self.w = w;
         self.h = h;
         self.color = new_texture(&self.device, w, h, MTLPixelFormat::BGRA8Unorm, true, true);
-        self.stage = [0; 2].map(|_| self.device.new_buffer((w.max(1) * h.max(1) * 4) as u64, MTLResourceOptions::StorageModeShared));
+        self.stage = [0; 2].map(|_| {
+            self.device.new_buffer(
+                (w.max(1) * h.max(1) * 4) as u64,
+                MTLResourceOptions::StorageModeShared,
+            )
+        });
         self.depth = new_texture(&self.device, w, h, MTLPixelFormat::Depth32Float, true, true);
         self.clear_color = None;
         self.clear_depth = None;
@@ -332,7 +368,9 @@ impl Gpu {
         if self.enc.is_some() {
             return;
         }
-        let cmd = self.cmd.get_or_insert_with(|| self.queue.new_command_buffer().to_owned());
+        let cmd = self
+            .cmd
+            .get_or_insert_with(|| self.queue.new_command_buffer().to_owned());
         let pass = RenderPassDescriptor::new();
         let c = pass.color_attachments().object_at(0).unwrap();
         c.set_texture(Some(&self.color));
@@ -394,7 +432,8 @@ impl Gpu {
         cmd.wait_until_completed();
         self.ring_off = 0;
         // SAFETY: the buffer holds w*h*4 bytes and the GPU is done with it.
-        let src = unsafe { std::slice::from_raw_parts(self.stage[self.cur].contents() as *const u32, n) };
+        let src =
+            unsafe { std::slice::from_raw_parts(self.stage[self.cur].contents() as *const u32, n) };
         out[..n].copy_from_slice(src);
     }
 
@@ -404,10 +443,24 @@ impl Gpu {
             self.ensure_encoder();
         }
         self.end_pass();
-        let cmd = self.cmd.take().unwrap_or_else(|| self.queue.new_command_buffer().to_owned());
+        let cmd = self
+            .cmd
+            .take()
+            .unwrap_or_else(|| self.queue.new_command_buffer().to_owned());
         let blit = cmd.new_blit_command_encoder();
         let row = (self.w * 4) as u64;
-        blit.copy_from_texture_to_buffer(&self.color, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, region(self.w, self.h).size, &self.stage[self.cur], 0, row, row * self.h as u64, MTLBlitOption::empty());
+        blit.copy_from_texture_to_buffer(
+            &self.color,
+            0,
+            0,
+            MTLOrigin { x: 0, y: 0, z: 0 },
+            region(self.w, self.h).size,
+            &self.stage[self.cur],
+            0,
+            row,
+            row * self.h as u64,
+            MTLBlitOption::empty(),
+        );
         blit.end_encoding();
         cmd.commit();
         cmd
@@ -429,7 +482,9 @@ impl Gpu {
     /// if it already has. True when `out` was written.
     pub fn finish_frame(&mut self, out: &mut [u32], wait: bool) -> bool {
         let n = (self.w * self.h) as usize;
-        let Some(cmd) = self.pending.as_ref() else { return false };
+        let Some(cmd) = self.pending.as_ref() else {
+            return false;
+        };
         if !wait && cmd.status() != MTLCommandBufferStatus::Completed {
             return false;
         }
@@ -439,7 +494,9 @@ impl Gpu {
             return false;
         }
         // SAFETY: the buffer holds w*h*4 bytes and the GPU is done with it.
-        let src = unsafe { std::slice::from_raw_parts(self.stage[self.cur ^ 1].contents() as *const u32, n) };
+        let src = unsafe {
+            std::slice::from_raw_parts(self.stage[self.cur ^ 1].contents() as *const u32, n)
+        };
         out[..n].copy_from_slice(src);
         true
     }
@@ -452,18 +509,35 @@ impl Gpu {
         }
         self.flush();
         // SAFETY: as above; nothing on the GPU is using the buffer after `flush`.
-        unsafe { std::slice::from_raw_parts_mut(self.stage[self.cur].contents() as *mut u32, n) }.copy_from_slice(&px[..n]);
+        unsafe { std::slice::from_raw_parts_mut(self.stage[self.cur].contents() as *mut u32, n) }
+            .copy_from_slice(&px[..n]);
         let cmd = self.queue.new_command_buffer();
         let blit = cmd.new_blit_command_encoder();
         let row = (self.w * 4) as u64;
-        blit.copy_from_buffer_to_texture(&self.stage[self.cur], 0, row, row * self.h as u64, region(self.w, self.h).size, &self.color, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, MTLBlitOption::empty());
+        blit.copy_from_buffer_to_texture(
+            &self.stage[self.cur],
+            0,
+            row,
+            row * self.h as u64,
+            region(self.w, self.h).size,
+            &self.color,
+            0,
+            0,
+            MTLOrigin { x: 0, y: 0, z: 0 },
+            MTLBlitOption::empty(),
+        );
         blit.end_encoding();
         cmd.commit();
         cmd.wait_until_completed();
     }
 
     fn pipeline(&mut self, st: &RenderState) -> RenderPipelineState {
-        let key = PipeKey { blend: st.alpha_blend, src: st.src_blend, dst: st.dst_blend, mask: st.color_write & 0xF };
+        let key = PipeKey {
+            blend: st.alpha_blend,
+            src: st.src_blend,
+            dst: st.dst_blend,
+            mask: st.color_write & 0xF,
+        };
         if let Some(p) = self.pipelines.get(&key) {
             return p.clone();
         }
@@ -498,7 +572,10 @@ impl Gpu {
             c.set_source_alpha_blend_factor(MTLBlendFactor::One);
             c.set_destination_alpha_blend_factor(MTLBlendFactor::Zero);
         }
-        let p = self.device.new_render_pipeline_state(&d).expect("metal pipeline");
+        let p = self
+            .device
+            .new_render_pipeline_state(&d)
+            .expect("metal pipeline");
         self.pipelines.insert(key, p.clone());
         p
     }
@@ -509,7 +586,11 @@ impl Gpu {
             return s.clone();
         }
         let d = DepthStencilDescriptor::new();
-        d.set_depth_compare_function(if st.zenable { compare_fn(st.zfunc) } else { MTLCompareFunction::Always });
+        d.set_depth_compare_function(if st.zenable {
+            compare_fn(st.zfunc)
+        } else {
+            MTLCompareFunction::Always
+        });
         d.set_depth_write_enabled(st.zenable && st.zwrite);
         let s = self.device.new_depth_stencil_state(&d);
         self.depth_states.insert(key, s.clone());
@@ -517,12 +598,23 @@ impl Gpu {
     }
 
     fn sampler(&mut self, stage: &StageState) -> SamplerState {
-        let key = SamplerKey { u: stage.addr_u, v: stage.addr_v, mag: stage.mag, min: stage.min };
+        let key = SamplerKey {
+            u: stage.addr_u,
+            v: stage.addr_v,
+            mag: stage.mag,
+            min: stage.min,
+        };
         if let Some(s) = self.samplers.get(&key) {
             return s.clone();
         }
         let d = SamplerDescriptor::new();
-        let filter = |f: u32| if f == 1 { MTLSamplerMinMagFilter::Nearest } else { MTLSamplerMinMagFilter::Linear };
+        let filter = |f: u32| {
+            if f == 1 {
+                MTLSamplerMinMagFilter::Nearest
+            } else {
+                MTLSamplerMinMagFilter::Linear
+            }
+        };
         d.set_mag_filter(filter(stage.mag));
         d.set_min_filter(filter(stage.min));
         d.set_address_mode_s(address_mode(stage.addr_u));
@@ -552,14 +644,26 @@ impl Gpu {
             }
         }
         let tex = new_texture(&self.device, w, h, MTLPixelFormat::BGRA8Unorm, false, false);
-        tex.replace_region(region(w, h), 0, bytes.as_ptr() as *const c_void, (w * 4) as u64);
+        tex.replace_region(
+            region(w, h),
+            0,
+            bytes.as_ptr() as *const c_void,
+            (w * 4) as u64,
+        );
         self.textures.insert(key, tex.clone());
         tex
     }
 
     /// Draw a triangle list (three vertices per triangle, pixel coordinates).
     /// `tex[i]` is the guest texture object id and its description for stage `i`.
-    pub fn draw(&mut self, mem: &Memory, st: &RenderState, stages: &[StageState; 2], tex: &[Option<(u32, TextureRef)>; 2], verts: &[Vertex]) {
+    pub fn draw(
+        &mut self,
+        mem: &Memory,
+        st: &RenderState,
+        stages: &[StageState; 2],
+        tex: &[Option<(u32, TextureRef)>; 2],
+        verts: &[Vertex],
+    ) {
         if verts.len() < 3 {
             return;
         }
@@ -571,12 +675,26 @@ impl Gpu {
             return;
         }
         // Stage setup mirrors the reference: a stage that reads a missing texture ends the cascade.
-        let mut u = FragU { tfactor: crate::d3d::raster::unpack(st.texture_factor), specular: st.specular as u32, atest: st.alpha_test as u32, afunc: st.alpha_func, aref: st.alpha_ref, ..FragU::default() };
+        let mut u = FragU {
+            tfactor: crate::d3d::raster::unpack(st.texture_factor),
+            specular: st.specular as u32,
+            atest: st.alpha_test as u32,
+            afunc: st.alpha_func,
+            aref: st.alpha_ref,
+            ..FragU::default()
+        };
         for (s, stage) in stages.iter().enumerate() {
             if stage.color_op == 1 {
                 break;
             }
-            let reads_texture = [stage.color_arg1, stage.color_arg2, stage.alpha_arg1, stage.alpha_arg2].iter().any(|a| a & 0xF == 2);
+            let reads_texture = [
+                stage.color_arg1,
+                stage.color_arg2,
+                stage.alpha_arg1,
+                stage.alpha_arg2,
+            ]
+            .iter()
+            .any(|a| a & 0xF == 2);
             if tex[s].is_none() && reads_texture {
                 break;
             }
@@ -592,10 +710,12 @@ impl Gpu {
             };
             u.nstages = s as u32 + 1;
         }
-        let textures: Vec<Texture> = (0..2).map(|s| match &tex[s] {
-            Some((key, t)) if !t.levels.is_empty() => self.texture(mem, *key, t),
-            _ => self.white.clone(),
-        }).collect();
+        let textures: Vec<Texture> = (0..2)
+            .map(|s| match &tex[s] {
+                Some((key, t)) if !t.levels.is_empty() => self.texture(mem, *key, t),
+                _ => self.white.clone(),
+            })
+            .collect();
         let samplers = [self.sampler(&stages[0]), self.sampler(&stages[1])];
         let pipe = self.pipeline(st);
         let depth = self.depth_state(st);
@@ -629,7 +749,11 @@ impl Gpu {
         enc.set_vertex_buffer(0, Some(&self.ring[self.cur]), base as u64);
         let size = [self.w as f32, self.h as f32];
         enc.set_vertex_bytes(1, 8, size.as_ptr() as *const c_void);
-        enc.set_fragment_bytes(0, std::mem::size_of::<FragU>() as u64, &u as *const FragU as *const c_void);
+        enc.set_fragment_bytes(
+            0,
+            std::mem::size_of::<FragU>() as u64,
+            &u as *const FragU as *const c_void,
+        );
         for s in 0..2 {
             enc.set_fragment_texture(s as u64, Some(&textures[s]));
             enc.set_fragment_sampler_state(s as u64, Some(&samplers[s]));
@@ -645,7 +769,15 @@ mod tests {
     use crate::d3d::raster::*;
 
     fn vtx(x: f32, y: f32, z: f32, rhw: f32, color: u32) -> Vertex {
-        Vertex { x, y, z, rhw, color: unpack(color), spec: [0.0; 4], uv: [[0.0; 2]; 2] }
+        Vertex {
+            x,
+            y,
+            z,
+            rhw,
+            color: unpack(color),
+            spec: [0.0; 4],
+            uv: [[0.0; 2]; 2],
+        }
     }
 
     fn stages() -> [StageState; 2] {
@@ -653,12 +785,24 @@ mod tests {
     }
 
     /// Render the same triangle list with the CPU reference and with Metal.
-    fn both(w: u32, h: u32, clear: u32, st: &RenderState, stg: &[StageState; 2], tex: &[Option<(u32, TextureRef)>; 2], mem: &Memory, tris: &[Vertex]) -> Option<(Vec<u32>, Vec<u32>)> {
+    fn both(
+        w: u32,
+        h: u32,
+        clear: u32,
+        st: &RenderState,
+        stg: &[StageState; 2],
+        tex: &[Option<(u32, TextureRef)>; 2],
+        mem: &Memory,
+        tris: &[Vertex],
+    ) -> Option<(Vec<u32>, Vec<u32>)> {
         let mut gpu = Gpu::new(w, h)?;
         let mut cpu = Target::new(w, h);
         cpu.clear(Some(clear), Some(1.0));
         gpu.clear(Some(clear), Some(1.0));
-        let ctex = [tex[0].as_ref().map(|t| t.1.clone()), tex[1].as_ref().map(|t| t.1.clone())];
+        let ctex = [
+            tex[0].as_ref().map(|t| t.1.clone()),
+            tex[1].as_ref().map(|t| t.1.clone()),
+        ];
         for t in tris.chunks(3) {
             draw_triangle(&mut cpu, mem, st, stg, &ctex, [&t[0], &t[1], &t[2]]);
         }
@@ -672,12 +816,22 @@ mod tests {
     fn assert_close(cpu: &[u32], gpu: &[u32], what: &str) {
         let mut bad = 0;
         for (a, b) in cpu.iter().zip(gpu) {
-            let d = (0..3).map(|k| ((a >> (8 * k)) & 0xFF) as i32 - ((b >> (8 * k)) & 0xFF) as i32).map(|x| x.abs()).max().unwrap();
+            let d = (0..3)
+                .map(|k| ((a >> (8 * k)) & 0xFF) as i32 - ((b >> (8 * k)) & 0xFF) as i32)
+                .map(|x| x.abs())
+                .max()
+                .unwrap();
             if d > 4 {
                 bad += 1;
             }
         }
-        assert!(bad * 50 <= cpu.len(), "{what}: {bad} of {} pixels differ (cpu[0..4] {:x?}, gpu[0..4] {:x?})", cpu.len(), &cpu[..4.min(cpu.len())], &gpu[..4.min(gpu.len())]);
+        assert!(
+            bad * 50 <= cpu.len(),
+            "{what}: {bad} of {} pixels differ (cpu[0..4] {:x?}, gpu[0..4] {:x?})",
+            cpu.len(),
+            &cpu[..4.min(cpu.len())],
+            &gpu[..4.min(gpu.len())]
+        );
     }
 
     fn no_tex() -> [Option<(u32, TextureRef)>; 2] {
@@ -687,9 +841,19 @@ mod tests {
     #[test]
     fn gouraud_triangle_matches_the_reference() {
         let mem = Memory::new();
-        let st = RenderState { cull: 1, zenable: false, ..RenderState::default() };
-        let tri = [vtx(2.0, 2.0, 0.5, 1.0, 0xFFFF0000), vtx(30.0, 4.0, 0.5, 1.0, 0xFF00FF00), vtx(4.0, 30.0, 0.5, 1.0, 0xFF0000FF)];
-        let Some((c, g)) = both(32, 32, 0xFF202020, &st, &stages(), &no_tex(), &mem, &tri) else { return };
+        let st = RenderState {
+            cull: 1,
+            zenable: false,
+            ..RenderState::default()
+        };
+        let tri = [
+            vtx(2.0, 2.0, 0.5, 1.0, 0xFFFF0000),
+            vtx(30.0, 4.0, 0.5, 1.0, 0xFF00FF00),
+            vtx(4.0, 30.0, 0.5, 1.0, 0xFF0000FF),
+        ];
+        let Some((c, g)) = both(32, 32, 0xFF202020, &st, &stages(), &no_tex(), &mem, &tri) else {
+            return;
+        };
         assert_close(&c, &g, "gouraud");
         assert_eq!(g[0], 0xFF202020, "outside the triangle: clear colour");
     }
@@ -697,12 +861,23 @@ mod tests {
     #[test]
     fn culling_follows_the_same_winding_as_the_reference() {
         let mem = Memory::new();
-        let cw = [vtx(1.0, 1.0, 0.5, 1.0, 0xFFFFFFFF), vtx(14.0, 1.0, 0.5, 1.0, 0xFFFFFFFF), vtx(1.0, 14.0, 0.5, 1.0, 0xFFFFFFFF)];
+        let cw = [
+            vtx(1.0, 1.0, 0.5, 1.0, 0xFFFFFFFF),
+            vtx(14.0, 1.0, 0.5, 1.0, 0xFFFFFFFF),
+            vtx(1.0, 14.0, 0.5, 1.0, 0xFFFFFFFF),
+        ];
         let ccw = [cw[0], cw[2], cw[1]];
         for cull in [1, 2, 3] {
             for (name, tri) in [("cw", cw), ("ccw", ccw)] {
-                let st = RenderState { cull, zenable: false, ..RenderState::default() };
-                let Some((c, g)) = both(16, 16, 0xFF000000, &st, &stages(), &no_tex(), &mem, &tri) else { return };
+                let st = RenderState {
+                    cull,
+                    zenable: false,
+                    ..RenderState::default()
+                };
+                let Some((c, g)) = both(16, 16, 0xFF000000, &st, &stages(), &no_tex(), &mem, &tri)
+                else {
+                    return;
+                };
                 assert_close(&c, &g, &format!("cull {cull} {name}"));
             }
         }
@@ -711,39 +886,121 @@ mod tests {
     #[test]
     fn depth_test_matches_the_reference() {
         let mem = Memory::new();
-        let st = RenderState { cull: 1, ..RenderState::default() };
-        let tri = |z: f32, c: u32| [vtx(0.0, 0.0, z, 1.0, c), vtx(32.0, 0.0, z, 1.0, c), vtx(0.0, 32.0, z, 1.0, c)];
+        let st = RenderState {
+            cull: 1,
+            ..RenderState::default()
+        };
+        let tri = |z: f32, c: u32| {
+            [
+                vtx(0.0, 0.0, z, 1.0, c),
+                vtx(32.0, 0.0, z, 1.0, c),
+                vtx(0.0, 32.0, z, 1.0, c),
+            ]
+        };
         let mut all = tri(0.2, 0xFFFF0000).to_vec();
         all.extend(tri(0.8, 0xFF0000FF));
-        let Some((c, g)) = both(32, 32, 0xFF000000, &st, &stages(), &no_tex(), &mem, &all) else { return };
+        let Some((c, g)) = both(32, 32, 0xFF000000, &st, &stages(), &no_tex(), &mem, &all) else {
+            return;
+        };
         assert_close(&c, &g, "depth");
-        assert_eq!(g[5 * 32 + 5], 0xFFFF0000, "nearer triangle wins even though it was drawn first");
+        assert_eq!(
+            g[5 * 32 + 5],
+            0xFFFF0000,
+            "nearer triangle wins even though it was drawn first"
+        );
     }
 
     #[test]
     fn blending_and_alpha_test_match_the_reference() {
         let mem = Memory::new();
-        let tri = |c: u32| [vtx(0.0, 0.0, 0.5, 1.0, c), vtx(32.0, 0.0, 0.5, 1.0, c), vtx(0.0, 32.0, 0.5, 1.0, c), vtx(32.0, 0.0, 0.5, 1.0, c), vtx(32.0, 32.0, 0.5, 1.0, c), vtx(0.0, 32.0, 0.5, 1.0, c)];
-        let blend = RenderState { cull: 1, zenable: false, alpha_blend: true, src_blend: 5, dst_blend: 6, ..RenderState::default() };
-        let Some((c, g)) = both(32, 32, 0xFF0000FF, &blend, &stages(), &no_tex(), &mem, &tri(0x80FF0000)) else { return };
+        let tri = |c: u32| {
+            [
+                vtx(0.0, 0.0, 0.5, 1.0, c),
+                vtx(32.0, 0.0, 0.5, 1.0, c),
+                vtx(0.0, 32.0, 0.5, 1.0, c),
+                vtx(32.0, 0.0, 0.5, 1.0, c),
+                vtx(32.0, 32.0, 0.5, 1.0, c),
+                vtx(0.0, 32.0, 0.5, 1.0, c),
+            ]
+        };
+        let blend = RenderState {
+            cull: 1,
+            zenable: false,
+            alpha_blend: true,
+            src_blend: 5,
+            dst_blend: 6,
+            ..RenderState::default()
+        };
+        let Some((c, g)) = both(
+            32,
+            32,
+            0xFF0000FF,
+            &blend,
+            &stages(),
+            &no_tex(),
+            &mem,
+            &tri(0x80FF0000),
+        ) else {
+            return;
+        };
         assert_close(&c, &g, "blend");
         let p = unpack(g[40]);
-        assert!((p[0] - 0.5).abs() < 0.03 && (p[2] - 0.5).abs() < 0.03, "half red over blue: {p:?}");
+        assert!(
+            (p[0] - 0.5).abs() < 0.03 && (p[2] - 0.5).abs() < 0.03,
+            "half red over blue: {p:?}"
+        );
 
-        let test = RenderState { cull: 1, zenable: false, alpha_test: true, alpha_func: 7, alpha_ref: 0x80, ..RenderState::default() };
-        let (c, g) = both(32, 32, 0xFF000000, &test, &stages(), &no_tex(), &mem, &tri(0x40FFFFFF)).unwrap();
+        let test = RenderState {
+            cull: 1,
+            zenable: false,
+            alpha_test: true,
+            alpha_func: 7,
+            alpha_ref: 0x80,
+            ..RenderState::default()
+        };
+        let (c, g) = both(
+            32,
+            32,
+            0xFF000000,
+            &test,
+            &stages(),
+            &no_tex(),
+            &mem,
+            &tri(0x40FFFFFF),
+        )
+        .unwrap();
         assert_close(&c, &g, "alpha test (fails)");
         assert_eq!(g[40], 0xFF000000, "alpha 0x40 < ref 0x80: discarded");
-        let (c, g) = both(32, 32, 0xFF000000, &test, &stages(), &no_tex(), &mem, &tri(0xC0FFFFFF)).unwrap();
+        let (c, g) = both(
+            32,
+            32,
+            0xFF000000,
+            &test,
+            &stages(),
+            &no_tex(),
+            &mem,
+            &tri(0xC0FFFFFF),
+        )
+        .unwrap();
         assert_close(&c, &g, "alpha test (passes)");
     }
 
     #[test]
     fn perspective_correct_interpolation_matches_the_reference() {
         let mem = Memory::new();
-        let st = RenderState { cull: 1, zenable: false, ..RenderState::default() };
-        let tri = [vtx(0.0, 0.0, 0.5, 1.0, 0xFFFF0000), vtx(32.0, 0.0, 0.5, 0.2, 0xFF00FF00), vtx(0.0, 32.0, 0.5, 1.0, 0xFF0000FF)];
-        let Some((c, g)) = both(32, 32, 0xFF000000, &st, &stages(), &no_tex(), &mem, &tri) else { return };
+        let st = RenderState {
+            cull: 1,
+            zenable: false,
+            ..RenderState::default()
+        };
+        let tri = [
+            vtx(0.0, 0.0, 0.5, 1.0, 0xFFFF0000),
+            vtx(32.0, 0.0, 0.5, 0.2, 0xFF00FF00),
+            vtx(0.0, 32.0, 0.5, 1.0, 0xFF0000FF),
+        ];
+        let Some((c, g)) = both(32, 32, 0xFF000000, &st, &stages(), &no_tex(), &mem, &tri) else {
+            return;
+        };
         assert_close(&c, &g, "perspective");
     }
 
@@ -751,25 +1008,54 @@ mod tests {
         mem.map(0x10000, 0x10000);
         let bytes: Vec<u8> = px.iter().flat_map(|c| c.to_le_bytes()).collect();
         mem.write_bytes(0x10000, &bytes).unwrap();
-        TextureRef { format: FMT_A8R8G8B8, levels: vec![Level { ptr: 0x10000, w, h, pitch: w * 4 }] }
+        TextureRef {
+            format: FMT_A8R8G8B8,
+            levels: vec![Level {
+                ptr: 0x10000,
+                w,
+                h,
+                pitch: w * 4,
+            }],
+        }
     }
 
     #[test]
     fn textured_quad_matches_the_reference() {
         let mut mem = Memory::new();
-        let t = texture(&mut mem, 2, 2, &[0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF]);
+        let t = texture(
+            &mut mem,
+            2,
+            2,
+            &[0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF],
+        );
         let mk = |x: f32, y: f32, u: f32, v: f32| {
             let mut vt = vtx(x, y, 0.5, 1.0, 0xFFFFFFFF);
             vt.uv[0] = [u, v];
             vt
         };
-        let quad = [mk(0.0, 0.0, 0.0, 0.0), mk(16.0, 0.0, 1.0, 0.0), mk(0.0, 16.0, 0.0, 1.0), mk(16.0, 0.0, 1.0, 0.0), mk(16.0, 16.0, 1.0, 1.0), mk(0.0, 16.0, 0.0, 1.0)];
-        let st = RenderState { cull: 1, zenable: false, ..RenderState::default() };
+        let quad = [
+            mk(0.0, 0.0, 0.0, 0.0),
+            mk(16.0, 0.0, 1.0, 0.0),
+            mk(0.0, 16.0, 0.0, 1.0),
+            mk(16.0, 0.0, 1.0, 0.0),
+            mk(16.0, 16.0, 1.0, 1.0),
+            mk(0.0, 16.0, 0.0, 1.0),
+        ];
+        let st = RenderState {
+            cull: 1,
+            zenable: false,
+            ..RenderState::default()
+        };
         let tex = [Some((7, t)), None];
         // point sampling
-        let Some((c, g)) = both(16, 16, 0xFF000000, &st, &stages(), &tex, &mem, &quad) else { return };
+        let Some((c, g)) = both(16, 16, 0xFF000000, &st, &stages(), &tex, &mem, &quad) else {
+            return;
+        };
         assert_close(&c, &g, "point sampled texture");
-        assert_eq!((g[0], g[15], g[15 * 16], g[255]), (0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF));
+        assert_eq!(
+            (g[0], g[15], g[15 * 16], g[255]),
+            (0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFFFFFFFF)
+        );
         // bilinear
         let mut linear = stages();
         linear[0].mag = 2;
@@ -794,26 +1080,48 @@ mod tests {
         stg[1].color_arg1 = 2;
         stg[1].color_arg2 = 1;
         stg[1].alpha_op = 2;
-        let st = RenderState { cull: 1, zenable: false, ..RenderState::default() };
+        let st = RenderState {
+            cull: 1,
+            zenable: false,
+            ..RenderState::default()
+        };
         let tex = [Some((1, t.clone())), Some((2, t))];
-        let Some((c, g)) = both(16, 16, 0xFF000000, &st, &stg, &tex, &mem, &quad) else { return };
+        let Some((c, g)) = both(16, 16, 0xFF000000, &st, &stg, &tex, &mem, &quad) else {
+            return;
+        };
         assert_close(&c, &g, "two stages");
     }
 
     #[test]
     fn clearing_between_draws_orders_correctly() {
-        let Some(mut gpu) = Gpu::new(8, 8) else { return };
+        let Some(mut gpu) = Gpu::new(8, 8) else {
+            return;
+        };
         let mem = Memory::new();
-        let st = RenderState { cull: 1, zenable: false, ..RenderState::default() };
-        let tri = [vtx(0.0, 0.0, 0.5, 1.0, 0xFFFFFFFF), vtx(16.0, 0.0, 0.5, 1.0, 0xFFFFFFFF), vtx(0.0, 16.0, 0.5, 1.0, 0xFFFFFFFF)];
+        let st = RenderState {
+            cull: 1,
+            zenable: false,
+            ..RenderState::default()
+        };
+        let tri = [
+            vtx(0.0, 0.0, 0.5, 1.0, 0xFFFFFFFF),
+            vtx(16.0, 0.0, 0.5, 1.0, 0xFFFFFFFF),
+            vtx(0.0, 16.0, 0.5, 1.0, 0xFFFFFFFF),
+        ];
         gpu.clear(Some(0xFF000000), Some(1.0));
         gpu.draw(&mem, &st, &stages(), &no_tex(), &tri);
         gpu.clear(Some(0xFF00FF00), None); // wipes the white triangle
         let mut out = vec![0u32; 64];
         gpu.read_color(&mut out);
-        assert!(out.iter().all(|&p| p == 0xFF00FF00), "the later clear covers the earlier draw");
+        assert!(
+            out.iter().all(|&p| p == 0xFF00FF00),
+            "the later clear covers the earlier draw"
+        );
         gpu.write_color(&vec![0xFF123456; 64]);
         gpu.read_color(&mut out);
-        assert!(out.iter().all(|&p| p == 0xFF123456), "write_color/read_color round-trip");
+        assert!(
+            out.iter().all(|&p| p == 0xFF123456),
+            "write_color/read_color round-trip"
+        );
     }
 }

@@ -33,13 +33,32 @@ pub struct FindEntry {
 }
 
 pub enum Obj {
-    File { file: fs::File, path: PathBuf, writable: bool },
-    Find { entries: Vec<FindEntry>, pos: usize },
-    Event { signaled: bool, manual: bool },
-    Mutex { owner: u32, count: u32 },
-    Mapping { path: PathBuf, size: u64 },
+    File {
+        file: fs::File,
+        path: PathBuf,
+        writable: bool,
+    },
+    Find {
+        entries: Vec<FindEntry>,
+        pos: usize,
+    },
+    Event {
+        signaled: bool,
+        manual: bool,
+    },
+    Mutex {
+        owner: u32,
+        count: u32,
+    },
+    Mapping {
+        path: PathBuf,
+        size: u64,
+    },
     /// A thread started by CreateThread: whether it has finished, and its exit code.
-    Thread { done: bool, exit_code: u32 },
+    Thread {
+        done: bool,
+        exit_code: u32,
+    },
 }
 
 pub struct Vfs {
@@ -76,13 +95,20 @@ pub fn wildcard_match(pattern: &str, name: &str) -> bool {
 
 impl Vfs {
     pub fn new() -> Self {
-        Vfs { mounts: Vec::new(), cwd: r"C:\".to_string(), objs: HashMap::new(), next: 0x1000, hidden_ext: Vec::new() }
+        Vfs {
+            mounts: Vec::new(),
+            cwd: r"C:\".to_string(),
+            objs: HashMap::new(),
+            next: 0x1000,
+            hidden_ext: Vec::new(),
+        }
     }
 
     /// Make `host` visible to the guest at the Windows path `win_prefix` (e.g. `C:\Game`).
     pub fn mount(&mut self, win_prefix: &str, host: &Path) {
         let prefix = self.normalize(win_prefix);
-        self.mounts.retain(|(p, _)| !p.eq_ignore_ascii_case(&prefix));
+        self.mounts
+            .retain(|(p, _)| !p.eq_ignore_ascii_case(&prefix));
         self.mounts.push((prefix, host.to_path_buf()));
     }
 
@@ -105,7 +131,11 @@ impl Vfs {
         let base: Vec<String> = if rest.starts_with('\\') {
             Vec::new()
         } else if self.cwd[..1].eq_ignore_ascii_case(&drive) {
-            self.cwd[2..].split('\\').filter(|s| !s.is_empty()).map(str::to_string).collect()
+            self.cwd[2..]
+                .split('\\')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
         } else {
             Vec::new()
         };
@@ -150,7 +180,10 @@ impl Vfs {
             }
             let found = fs::read_dir(&cur)
                 .ok()
-                .and_then(|rd| rd.flatten().find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(comp)))
+                .and_then(|rd| {
+                    rd.flatten()
+                        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(comp))
+                })
                 .map(|e| e.path());
             match found {
                 Some(p) => cur = p,
@@ -219,11 +252,17 @@ impl Vfs {
             std::io::ErrorKind::NotFound => ERROR_FILE_NOT_FOUND,
             _ => ERROR_ACCESS_DENIED,
         })?;
-        Ok(self.add(Obj::File { file, path: host, writable }))
+        Ok(self.add(Obj::File {
+            file,
+            path: host,
+            writable,
+        }))
     }
 
     pub fn read(&mut self, h: u32, n: usize) -> Result<Vec<u8>, u32> {
-        let Some(Obj::File { file, .. }) = self.objs.get_mut(&h) else { return Err(ERROR_INVALID_HANDLE) };
+        let Some(Obj::File { file, .. }) = self.objs.get_mut(&h) else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
         let mut buf = vec![0u8; n];
         let mut got = 0;
         while got < n {
@@ -238,7 +277,9 @@ impl Vfs {
     }
 
     pub fn write(&mut self, h: u32, data: &[u8]) -> Result<usize, u32> {
-        let Some(Obj::File { file, writable, .. }) = self.objs.get_mut(&h) else { return Err(ERROR_INVALID_HANDLE) };
+        let Some(Obj::File { file, writable, .. }) = self.objs.get_mut(&h) else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
         if !*writable {
             return Err(ERROR_ACCESS_DENIED);
         }
@@ -248,7 +289,9 @@ impl Vfs {
 
     /// SetFilePointer: `method` 0 begin, 1 current, 2 end. Returns the new position.
     pub fn seek(&mut self, h: u32, offset: i64, method: u32) -> Result<u64, u32> {
-        let Some(Obj::File { file, .. }) = self.objs.get_mut(&h) else { return Err(ERROR_INVALID_HANDLE) };
+        let Some(Obj::File { file, .. }) = self.objs.get_mut(&h) else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
         let from = match method {
             0 => SeekFrom::Start(offset.max(0) as u64),
             1 => SeekFrom::Current(offset),
@@ -259,13 +302,18 @@ impl Vfs {
 
     pub fn file_size(&self, h: u32) -> Result<u64, u32> {
         match self.objs.get(&h) {
-            Some(Obj::File { file, .. }) => file.metadata().map(|m| m.len()).map_err(|_| ERROR_ACCESS_DENIED),
+            Some(Obj::File { file, .. }) => file
+                .metadata()
+                .map(|m| m.len())
+                .map_err(|_| ERROR_ACCESS_DENIED),
             _ => Err(ERROR_INVALID_HANDLE),
         }
     }
 
     pub fn set_end_of_file(&mut self, h: u32) -> Result<(), u32> {
-        let Some(Obj::File { file, .. }) = self.objs.get_mut(&h) else { return Err(ERROR_INVALID_HANDLE) };
+        let Some(Obj::File { file, .. }) = self.objs.get_mut(&h) else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
         let pos = file.stream_position().map_err(|_| ERROR_ACCESS_DENIED)?;
         file.set_len(pos).map_err(|_| ERROR_ACCESS_DENIED)
     }
@@ -282,7 +330,11 @@ impl Vfs {
     pub fn attributes(&self, path: &str) -> Option<u32> {
         let host = self.resolve(path).ok()?;
         let meta = fs::metadata(host).ok()?;
-        Some(if meta.is_dir() { FILE_ATTRIBUTE_DIRECTORY } else { FILE_ATTRIBUTE_NORMAL })
+        Some(if meta.is_dir() {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        })
     }
 
     pub fn mkdir(&self, path: &str) -> Result<(), u32> {
@@ -330,8 +382,17 @@ impl Vfs {
 
     fn entry(path: &Path, name: String) -> Option<FindEntry> {
         let meta = fs::metadata(path).ok()?;
-        let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
-        Some(FindEntry { name, is_dir: meta.is_dir(), size: if meta.is_dir() { 0 } else { meta.len() }, mtime })
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
+        Some(FindEntry {
+            name,
+            is_dir: meta.is_dir(),
+            size: if meta.is_dir() { 0 } else { meta.len() },
+            mtime,
+        })
     }
 
     /// FindFirstFile. Returns the search handle and the first match.
@@ -346,23 +407,29 @@ impl Vfs {
         if !pat.contains(['*', '?']) {
             // A plain name: at most one match (possibly with different case).
             let host = self.resolve(&norm)?;
-            let name = host.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = host
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             if let Some(e) = Self::entry(&host, name).filter(|_| host.exists()) {
                 entries.push(e);
             }
         } else {
             for dot in [".", ".."] {
                 if wildcard_match(pat, dot)
-                    && let Some(e) = Self::entry(&host_dir, dot.to_string()) {
-                        entries.push(e);
-                    }
+                    && let Some(e) = Self::entry(&host_dir, dot.to_string())
+                {
+                    entries.push(e);
+                }
             }
             let mut found: Vec<FindEntry> = fs::read_dir(&host_dir)
                 .map_err(|_| ERROR_PATH_NOT_FOUND)?
                 .flatten()
                 .filter_map(|e| {
                     let name = e.file_name().to_string_lossy().into_owned();
-                    wildcard_match(pat, &name).then(|| Self::entry(&e.path(), name)).flatten()
+                    wildcard_match(pat, &name)
+                        .then(|| Self::entry(&e.path(), name))
+                        .flatten()
                 })
                 .collect();
             found.sort_by_key(|e| e.name.to_lowercase());
@@ -377,10 +444,17 @@ impl Vfs {
     }
 
     pub fn find_next(&mut self, h: u32) -> Option<FindEntry> {
-        let Some(Obj::Find { entries, pos }) = self.objs.get_mut(&h) else { return None };
+        let Some(Obj::Find { entries, pos }) = self.objs.get_mut(&h) else {
+            return None;
+        };
         let e = entries.get_mut(*pos)?;
         *pos += 1;
-        Some(FindEntry { name: std::mem::take(&mut e.name), is_dir: e.is_dir, size: e.size, mtime: e.mtime })
+        Some(FindEntry {
+            name: std::mem::take(&mut e.name),
+            is_dir: e.is_dir,
+            size: e.size,
+            mtime: e.mtime,
+        })
     }
 
     // ---- synchronization objects ----------------------------------------------------------
@@ -390,23 +464,38 @@ impl Vfs {
     }
 
     pub fn create_mutex(&mut self, owned_by: u32) -> u32 {
-        self.add(Obj::Mutex { owner: owned_by, count: (owned_by != 0) as u32 })
+        self.add(Obj::Mutex {
+            owner: owned_by,
+            count: (owned_by != 0) as u32,
+        })
     }
 
     pub fn create_mapping(&mut self, file_handle: u32, size: u64) -> Result<u32, u32> {
-        let Some(Obj::File { path, .. }) = self.objs.get(&file_handle) else { return Err(ERROR_INVALID_HANDLE) };
+        let Some(Obj::File { path, .. }) = self.objs.get(&file_handle) else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
         let path = path.clone();
-        let size = if size != 0 { size } else { fs::metadata(&path).map_err(|_| ERROR_ACCESS_DENIED)?.len() };
+        let size = if size != 0 {
+            size
+        } else {
+            fs::metadata(&path).map_err(|_| ERROR_ACCESS_DENIED)?.len()
+        };
         Ok(self.add(Obj::Mapping { path, size }))
     }
 
     /// A pagefile-backed (anonymous) mapping: zero-filled memory.
     pub fn create_anonymous_mapping(&mut self, size: u64) -> u32 {
-        self.add(Obj::Mapping { path: PathBuf::new(), size })
+        self.add(Obj::Mapping {
+            path: PathBuf::new(),
+            size,
+        })
     }
 
     pub fn create_thread(&mut self) -> u32 {
-        self.add(Obj::Thread { done: false, exit_code: 0 })
+        self.add(Obj::Thread {
+            done: false,
+            exit_code: 0,
+        })
     }
 }
 
@@ -436,7 +525,11 @@ mod tests {
         assert_eq!(v.normalize("data/File.TXT"), r"C:\Game\data\File.TXT");
         assert_eq!(v.normalize(r"\x"), r"C:\x");
         assert_eq!(v.normalize(r"\\?\C:\Game\a"), r"C:\Game\a");
-        assert_eq!(v.normalize(r"C:\..\..\a"), r"C:\a", "cannot climb above the drive root");
+        assert_eq!(
+            v.normalize(r"C:\..\..\a"),
+            r"C:\a",
+            "cannot climb above the drive root"
+        );
     }
 
     #[test]
@@ -446,7 +539,10 @@ mod tests {
         // The path may keep the guest's spelling on a case-insensitive disk; what matters is
         // that it reaches the right file.
         assert_eq!(fs::read(&host).unwrap(), b"hello world");
-        assert_eq!(fs::read(v.resolve(r"C:\Game\DATA\SUB\X.BIN").unwrap()).unwrap(), [1, 2, 3]);
+        assert_eq!(
+            fs::read(v.resolve(r"C:\Game\DATA\SUB\X.BIN").unwrap()).unwrap(),
+            [1, 2, 3]
+        );
         let _ = root;
     }
 
@@ -455,8 +551,16 @@ mod tests {
         let (_, v) = tree("sandbox");
         assert_eq!(v.resolve(r"C:\secret.txt"), Err(ERROR_PATH_NOT_FOUND));
         assert_eq!(v.resolve(r"D:\Game\a.sga"), Err(ERROR_PATH_NOT_FOUND));
-        assert_eq!(v.resolve(r"C:\Game\..\secret.txt"), Err(ERROR_PATH_NOT_FOUND), ".. cannot escape the mount");
-        assert_eq!(v.resolve(r"C:\GameExtra\a.sga"), Err(ERROR_PATH_NOT_FOUND), "prefix match is per component");
+        assert_eq!(
+            v.resolve(r"C:\Game\..\secret.txt"),
+            Err(ERROR_PATH_NOT_FOUND),
+            ".. cannot escape the mount"
+        );
+        assert_eq!(
+            v.resolve(r"C:\GameExtra\a.sga"),
+            Err(ERROR_PATH_NOT_FOUND),
+            "prefix match is per component"
+        );
     }
 
     #[test]
@@ -465,8 +569,14 @@ mod tests {
         fs::create_dir_all(root.join("tmpdir")).unwrap();
         v.mount(r"C:\Game\Data", &root.join("tmpdir"));
         fs::write(root.join("tmpdir/over.txt"), b"x").unwrap();
-        assert_eq!(v.resolve(r"C:\Game\Data\over.txt").unwrap(), root.join("tmpdir/over.txt"));
-        assert_eq!(v.resolve(r"C:\Game\a.sga").unwrap(), root.join("Game/a.sga"));
+        assert_eq!(
+            v.resolve(r"C:\Game\Data\over.txt").unwrap(),
+            root.join("tmpdir/over.txt")
+        );
+        assert_eq!(
+            v.resolve(r"C:\Game\a.sga").unwrap(),
+            root.join("Game/a.sga")
+        );
     }
 
     #[test]
@@ -476,17 +586,28 @@ mod tests {
         assert_eq!(v.file_size(h), Ok(11));
         assert_eq!(v.read(h, 5).unwrap(), b"hello");
         assert_eq!(v.seek(h, 6, 0), Ok(6));
-        assert_eq!(v.read(h, 100).unwrap(), b"world", "short read at end of file");
+        assert_eq!(
+            v.read(h, 100).unwrap(),
+            b"world",
+            "short read at end of file"
+        );
         assert_eq!(v.seek(h, -5, 2), Ok(6));
         assert_eq!(v.seek(h, -2, 1), Ok(4));
         assert!(v.close(h));
-        assert_eq!(v.read(h, 1), Err(ERROR_INVALID_HANDLE), "closed handles are dead");
+        assert_eq!(
+            v.read(h, 1),
+            Err(ERROR_INVALID_HANDLE),
+            "closed handles are dead"
+        );
     }
 
     #[test]
     fn dispositions_behave_like_createfile() {
         let (root, mut v) = tree("disp");
-        assert_eq!(v.open("nope.txt", 0x8000_0000, 3), Err(ERROR_FILE_NOT_FOUND));
+        assert_eq!(
+            v.open("nope.txt", 0x8000_0000, 3),
+            Err(ERROR_FILE_NOT_FOUND)
+        );
         assert_eq!(v.open("a.sga", 0x4000_0000, 1), Err(ERROR_FILE_EXISTS));
         let h = v.open("new.txt", 0x4000_0000, 2).unwrap();
         v.write(h, b"abc").unwrap();
@@ -514,8 +635,14 @@ mod tests {
         }
         assert_eq!(names, [".", "..", "File.TXT", "sub"]);
         let (_, only) = v.find_first(r"Data\f*.txt").unwrap();
-        assert_eq!((only.name.as_str(), only.size, only.is_dir), ("File.TXT", 11, false));
-        assert_eq!(v.find_first(r"Data\*.zzz").err(), Some(ERROR_FILE_NOT_FOUND));
+        assert_eq!(
+            (only.name.as_str(), only.size, only.is_dir),
+            ("File.TXT", 11, false)
+        );
+        assert_eq!(
+            v.find_first(r"Data\*.zzz").err(),
+            Some(ERROR_FILE_NOT_FOUND)
+        );
         assert_eq!(v.find_first(r"Nothing\*").err(), Some(ERROR_PATH_NOT_FOUND));
         let (_, exact) = v.find_first("a.sga").unwrap();
         assert_eq!(exact.size, 1000);
@@ -534,7 +661,10 @@ mod tests {
     #[test]
     fn directory_operations_and_cwd() {
         let (root, mut v) = tree("dirs");
-        assert!(v.attributes("Data").is_some_and(|a| a & FILE_ATTRIBUTE_DIRECTORY != 0));
+        assert!(
+            v.attributes("Data")
+                .is_some_and(|a| a & FILE_ATTRIBUTE_DIRECTORY != 0)
+        );
         assert_eq!(v.attributes("a.sga"), Some(FILE_ATTRIBUTE_NORMAL));
         assert_eq!(v.attributes("zzz"), None);
         v.mkdir("made").unwrap();
@@ -547,7 +677,11 @@ mod tests {
         v.rmdir("made").unwrap();
         assert!(v.set_cwd("Data"));
         assert_eq!(v.cwd, r"C:\Game\Data");
-        assert_eq!(v.resolve("File.TXT").unwrap(), root.join("Game/Data/File.TXT"), "relative to the new cwd");
+        assert_eq!(
+            v.resolve("File.TXT").unwrap(),
+            root.join("Game/Data/File.TXT"),
+            "relative to the new cwd"
+        );
         assert!(!v.set_cwd(r"C:\nowhere"));
     }
 

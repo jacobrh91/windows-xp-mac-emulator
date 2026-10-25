@@ -74,7 +74,15 @@ pub struct Mp3Stream {
 impl Mp3Stream {
     /// Ask the guest for more compressed data. Returns false at the end of the stream.
     fn fetch_more(&mut self, e: &mut Emu) -> Res<bool> {
-        let got = e.call_function(self.fetch, &[self.user, self.scratch, FETCH_BYTES, self.next_offset as u32])? as i32;
+        let got = e.call_function(
+            self.fetch,
+            &[
+                self.user,
+                self.scratch,
+                FETCH_BYTES,
+                self.next_offset as u32,
+            ],
+        )? as i32;
         self.next_offset = -1;
         if got <= 0 {
             self.eof = true;
@@ -111,7 +119,8 @@ impl Mp3Stream {
                     let n = info.samples_produced * info.channels.num() as usize;
                     self.pcm.drain(..self.pcm_used);
                     self.pcm_used = 0;
-                    self.pcm.extend(out[..n].iter().flat_map(|s| s.to_le_bytes()));
+                    self.pcm
+                        .extend(out[..n].iter().flat_map(|s| s.to_le_bytes()));
                     return Ok(true);
                 }
                 Err(DecodeError::NoFrame) => {
@@ -141,8 +150,14 @@ pub struct Mp3State {
 }
 
 /// Take a stream out of the table while a handler works on it (it calls back into the guest).
-fn with_stream<R>(e: &mut Emu, h: u32, f: impl FnOnce(&mut Emu, &mut Mp3Stream) -> Res<R>) -> Res<Option<R>> {
-    let Some(mut s) = e.win.mp3.streams.remove(&h) else { return Ok(None) };
+fn with_stream<R>(
+    e: &mut Emu,
+    h: u32,
+    f: impl FnOnce(&mut Emu, &mut Mp3Stream) -> Res<R>,
+) -> Res<Option<R>> {
+    let Some(mut s) = e.win.mp3.streams.remove(&h) else {
+        return Ok(None);
+    };
     let r = f(e, &mut s);
     e.win.mp3.streams.insert(h, s);
     r.map(Some)
@@ -174,14 +189,22 @@ pub fn stream_open(e: &mut Emu, a: &Args) -> Res<u32> {
     // and data that is not MP3 is refused here.
     if !s.decode_frame(e)? {
         if std::env::var_os("XP_MP3_LOG").is_some() {
-            eprintln!("[mp3] stream refused: no MPEG audio in {} bytes fetched", s.position);
+            eprintln!(
+                "[mp3] stream refused: no MPEG audio in {} bytes fetched",
+                s.position
+            );
         }
         e.heap_free(scratch);
         e.heap_free(handle);
         return Ok(0);
     }
     if std::env::var_os("XP_MP3_LOG").is_some() {
-        eprintln!("[mp3] stream {handle:#x} opened: {} Hz, {} channels, {} kbit/s", s.rate, s.channels, s.bitrate / 1000);
+        eprintln!(
+            "[mp3] stream {handle:#x} opened: {} Hz, {} channels, {} kbit/s",
+            s.rate,
+            s.channels,
+            s.bitrate / 1000
+        );
     }
     e.win.mp3.streams.insert(handle, s);
     Ok(handle)
@@ -203,7 +226,8 @@ pub fn stream_process(e: &mut Emu, a: &Args) -> Res<u32> {
             }
         }
         let n = (s.pcm.len() - s.pcm_used).min(want);
-        e.mem.write_bytes(buffer, &s.pcm[s.pcm_used..s.pcm_used + n])?;
+        e.mem
+            .write_bytes(buffer, &s.pcm[s.pcm_used..s.pcm_used + n])?;
         s.pcm_used += n;
         if n < want {
             // Out of data: silence for the rest, as the original does.
@@ -241,7 +265,9 @@ pub fn stream_close(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 pub fn stream_attribute(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(s) = e.win.mp3.streams.get(&a[0]) else { return Ok(u32::MAX) };
+    let Some(s) = e.win.mp3.streams.get(&a[0]) else {
+        return Ok(u32::MAX);
+    };
     Ok(attribute(s, a[1]))
 }
 
@@ -251,7 +277,10 @@ fn attribute(s: &Mp3Stream, token: u32) -> u32 {
         INPUT_SAMPLE_RATE | OUTPUT_SAMPLE_RATE => s.rate,
         // As the plugin computes it: compressed bits per sample, at least 1.
         INPUT_SAMPLE_WIDTH => {
-            let ratio = (s.rate * s.channels * 16).checked_div(s.bitrate).unwrap_or(0).max(1);
+            let ratio = (s.rate * s.channels * 16)
+                .checked_div(s.bitrate)
+                .unwrap_or(0)
+                .max(1);
             16 / ratio
         }
         INPUT_CHANNELS | OUTPUT_CHANNELS => s.channels,
@@ -279,8 +308,13 @@ pub fn stream_set_preference(e: &mut Emu, a: &Args) -> Res<u32> {
         return Ok(u32::MAX);
     }
     let v = e.mem.read(value, 4)?;
-    let Some(s) = e.win.mp3.streams.get_mut(&h) else { return Ok(u32::MAX) };
-    Ok(std::mem::replace(&mut s.prefs[(token - FIRST_PREFERENCE) as usize], v))
+    let Some(s) = e.win.mp3.streams.get_mut(&h) else {
+        return Ok(u32::MAX);
+    };
+    Ok(std::mem::replace(
+        &mut s.prefs[(token - FIRST_PREFERENCE) as usize],
+        v,
+    ))
 }
 
 #[cfg(test)]
@@ -296,9 +330,27 @@ mod tests {
 
     /// A tiny MP3: 1 s of a 440 Hz tone, made by ffmpeg if it is installed.
     fn sample_mp3() -> Option<Vec<u8>> {
-        let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].into_iter().find(|p| std::path::Path::new(p).exists())?;
+        let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).exists())?;
         let out = std::process::Command::new(ffmpeg)
-            .args(["-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1:sample_rate=22050", "-ac", "2", "-c:a", "libmp3lame", "-b:a", "64k", "-f", "mp3", "-"])
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1:sample_rate=22050",
+                "-ac",
+                "2",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "64k",
+                "-f",
+                "mp3",
+                "-",
+            ])
             .output()
             .ok()?;
         (out.status.success() && !out.stdout.is_empty()).then_some(out.stdout)
@@ -345,7 +397,14 @@ mod tests {
         let h = call(&mut e, stream_open, &[7, fetch, mp3.len() as u32]);
         assert_ne!(h, 0, "recognised as MP3");
         let s = &e.win.mp3.streams[&h];
-        assert_eq!((attribute(s, OUTPUT_SAMPLE_RATE), attribute(s, OUTPUT_CHANNELS), attribute(s, OUTPUT_SAMPLE_WIDTH)), (22050, 2, 16));
+        assert_eq!(
+            (
+                attribute(s, OUTPUT_SAMPLE_RATE),
+                attribute(s, OUTPUT_CHANNELS),
+                attribute(s, OUTPUT_SAMPLE_WIDTH)
+            ),
+            (22050, 2, 16)
+        );
         // Pull it all out in Miles-sized pieces.
         let buf = 0x60000;
         let mut pcm = Vec::new();
@@ -356,12 +415,24 @@ mod tests {
                 break;
             }
         }
-        let samples: Vec<i16> = pcm.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        let samples: Vec<i16> = pcm
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
         let frames = samples.len() / 2;
-        assert!((21000..=24500).contains(&frames), "about one second at 22.05 kHz, got {frames} frames");
-        assert!(samples.iter().any(|&v| v.abs() > 2000), "the tone (ffmpeg makes it at 1/8 of full scale), not silence");
+        assert!(
+            (21000..=24500).contains(&frames),
+            "about one second at 22.05 kHz, got {frames} frames"
+        );
+        assert!(
+            samples.iter().any(|&v| v.abs() > 2000),
+            "the tone (ffmpeg makes it at 1/8 of full scale), not silence"
+        );
         let percent = f32::from_bits(attribute(&e.win.mp3.streams[&h], PERCENT_DONE));
-        assert!((99.0..=100.0).contains(&percent), "all input consumed: {percent}%");
+        assert!(
+            (99.0..=100.0).contains(&percent),
+            "all input consumed: {percent}%"
+        );
         // Seek back to the start and decode again.
         call(&mut e, stream_seek, &[h, 0]);
         assert_eq!(call(&mut e, stream_process, &[h, buf, 4096]), 4096);

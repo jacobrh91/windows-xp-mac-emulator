@@ -27,13 +27,23 @@ impl Memory {
     pub fn new() -> Self {
         let mut pages = Vec::new();
         pages.resize_with(PAGE_COUNT, || None);
-        Memory { pages, watch: None, fault_write: std::cell::Cell::new(false), watch_hits: Vec::new(), code_pages: vec![0; PAGE_COUNT], code_dirty: false }
+        Memory {
+            pages,
+            watch: None,
+            fault_write: std::cell::Cell::new(false),
+            watch_hits: Vec::new(),
+            code_pages: vec![0; PAGE_COUNT],
+            code_dirty: false,
+        }
     }
 
     /// The page table (one pointer per page, null when unmapped) and the code-page map, for
     /// compiled code. Both stay where they are for the life of the `Memory`.
     pub fn page_table(&self) -> (*const usize, *const u8) {
-        (self.pages.as_ptr() as *const usize, self.code_pages.as_ptr())
+        (
+            self.pages.as_ptr() as *const usize,
+            self.code_pages.as_ptr(),
+        )
     }
 
     /// Remember that `[addr, addr + len)` holds cached instructions.
@@ -53,7 +63,12 @@ impl Memory {
     fn check_code(&mut self, addr: u32, len: u32) {
         // SAFETY: both indexes are below PAGE_COUNT (a u32 address shifted by PAGE_BITS).
         let (a, b) = unsafe {
-            (*self.code_pages.get_unchecked((addr >> PAGE_BITS) as usize), *self.code_pages.get_unchecked((addr.wrapping_add(len.max(1) - 1) >> PAGE_BITS) as usize))
+            (
+                *self.code_pages.get_unchecked((addr >> PAGE_BITS) as usize),
+                *self
+                    .code_pages
+                    .get_unchecked((addr.wrapping_add(len.max(1) - 1) >> PAGE_BITS) as usize),
+            )
         };
         if a | b != 0 {
             self.code_dirty = true;
@@ -65,7 +80,9 @@ impl Memory {
     pub fn first_mapped(&self, addr: u32, size: u32) -> Option<u32> {
         let first = (addr >> PAGE_BITS) as usize;
         let last = (((addr as u64) + (size as u64).max(1) - 1) >> PAGE_BITS) as usize;
-        (first..=last.min(PAGE_COUNT - 1)).find(|&p| self.pages[p].is_some()).map(|p| (p as u32) << PAGE_BITS)
+        (first..=last.min(PAGE_COUNT - 1))
+            .find(|&p| self.pages[p].is_some())
+            .map(|p| (p as u32) << PAGE_BITS)
     }
 
     pub fn map(&mut self, addr: u32, size: u32) {
@@ -190,9 +207,11 @@ impl Memory {
     #[inline(never)]
     fn note_watch(&mut self, addr: u32, n: u32, val: u32) {
         if let Some(w) = self.watch
-            && addr <= w && w < addr.wrapping_add(n) {
-                self.watch_hits.push((addr, n, val));
-            }
+            && addr <= w
+            && w < addr.wrapping_add(n)
+        {
+            self.watch_hits.push((addr, n, val));
+        }
     }
 
     #[inline(always)]

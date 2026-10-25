@@ -13,9 +13,9 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, sync_channel};
 
 use super::speaker::SpeakerHandle;
 
@@ -34,7 +34,9 @@ fn ffmpeg() -> Option<PathBuf> {
 }
 
 fn tool(name: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
     dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
 }
@@ -76,7 +78,17 @@ fn parse_probe(line: &str) -> Option<Info> {
 
 fn probe(path: &Path) -> Option<Info> {
     let out = Command::new(tool("ffprobe")?)
-        .args(["-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries", "stream=width,height,r_frame_rate,nb_read_packets", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_packets",
+            "-show_entries",
+            "stream=width,height,r_frame_rate,nb_read_packets",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(path)
         .stderr(Stdio::null())
         .output()
@@ -112,7 +124,16 @@ impl Soundtrack {
         let mut child = Command::new(ffmpeg()?)
             .args(["-v", "error", "-nostdin", "-i"])
             .arg(path)
-            .args(["-vn", "-f", "f32le", "-ac", "2", "-ar", &speaker.rate.to_string(), "-"])
+            .args([
+                "-vn",
+                "-f",
+                "f32le",
+                "-ac",
+                "2",
+                "-ar",
+                &speaker.rate.to_string(),
+                "-",
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -137,12 +158,22 @@ impl Soundtrack {
                 }
                 let frames: Vec<[f32; 2]> = buf
                     .chunks_exact(8)
-                    .map(|f| [f32::from_le_bytes([f[0], f[1], f[2], f[3]]), f32::from_le_bytes([f[4], f[5], f[6], f[7]])])
+                    .map(|f| {
+                        [
+                            f32::from_le_bytes([f[0], f[1], f[2], f[3]]),
+                            f32::from_le_bytes([f[4], f[5], f[6], f[7]]),
+                        ]
+                    })
                     .collect();
                 sp.queue(voice, &frames);
             }
         });
-        Some(Soundtrack { child, stop, speaker, voice })
+        Some(Soundtrack {
+            child,
+            stop,
+            speaker,
+            voice,
+        })
     }
 }
 
@@ -171,10 +202,12 @@ impl Movie {
         let mut out = child.stdout.take().expect("piped stdout");
         let size = (self.info.width * self.info.height * 4) as usize;
         let (tx, rx) = sync_channel::<Vec<u8>>(8);
-        std::thread::spawn(move || loop {
-            let mut buf = vec![0u8; size];
-            if out.read_exact(&mut buf).is_err() || tx.send(buf).is_err() {
-                return;
+        std::thread::spawn(move || {
+            loop {
+                let mut buf = vec![0u8; size];
+                if out.read_exact(&mut buf).is_err() || tx.send(buf).is_err() {
+                    return;
+                }
             }
         });
         self.child = Some(child);
@@ -196,7 +229,9 @@ impl Movie {
             self.start_decoder();
         }
         while self.decoded < n {
-            let Some(rx) = self.frames.as_ref() else { return };
+            let Some(rx) = self.frames.as_ref() else {
+                return;
+            };
             match rx.recv() {
                 Ok(f) => {
                     self.current = f;
@@ -225,7 +260,9 @@ pub struct BinkState {
 
 /// Argument bytes / 4 from a decorated stdcall name such as `_BinkOpen@8`.
 fn argc_of(name: &str) -> Option<usize> {
-    name.rsplit_once('@').and_then(|(_, n)| n.parse::<usize>().ok()).map(|b| b / 4)
+    name.rsplit_once('@')
+        .and_then(|(_, n)| n.parse::<usize>().ok())
+        .map(|b| b / 4)
 }
 
 pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
@@ -253,7 +290,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
                     m.frame_num += 1;
                 }
                 let n = m.frame_num;
-                e.mem.write(a[0] + OFF_LAST_FRAME_NUM, 4, n.saturating_sub(1))?;
+                e.mem
+                    .write(a[0] + OFF_LAST_FRAME_NUM, 4, n.saturating_sub(1))?;
                 e.mem.write(a[0] + OFF_FRAME_NUM, 4, n)?;
             }
             Ok(0)
@@ -261,16 +299,22 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "BinkWait" => |e, a| {
             // 1 = too early for the next frame. Frames are due on the movie's own clock.
             let now = e.win.now_ms();
-            let Some(m) = e.win.bink.movies.get(&a[0]) else { return Ok(0) };
+            let Some(m) = e.win.bink.movies.get(&a[0]) else {
+                return Ok(0);
+            };
             if m.paused_at.is_some() {
                 return Ok(1);
             }
-            let due = m.start_ms + (m.frame_num.saturating_sub(1) as u64) * 1000 * m.info.div as u64 / m.info.rate.max(1) as u64;
+            let due = m.start_ms
+                + (m.frame_num.saturating_sub(1) as u64) * 1000 * m.info.div as u64
+                    / m.info.rate.max(1) as u64;
             Ok((now < due) as u32)
         },
         "BinkPause" => |e, a| {
             let now = e.win.now_ms();
-            let Some(m) = e.win.bink.movies.get_mut(&a[0]) else { return Ok(0) };
+            let Some(m) = e.win.bink.movies.get_mut(&a[0]) else {
+                return Ok(0);
+            };
             if let Some(snd) = &m.sound {
                 snd.speaker.set_paused(snd.voice, a[1] != 0);
             }
@@ -285,7 +329,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(a[1])
         },
         "BinkGetRects" => |e, a| {
-            let Some(info) = e.win.bink.movies.get(&a[0]).map(|m| m.info) else { return Ok(0) };
+            let Some(info) = e.win.bink.movies.get(&a[0]).map(|m| m.info) else {
+                return Ok(0);
+            };
             for (i, v) in [0, 0, info.width, info.height].iter().enumerate() {
                 e.mem.write(a[0] + OFF_RECTS + 4 * i as u32, 4, *v)?;
             }
@@ -302,7 +348,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(e.win.bink.error)
         },
         // Sound: accepted and ignored for now.
-        "BinkSetSoundSystem" | "BinkSetSoundTrack" | "BinkSetVolume" | "BinkSetSoundOnOff" | "BinkSetPan" => |_, _| Ok(1),
+        "BinkSetSoundSystem" | "BinkSetSoundTrack" | "BinkSetVolume" | "BinkSetSoundOnOff"
+        | "BinkSetPan" => |_, _| Ok(1),
         // The game passes these to BinkSetSoundSystem as "open the sound system" callbacks;
         // they only need to be non-null.
         "BinkOpenDirectSound" | "BinkOpenMiles" | "BinkOpenWaveOut" => |_, _| Ok(1),
@@ -313,7 +360,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
 
 fn bink_open(e: &mut Emu, a: &Args) -> Res<u32> {
     let name = e.mem.read_cstr(a[0])?;
-    let Ok(path) = e.win.vfs.resolve(&name) else { return Ok(0) };
+    let Ok(path) = e.win.vfs.resolve(&name) else {
+        return Ok(0);
+    };
     if !path.is_file() {
         return Ok(0);
     }
@@ -349,7 +398,10 @@ fn bink_open(e: &mut Emu, a: &Args) -> Res<u32> {
     // The movie's own handle doubles as its speaker voice id.
     m.sound = e.speaker().and_then(|sp| Soundtrack::start(&m.path, sp, p));
     if e.win.trace {
-        eprintln!("[bink] {name}: {}x{}, {} frames at {}/{} fps", info.width, info.height, info.frames, info.rate, info.div);
+        eprintln!(
+            "[bink] {name}: {}x{}, {} frames at {}/{} fps",
+            info.width, info.height, info.frames, info.rate, info.div
+        );
     }
     e.win.bink.movies.insert(p, m);
     Ok(p)
@@ -360,21 +412,23 @@ fn convert(px: &[u8], kind: u32) -> ([u8; 4], usize) {
     let (b, g, r, a) = (px[0] as u32, px[1] as u32, px[2] as u32, px[3] as u32);
     let w16 = |v: u32| -> ([u8; 4], usize) { ([v as u8, (v >> 8) as u8, 0, 0], 2) };
     match kind {
-        1 => ([b as u8, g as u8, r as u8, 0], 3),                                  // 24: B G R
-        2 => ([r as u8, g as u8, b as u8, 0], 3),                                  // 24R
-        4 | 6 => ([r as u8, g as u8, b as u8, a as u8], 4),                        // 32R / 32RA
+        1 => ([b as u8, g as u8, r as u8, 0], 3), // 24: B G R
+        2 => ([r as u8, g as u8, b as u8, 0], 3), // 24R
+        4 | 6 => ([r as u8, g as u8, b as u8, a as u8], 4), // 32R / 32RA
         7 => w16(((a >> 4) << 12) | ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)), // 4444
         8 => w16(((a >> 7) << 15) | ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)), // 5551
-        9 => w16(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)),                   // 555
-        10 => w16(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)),                  // 565
-        _ => ([b as u8, g as u8, r as u8, a as u8], 4),                            // 32 / 32A: B G R A
+        9 => w16(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)), // 555
+        10 => w16(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)), // 565
+        _ => ([b as u8, g as u8, r as u8, a as u8], 4), // 32 / 32A: B G R A
     }
 }
 
 fn copy_to_buffer(e: &mut Emu, a: &Args) -> Res<u32> {
     // (bink, dest, destpitch, destheight, destx, desty, flags)
     let (dest, pitch, dest_h, dx, dy, kind) = (a[1], a[2], a[3], a[4], a[5], a[6] & 0xF);
-    let Some(m) = e.win.bink.movies.get(&a[0]) else { return Ok(0) };
+    let Some(m) = e.win.bink.movies.get(&a[0]) else {
+        return Ok(0);
+    };
     let (w, h) = (m.info.width, m.info.height);
     let rows = h.min(dest_h.saturating_sub(dy));
     let mut line = Vec::with_capacity((w * 4) as usize);
@@ -393,7 +447,8 @@ fn copy_to_buffer(e: &mut Emu, a: &Args) -> Res<u32> {
             }
             n as u32
         };
-        e.mem.write_bytes(dest + (dy + y) * pitch + dx * bpp, &line)?;
+        e.mem
+            .write_bytes(dest + (dy + y) * pitch + dx * bpp, &line)?;
     }
     Ok(0)
 }
@@ -413,7 +468,16 @@ mod tests {
 
     #[test]
     fn probe_output_is_parsed() {
-        assert_eq!(parse_probe("640,480,2997/100,606\n"), Some(Info { width: 640, height: 480, rate: 2997, div: 100, frames: 606 }));
+        assert_eq!(
+            parse_probe("640,480,2997/100,606\n"),
+            Some(Info {
+                width: 640,
+                height: 480,
+                rate: 2997,
+                div: 100,
+                frames: 606
+            })
+        );
         assert_eq!(parse_probe("garbage"), None);
     }
 
@@ -425,7 +489,10 @@ mod tests {
         assert_eq!(convert(&px, 1), ([0x10, 0x80, 0xF0, 0], 3));
         let (b, n) = convert(&px, 10);
         assert_eq!(n, 2);
-        assert_eq!(u16::from_le_bytes([b[0], b[1]]), (0xF0 >> 3) << 11 | (0x80 >> 2) << 5 | (0x10 >> 3));
+        assert_eq!(
+            u16::from_le_bytes([b[0], b[1]]),
+            (0xF0 >> 3) << 11 | (0x80 >> 2) << 5 | (0x10 >> 3)
+        );
     }
 
     /// Decode a real movie when the game files and ffmpeg are present.
@@ -438,12 +505,26 @@ mod tests {
         let info = probe(path).expect("ffprobe reads the movie");
         assert_eq!((info.width, info.height), (640, 480));
         assert!(info.frames > 100);
-        let mut m = Movie { info, path: path.to_path_buf(), child: None, frames: None, current: vec![], decoded: 0, frame_num: 1, start_ms: 0, paused_at: None, sound: None };
+        let mut m = Movie {
+            info,
+            path: path.to_path_buf(),
+            child: None,
+            frames: None,
+            current: vec![],
+            decoded: 0,
+            frame_num: 1,
+            start_ms: 0,
+            paused_at: None,
+            sound: None,
+        };
         m.start_decoder();
         m.decode_to(30);
         assert_eq!(m.decoded, 30);
         assert_eq!(m.current.len(), 640 * 480 * 4);
-        assert!(m.current.chunks_exact(4).any(|p| p[0] | p[1] | p[2] != 0), "frame 30 is not all black");
+        assert!(
+            m.current.chunks_exact(4).any(|p| p[0] | p[1] | p[2] != 0),
+            "frame 30 is not all black"
+        );
     }
 
     /// The soundtrack decodes into a speaker voice and stays only a little ahead.
@@ -457,11 +538,21 @@ mod tests {
         let snd = Soundtrack::start(path, sp.clone(), 7).expect("ffmpeg starts");
         std::thread::sleep(std::time::Duration::from_millis(500));
         let (queued, _) = sp.progress(7);
-        assert!(queued >= 4000, "about half a second is decoded ahead ({queued} frames)");
-        assert!(queued <= 4000 + 1024, "and then it waits for the speakers ({queued} frames)");
+        assert!(
+            queued >= 4000,
+            "about half a second is decoded ahead ({queued} frames)"
+        );
+        assert!(
+            queued <= 4000 + 1024,
+            "and then it waits for the speakers ({queued} frames)"
+        );
         let heard = sp.drain(4000);
         assert!(heard.iter().any(|f| f[0] != 0.0), "the intro is not silent");
         drop(snd);
-        assert_eq!(sp.progress(7), (0, 0), "closing the movie removes its voice");
+        assert_eq!(
+            sp.progress(7),
+            (0, 0),
+            "closing the movie removes its voice"
+        );
     }
 }

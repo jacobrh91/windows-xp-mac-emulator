@@ -11,7 +11,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         // ---- resources ----
         ("kernel32", "FindResourceA") => (3, |e, a| find_resource_api(e, a[0], a[2], a[1], false)),
         ("kernel32", "FindResourceW") => (3, |e, a| find_resource_api(e, a[0], a[2], a[1], true)),
-        ("kernel32", "FindResourceExA") => (4, |e, a| find_resource_api(e, a[0], a[1], a[2], false)),
+        ("kernel32", "FindResourceExA") => {
+            (4, |e, a| find_resource_api(e, a[0], a[1], a[2], false))
+        }
         ("kernel32", "FindResourceExW") => (4, |e, a| find_resource_api(e, a[0], a[1], a[2], true)),
         ("kernel32", "LoadResource") => (2, |e, a| {
             let base = module_base(e, a[0]);
@@ -24,7 +26,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
 
         // ---- paths / process info ----
         ("kernel32", "GetWindowsDirectoryA") => (2, |e, a| put_str(e, a[0], a[1], r"C:\WINDOWS")),
-        ("kernel32", "GetSystemDirectoryA") => (2, |e, a| put_str(e, a[0], a[1], r"C:\WINDOWS\system32")),
+        ("kernel32", "GetSystemDirectoryA") => {
+            (2, |e, a| put_str(e, a[0], a[1], r"C:\WINDOWS\system32"))
+        }
         ("kernel32", "GetTempPathA") => (2, |e, a| put_str(e, a[1], a[0], r"C:\Temp\")),
         ("kernel32", "IsDebuggerPresent") => (0, |_, _| Ok(0)),
         // Programs report their own errors here; surface them (also when not tracing).
@@ -39,7 +43,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "TerminateProcess") => (2, |_, a| Err(Stop::Exit(a[1]))),
         ("kernel32", "GetSystemInfo") => (1, k32_get_system_info),
         ("kernel32", "GetSystemTimeAsFileTime") => (1, |e, a| {
-            let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+            let t = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default();
             let ft = (t.as_secs() + 11_644_473_600) * 10_000_000 + t.subsec_nanos() as u64 / 100;
             e.mem.write(a[0], 4, ft as u32)?;
             e.mem.write(a[0] + 4, 4, (ft >> 32) as u32)?;
@@ -62,13 +68,23 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(p)
         }),
         // NULL on success, the handle back on failure.
-        ("kernel32", "GlobalFree") | ("kernel32", "LocalFree") => (1, |e, a| Ok(if a[0] == 0 || e.heap_free(a[0]) { 0 } else { a[0] })),
+        ("kernel32", "GlobalFree") | ("kernel32", "LocalFree") => (1, |e, a| {
+            Ok(if a[0] == 0 || e.heap_free(a[0]) {
+                0
+            } else {
+                a[0]
+            })
+        }),
         ("kernel32", "GlobalLock") => (1, |_, a| Ok(a[0])),
         ("kernel32", "GlobalUnlock") => (1, |_, _| Ok(0)),
 
         // ---- interlocked ----
-        ("kernel32", "InterlockedIncrement") => (1, |e, a| interlocked(e, a[0], |v| v.wrapping_add(1), true)),
-        ("kernel32", "InterlockedDecrement") => (1, |e, a| interlocked(e, a[0], |v| v.wrapping_sub(1), true)),
+        ("kernel32", "InterlockedIncrement") => {
+            (1, |e, a| interlocked(e, a[0], |v| v.wrapping_add(1), true))
+        }
+        ("kernel32", "InterlockedDecrement") => {
+            (1, |e, a| interlocked(e, a[0], |v| v.wrapping_sub(1), true))
+        }
         ("kernel32", "InterlockedExchange") => (2, |e, a| {
             let new = a[1];
             interlocked(e, a[0], move |_| new, false)
@@ -107,7 +123,11 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "lstrcmpiA") => (2, |e, a| lstrcmp(e, a[0], a[1], true)),
         ("kernel32", "MulDiv") => (3, |_, a| {
             let (x, y, z) = (a[0] as i32 as i64, a[1] as i32 as i64, a[2] as i32 as i64);
-            Ok(if z == 0 { u32::MAX } else { ((x * y + z / 2) / z) as u32 })
+            Ok(if z == 0 {
+                u32::MAX
+            } else {
+                ((x * y + z / 2) / z) as u32
+            })
         }),
         ("kernel32", "MultiByteToWideChar") => (6, k32_multi_byte_to_wide),
         ("kernel32", "WideCharToMultiByte") => (8, k32_wide_to_multi_byte),
@@ -304,10 +324,18 @@ fn dir_find(e: &Emu, root: u32, dir: u32, key: &Key) -> Res<Option<(bool, u32)>>
 }
 
 /// The raw bytes of resource (type id, name) in the module `hmod`.
-pub(crate) fn resource_bytes(e: &Emu, hmod: u32, ty: u32, name: u32, wide: bool) -> Res<Option<Vec<u8>>> {
+pub(crate) fn resource_bytes(
+    e: &Emu,
+    hmod: u32,
+    ty: u32,
+    name: u32,
+    wide: bool,
+) -> Res<Option<Vec<u8>>> {
     let base = module_base(e, hmod);
     let key = read_key(e, name, wide)?;
-    let Some(entry) = find_resource(e, base, &Key::Id(ty), &key)? else { return Ok(None) };
+    let Some(entry) = find_resource(e, base, &Key::Id(ty), &key)? else {
+        return Ok(None);
+    };
     let (rva, size) = (e.mem.read(entry, 4)?, e.mem.read(entry + 4, 4)?);
     Ok(Some(e.mem.read_bytes(base + rva, size)?))
 }
@@ -324,9 +352,15 @@ fn find_resource(e: &Emu, base: u32, ty: &Key, name: &Key) -> Res<Option<u32>> {
         return Ok(None);
     }
     let root = base + rsrc_rva;
-    let Some((true, type_dir)) = dir_find(e, root, 0, ty)? else { return Ok(None) };
-    let Some((true, name_dir)) = dir_find(e, root, type_dir, name)? else { return Ok(None) };
-    let Some((false, entry)) = dir_find(e, root, name_dir, &Key::Any)? else { return Ok(None) };
+    let Some((true, type_dir)) = dir_find(e, root, 0, ty)? else {
+        return Ok(None);
+    };
+    let Some((true, name_dir)) = dir_find(e, root, type_dir, name)? else {
+        return Ok(None);
+    };
+    let Some((false, entry)) = dir_find(e, root, name_dir, &Key::Any)? else {
+        return Ok(None);
+    };
     Ok(Some(root + entry))
 }
 
@@ -364,11 +398,16 @@ pub(crate) fn load_string(e: &mut Emu, a: &Args, wide: bool) -> Res<u32> {
         if wide {
             e.mem.write(buf + 2 * i, 2, c)?;
         } else {
-            e.mem.write(buf + i, 1, if c < 256 { c } else { b'?' as u32 })?;
+            e.mem
+                .write(buf + i, 1, if c < 256 { c } else { b'?' as u32 })?;
         }
     }
     if cch > 0 {
-        e.mem.write(buf + if wide { 2 * n } else { n }, if wide { 2 } else { 1 }, 0)?;
+        e.mem.write(
+            buf + if wide { 2 * n } else { n },
+            if wide { 2 } else { 1 },
+            0,
+        )?;
     }
     Ok(n)
 }
@@ -403,7 +442,13 @@ mod tests {
         };
         let sub = 0x8000_0000u32;
         // root: named "CUSTOM" (string at 0x300), ids 6 and 10
-        dir(&mut e, 0x00, 1, 2, &[(sub | 0x300, sub | 0x40), (6, sub | 0x60), (10, sub | 0x80)]);
+        dir(
+            &mut e,
+            0x00,
+            1,
+            2,
+            &[(sub | 0x300, sub | 0x40), (6, sub | 0x60), (10, sub | 0x80)],
+        );
         // string table type -> name 1 -> lang
         dir(&mut e, 0x60, 0, 1, &[(1, sub | 0xA0)]);
         dir(&mut e, 0xA0, 0, 1, &[(0x409, 0xE0)]); // data entry at 0xE0
@@ -417,7 +462,9 @@ mod tests {
         let put_str16 = |e: &mut Emu, at: u32, s: &str| {
             e.mem.write(root + at, 2, s.len() as u32).unwrap();
             for (i, c) in s.encode_utf16().enumerate() {
-                e.mem.write(root + at + 2 + 2 * i as u32, 2, c as u32).unwrap();
+                e.mem
+                    .write(root + at + 2 + 2 * i as u32, 2, c as u32)
+                    .unwrap();
             }
         };
         put_str16(&mut e, 0x300, "CUSTOM");
@@ -473,9 +520,16 @@ mod tests {
         e.mem.map(0x20000, 0x100);
         e.mem.write_bytes(0x20000, b"custom\0").unwrap();
         e.mem.write_bytes(0x20010, b"THING\0").unwrap();
-        let h = call(&mut e, "FindResourceA", &[BASE, 0x20010, 0x20000, 0, 0, 0, 0, 0]);
+        let h = call(
+            &mut e,
+            "FindResourceA",
+            &[BASE, 0x20010, 0x20000, 0, 0, 0, 0, 0],
+        );
         assert_ne!(h, 0);
-        assert_eq!(call(&mut e, "SizeofResource", &[BASE, h, 0, 0, 0, 0, 0, 0]), 3);
+        assert_eq!(
+            call(&mut e, "SizeofResource", &[BASE, h, 0, 0, 0, 0, 0, 0]),
+            3
+        );
     }
 
     #[test]
@@ -490,7 +544,10 @@ mod tests {
     fn hmodule_zero_means_main_image() {
         let mut e = module_with_resources();
         e.win.image_base = BASE;
-        assert_ne!(call(&mut e, "FindResourceA", &[0, 101, 10, 0, 0, 0, 0, 0]), 0);
+        assert_ne!(
+            call(&mut e, "FindResourceA", &[0, 101, 10, 0, 0, 0, 0, 0]),
+            0
+        );
     }
 
     #[test]
@@ -507,12 +564,44 @@ mod tests {
         let mut e = Emu::new();
         e.mem.map(0x9000, 0x100);
         e.mem.write(0x9000, 4, 5).unwrap();
-        assert_eq!(call(&mut e, "InterlockedIncrement", &[0x9000, 0, 0, 0, 0, 0, 0, 0]), 6);
-        assert_eq!(call(&mut e, "InterlockedExchange", &[0x9000, 9, 0, 0, 0, 0, 0, 0]), 6);
-        assert_eq!(call(&mut e, "InterlockedCompareExchange", &[0x9000, 1, 9, 0, 0, 0, 0, 0]), 9);
+        assert_eq!(
+            call(
+                &mut e,
+                "InterlockedIncrement",
+                &[0x9000, 0, 0, 0, 0, 0, 0, 0]
+            ),
+            6
+        );
+        assert_eq!(
+            call(
+                &mut e,
+                "InterlockedExchange",
+                &[0x9000, 9, 0, 0, 0, 0, 0, 0]
+            ),
+            6
+        );
+        assert_eq!(
+            call(
+                &mut e,
+                "InterlockedCompareExchange",
+                &[0x9000, 1, 9, 0, 0, 0, 0, 0]
+            ),
+            9
+        );
         assert_eq!(e.mem.read(0x9000, 4).unwrap(), 1);
-        assert_eq!(call(&mut e, "InterlockedCompareExchange", &[0x9000, 7, 99, 0, 0, 0, 0, 0]), 1);
-        assert_eq!(e.mem.read(0x9000, 4).unwrap(), 1, "failed compare leaves value alone");
+        assert_eq!(
+            call(
+                &mut e,
+                "InterlockedCompareExchange",
+                &[0x9000, 7, 99, 0, 0, 0, 0, 0]
+            ),
+            1
+        );
+        assert_eq!(
+            e.mem.read(0x9000, 4).unwrap(),
+            1,
+            "failed compare leaves value alone"
+        );
     }
 
     #[test]
@@ -521,8 +610,14 @@ mod tests {
         e.mem.map(0x9000, 0x1000);
         e.mem.write_bytes(0x9000, b"abc\0").unwrap();
         e.mem.write_bytes(0x9100, b"ABD\0").unwrap();
-        assert_eq!(call(&mut e, "lstrcmpiA", &[0x9000, 0x9100, 0, 0, 0, 0, 0, 0]), u32::MAX);
-        assert_eq!(call(&mut e, "lstrcmpA", &[0x9000, 0x9000, 0, 0, 0, 0, 0, 0]), 0);
+        assert_eq!(
+            call(&mut e, "lstrcmpiA", &[0x9000, 0x9100, 0, 0, 0, 0, 0, 0]),
+            u32::MAX
+        );
+        assert_eq!(
+            call(&mut e, "lstrcmpA", &[0x9000, 0x9000, 0, 0, 0, 0, 0, 0]),
+            0
+        );
         call(&mut e, "lstrcatA", &[0x9000, 0x9100, 0, 0, 0, 0, 0, 0]);
         assert_eq!(e.mem.read_cstr(0x9000).unwrap(), "abcABD");
         call(&mut e, "lstrcpynA", &[0x9200, 0x9000, 4, 0, 0, 0, 0, 0]);
@@ -534,15 +629,34 @@ mod tests {
         let mut e = Emu::new();
         e.mem.map(0x9000, 0x1000);
         e.mem.write_bytes(0x9000, b"hello\0").unwrap();
-        let need = call(&mut e, "MultiByteToWideChar", &[0, 0, 0x9000, u32::MAX, 0, 0, 0, 0]);
+        let need = call(
+            &mut e,
+            "MultiByteToWideChar",
+            &[0, 0, 0x9000, u32::MAX, 0, 0, 0, 0],
+        );
         assert_eq!(need, 6, "length including NUL");
-        call(&mut e, "MultiByteToWideChar", &[0, 0, 0x9000, u32::MAX, 0x9100, 16, 0, 0]);
+        call(
+            &mut e,
+            "MultiByteToWideChar",
+            &[0, 0, 0x9000, u32::MAX, 0x9100, 16, 0, 0],
+        );
         assert_eq!(e.mem.read(0x9102, 2).unwrap(), b'e' as u32);
-        let n = call(&mut e, "WideCharToMultiByte", &[0, 0, 0x9100, u32::MAX, 0x9200, 16, 0, 0]);
+        let n = call(
+            &mut e,
+            "WideCharToMultiByte",
+            &[0, 0, 0x9100, u32::MAX, 0x9200, 16, 0, 0],
+        );
         assert_eq!(n, 6);
         assert_eq!(e.mem.read_cstr(0x9200).unwrap(), "hello");
         // too-small output buffer
-        assert_eq!(call(&mut e, "MultiByteToWideChar", &[0, 0, 0x9000, u32::MAX, 0x9300, 2, 0, 0]), 0);
+        assert_eq!(
+            call(
+                &mut e,
+                "MultiByteToWideChar",
+                &[0, 0, 0x9000, u32::MAX, 0x9300, 2, 0, 0]
+            ),
+            0
+        );
         assert_eq!(e.win.last_error, 122);
     }
 

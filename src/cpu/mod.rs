@@ -9,7 +9,7 @@ pub mod sse;
 
 use crate::cpu::fpu::Fpu;
 use crate::memory::{Fault, Memory};
-use crate::win32::{Win32, HLE_BASE, HLE_END};
+use crate::win32::{HLE_BASE, HLE_END, Win32};
 
 pub const EAX: usize = 0;
 pub const ECX: usize = 1;
@@ -49,11 +49,17 @@ pub enum Stop {
     /// Internal: the running thread has finished.
     ThreadExit,
     Fault(Fault),
-    InvalidOpcode { eip: u32, bytes: [u8; 3] },
+    InvalidOpcode {
+        eip: u32,
+        bytes: [u8; 3],
+    },
     DivideError(u32),
     Unimplemented(String),
     /// A software exception (RaiseException / C++ throw) that no handler took.
-    Exception { code: u32, address: u32 },
+    Exception {
+        code: u32,
+        address: u32,
+    },
 }
 
 impl From<Fault> for Stop {
@@ -97,7 +103,9 @@ fn sign_bit(bits: u32) -> u32 {
 /// Bytes that are instruction prefixes (operand size, segment overrides, rep, lock).
 const IS_PREFIX: [bool; 256] = {
     let mut t = [false; 256];
-    let list = [0x66u8, 0x64, 0xF2, 0xF3, 0x26, 0x2E, 0x36, 0x3E, 0x65, 0x67, 0xF0];
+    let list = [
+        0x66u8, 0x64, 0xF2, 0xF3, 0x26, 0x2E, 0x36, 0x3E, 0x65, 0x67, 0xF0,
+    ];
     let mut i = 0;
     while i < list.len() {
         t[list[i] as usize] = true;
@@ -237,14 +245,20 @@ impl Emu {
     /// back to the stub, result already in EAX, then its normal stdcall/cdecl return.
     fn finish_nested(&mut self) -> Res<()> {
         let Some((eip, esp)) = self.nested.pop() else {
-            return Err(Stop::Unimplemented("guest returned to a callback with no caller".into()));
+            return Err(Stop::Unimplemented(
+                "guest returned to a callback with no caller".into(),
+            ));
         };
         self.eip = eip;
         self.regs[ESP] = esp;
         let idx = ((eip - HLE_BASE) / 4) as usize;
         let (argc, cdecl) = match self.win.stubs.get(idx) {
             Some(s) => (s.argc & 0xff, s.argc & crate::win32::CDECL != 0),
-            None => return Err(Stop::Unimplemented(format!("callback resumed into unknown stub {eip:#x}"))),
+            None => {
+                return Err(Stop::Unimplemented(format!(
+                    "callback resumed into unknown stub {eip:#x}"
+                )));
+            }
         };
         self.eip = self.pop()?;
         if !cdecl {
@@ -264,9 +278,10 @@ impl Emu {
                 self.last_pump = self.steps;
                 if self.win.audio.active()
                     && let Err(stop) = self.pump_devices()
-                        && let Some(stop) = self.route_stop(stop) {
-                            return stop;
-                        }
+                    && let Some(stop) = self.route_stop(stop)
+                {
+                    return stop;
+                }
             }
             // Run a batch of instructions; the bookkeeping above and below is per batch.
             let multi = self.threads.len() > 1;
@@ -381,7 +396,10 @@ impl Emu {
         let reg = ((b >> 3) & 7) as usize;
         let rm = (b & 7) as usize;
         if md == 3 {
-            return Ok(ModRm { reg, rm: Op::Reg(rm) });
+            return Ok(ModRm {
+                reg,
+                rm: Op::Reg(rm),
+            });
         }
         let mut addr;
         if rm == 4 {
@@ -410,7 +428,10 @@ impl Emu {
         if p.fs {
             addr = addr.wrapping_add(self.fs_base);
         }
-        Ok(ModRm { reg, rm: Op::Mem(addr) })
+        Ok(ModRm {
+            reg,
+            rm: Op::Mem(addr),
+        })
     }
 
     // ---- flags / ALU -------------------------------------------------------
@@ -431,14 +452,20 @@ impl Emu {
 
     #[inline(always)]
     fn set_szp(&mut self, r: u32, bits: u32) {
-        let f = (((r == 0) as u32) * ZF) | (((r & sign_bit(bits) != 0) as u32) * SF) | ((PARITY[(r & 0xFF) as usize] as u32) * PF);
+        let f = (((r == 0) as u32) * ZF)
+            | (((r & sign_bit(bits) != 0) as u32) * SF)
+            | ((PARITY[(r & 0xFF) as usize] as u32) * PF);
         self.eflags = (self.eflags & !(ZF | SF | PF)) | f;
     }
 
     /// Set all of CF, OF, ZF, SF and PF at once (the arithmetic and logic instructions).
     #[inline(always)]
     fn set_arith_flags(&mut self, r: u32, bits: u32, cf: bool, of: bool) {
-        let f = ((cf as u32) * CF) | ((of as u32) * OF) | (((r == 0) as u32) * ZF) | (((r & sign_bit(bits) != 0) as u32) * SF) | ((PARITY[(r & 0xFF) as usize] as u32) * PF);
+        let f = ((cf as u32) * CF)
+            | ((of as u32) * OF)
+            | (((r == 0) as u32) * ZF)
+            | (((r & sign_bit(bits) != 0) as u32) * SF)
+            | ((PARITY[(r & 0xFF) as usize] as u32) * PF);
         self.eflags = (self.eflags & !(CF | OF | ZF | SF | PF)) | f;
     }
 
@@ -457,7 +484,11 @@ impl Emu {
             3 | 5 | 7 => {
                 let carry_in = (self.eflags & CF) * (op == 3) as u32;
                 let r = a.wrapping_sub(b).wrapping_sub(carry_in) & m;
-                (r, (a as u64) < b as u64 + carry_in as u64, (a ^ b) & (a ^ r) & s != 0)
+                (
+                    r,
+                    (a as u64) < b as u64 + carry_in as u64,
+                    (a ^ b) & (a ^ r) & s != 0,
+                )
             }
             1 => ((a | b) & m, false, false),
             4 => ((a & b) & m, false, false),
@@ -478,13 +509,21 @@ impl Emu {
         match op {
             0 => {
                 let c = count % bits;
-                let r = if c == 0 { a } else { ((a << c) | (a >> (bits - c))) & m };
+                let r = if c == 0 {
+                    a
+                } else {
+                    ((a << c) | (a >> (bits - c))) & m
+                };
                 self.set_flag(CF, r & 1 != 0);
                 Ok(r)
             }
             1 => {
                 let c = count % bits;
-                let r = if c == 0 { a } else { ((a >> c) | (a << (bits - c))) & m };
+                let r = if c == 0 {
+                    a
+                } else {
+                    ((a >> c) | (a << (bits - c))) & m
+                };
                 self.set_flag(CF, msb(r));
                 Ok(r)
             }
@@ -560,10 +599,12 @@ impl Emu {
     #[inline(always)]
     fn step_many(&mut self, limit: u64) -> (u64, Res<()>) {
         // Debugging aids watch every instruction, so they take the single-step path.
-        if self.icache_on && self.profile.is_none() && self.mem.watch.is_none() {
-            if let Some(r) = self.run_block(limit) {
-                return r;
-            }
+        if self.icache_on
+            && self.profile.is_none()
+            && self.mem.watch.is_none()
+            && let Some(r) = self.run_block(limit)
+        {
+            return r;
         }
         (1, self.step())
     }
@@ -583,21 +624,34 @@ impl Emu {
             }
             // opcode histogram, under keys with the top bit set
             if let Ok(b) = self.mem.read_u8(start) {
-                let key = if b == 0x0F { 0x8000_0000 | 0x100 | self.mem.read_u8(start + 1).unwrap_or(0) as u32 } else { 0x8000_0000 | b as u32 };
+                let key = if b == 0x0F {
+                    0x8000_0000 | 0x100 | self.mem.read_u8(start + 1).unwrap_or(0) as u32
+                } else {
+                    0x8000_0000 | b as u32
+                };
                 *p.entry(key).or_insert(0) += 1;
             }
         }
         let saved = (self.regs, self.eflags);
-        let r = if self.icache_on { self.step_cached(start) } else { self.step_decoded(start) };
+        let r = if self.icache_on {
+            self.step_cached(start)
+        } else {
+            self.step_decoded(start)
+        };
         if self.mem.watch.is_some() {
             for (addr, n, val) in self.mem.take_watch_hits() {
-                let loc = self.win.locate(start).unwrap_or_else(|| format!("{start:#x}"));
+                let loc = self
+                    .win
+                    .locate(start)
+                    .unwrap_or_else(|| format!("{start:#x}"));
                 eprintln!("[watch] {n}-byte write of {val:#x} to {addr:#x} by {loc}");
             }
         }
         match r {
             // A hardware fault is a Windows exception: give the guest's handlers a go first.
-            Err(stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. })) => self.raise_hardware(stop, start, saved),
+            Err(stop @ (Stop::Fault(_) | Stop::DivideError(_) | Stop::InvalidOpcode { .. })) => {
+                self.raise_hardware(stop, start, saved)
+            }
             other => other,
         }
     }
@@ -857,7 +911,11 @@ impl Emu {
                     let neg = self.regs[EAX] & 0x8000 != 0;
                     self.set_reg(EDX, 16, if neg { 0xffff } else { 0 });
                 } else {
-                    self.regs[EDX] = if self.regs[EAX] & 0x8000_0000 != 0 { u32::MAX } else { 0 };
+                    self.regs[EDX] = if self.regs[EAX] & 0x8000_0000 != 0 {
+                        u32::MAX
+                    } else {
+                        0
+                    };
                 }
             }
             0x9E => {
@@ -1001,7 +1059,10 @@ impl Emu {
                 let signed = sext(offset, bits) as i64;
                 let unit = (bits / 8) as i64;
                 let word = signed.div_euclid(bits as i64);
-                (Op::Mem(addr.wrapping_add((word * unit) as u32)), signed.rem_euclid(bits as i64) as u32)
+                (
+                    Op::Mem(addr.wrapping_add((word * unit) as u32)),
+                    signed.rem_euclid(bits as i64) as u32,
+                )
             }
             other => (other, offset & (bits - 1)),
         };
@@ -1026,7 +1087,13 @@ impl Emu {
     }
 
     fn group3(&mut self, opc: u8, p: &Prefix, start: u32) -> Res<()> {
-        let bits = if opc == 0xF6 { 8 } else if p.opsize16 { 16 } else { 32 };
+        let bits = if opc == 0xF6 {
+            8
+        } else if p.opsize16 {
+            16
+        } else {
+            32
+        };
         let m = self.modrm(p)?;
         let v = self.read_op(m.rm, bits)?;
         let msk = mask(bits);
@@ -1064,7 +1131,11 @@ impl Emu {
                 if v == 0 || dividend / v as u64 > msk as u64 {
                     return Err(Stop::DivideError(start));
                 }
-                self.set_acc_pair(bits, (dividend / v as u64) as u32, (dividend % v as u64) as u32);
+                self.set_acc_pair(
+                    bits,
+                    (dividend / v as u64) as u32,
+                    (dividend % v as u64) as u32,
+                );
             }
             _ => {
                 let (lo, hi) = self.acc_pair(bits);
@@ -1085,9 +1156,19 @@ impl Emu {
     }
 
     fn string_op(&mut self, opc: u8, p: &Prefix) -> Res<()> {
-        let bits = if opc & 1 == 0 { 8 } else if p.opsize16 { 16 } else { 32 };
+        let bits = if opc & 1 == 0 {
+            8
+        } else if p.opsize16 {
+            16
+        } else {
+            32
+        };
         let n = bits / 8;
-        let delta = if self.flag(DF) { (n as i32).wrapping_neg() } else { n as i32 } as u32;
+        let delta = if self.flag(DF) {
+            (n as i32).wrapping_neg()
+        } else {
+            n as i32
+        } as u32;
         let compares = matches!(opc & 0xFE, 0xA6 | 0xAE);
         loop {
             if p.rep != 0 && self.regs[ECX] == 0 {
@@ -1186,7 +1267,11 @@ impl Emu {
                         self.regs[EBX] = 0;
                         self.regs[ECX] = 0;
                         // XP_NO_SSE=1 reports a Pentium II instead (MMX only), for comparison.
-                        let sse = if std::env::var_os("XP_NO_SSE").is_some() { 0 } else { 1 << 25 };
+                        let sse = if std::env::var_os("XP_NO_SSE").is_some() {
+                            0
+                        } else {
+                            1 << 25
+                        };
                         self.regs[EDX] = 1 | 1 << 4 | 1 << 8 | 1 << 23 | sse;
                     }
                     _ => {
@@ -1212,16 +1297,21 @@ impl Emu {
                 let src_bits = if opc & 1 == 0 { 8 } else { 16 };
                 let m = self.modrm(&p)?;
                 let v = self.read_op(m.rm, src_bits)?;
-                let v = if opc >= 0xBE { sext(v, src_bits) as u32 } else { v };
+                let v = if opc >= 0xBE {
+                    sext(v, src_bits) as u32
+                } else {
+                    v
+                };
                 self.set_reg(m.reg, bits, v);
             }
             0xC8..=0xCF => {
                 let r = (opc & 7) as usize;
                 self.regs[r] = self.regs[r].swap_bytes();
             }
-            0xA0 => self.push(SEG_FS)?,  // push fs
-            0xA8 => self.push(0)?,       // push gs
-            0xA1 | 0xA9 => {             // pop fs / pop gs: ignored (FS stays the TEB pointer)
+            0xA0 => self.push(SEG_FS)?, // push fs
+            0xA8 => self.push(0)?,      // push gs
+            0xA1 | 0xA9 => {
+                // pop fs / pop gs: ignored (FS stays the TEB pointer)
                 self.pop()?;
             }
             // multi-byte nop / prefetch hints: decode the operand and do nothing
@@ -1246,7 +1336,11 @@ impl Emu {
             // shld / shrd  r/m, r, imm8|cl
             0xA4 | 0xA5 | 0xAC | 0xAD => {
                 let m = self.modrm(&p)?;
-                let count = if opc & 1 == 0 { self.fetch8()? as u32 } else { self.regs[ECX] } & 31;
+                let count = if opc & 1 == 0 {
+                    self.fetch8()? as u32
+                } else {
+                    self.regs[ECX]
+                } & 31;
                 if count != 0 {
                     let dst = self.read_op(m.rm, bits)?;
                     let src = self.get_reg(m.reg, bits);
@@ -1254,10 +1348,16 @@ impl Emu {
                     let (r, cf) = if opc < 0xA8 {
                         let wide = ((dst as u64) << bits) | src as u64;
                         let sh = wide << count;
-                        (((sh >> bits) as u32) & msk, (wide >> (2 * bits - count)) & 1 != 0)
+                        (
+                            ((sh >> bits) as u32) & msk,
+                            (wide >> (2 * bits - count)) & 1 != 0,
+                        )
                     } else {
                         let wide = ((src as u64) << bits) | dst as u64;
-                        ((((wide >> count) as u32) & msk), (dst >> (count - 1)) & 1 != 0)
+                        (
+                            (((wide >> count) as u32) & msk),
+                            (dst >> (count - 1)) & 1 != 0,
+                        )
                     };
                     self.write_op(m.rm, bits, r)?;
                     self.set_flag(CF, cf);
@@ -1271,7 +1371,11 @@ impl Emu {
                 let v = self.read_op(m.rm, bits)? & mask(bits);
                 self.set_flag(ZF, v == 0);
                 if v != 0 {
-                    let idx = if opc == 0xBC { v.trailing_zeros() } else { 31 - v.leading_zeros() };
+                    let idx = if opc == 0xBC {
+                        v.trailing_zeros()
+                    } else {
+                        31 - v.leading_zeros()
+                    };
                     self.set_reg(m.reg, bits, idx);
                 }
             }
@@ -1302,11 +1406,14 @@ impl Emu {
             // cmpxchg8b m64
             0xC7 => {
                 let m = self.modrm(&p)?;
-                let Op::Mem(addr) = m.rm else { return Err(self.invalid(start)) };
+                let Op::Mem(addr) = m.rm else {
+                    return Err(self.invalid(start));
+                };
                 if m.reg != 1 {
                     return Err(self.invalid(start));
                 }
-                let cur = (self.mem.read(addr, 4)? as u64) | ((self.mem.read(addr + 4, 4)? as u64) << 32);
+                let cur =
+                    (self.mem.read(addr, 4)? as u64) | ((self.mem.read(addr + 4, 4)? as u64) << 32);
                 let want = (self.regs[EAX] as u64) | ((self.regs[EDX] as u64) << 32);
                 if cur == want {
                     self.mem.write(addr, 4, self.regs[EBX])?;
@@ -1374,7 +1481,7 @@ mod tests {
     #[test]
     fn call_and_ret() {
         let e = run_ok(&[
-            0xE8, 1, 0, 0, 0, // call f
+            0xE8, 1, 0, 0, 0,    // call f
             0xF4, // hlt
             0xB8, 0x34, 0x12, 0, 0, // f: mov eax, 0x1234
             0xC3,
@@ -1397,9 +1504,7 @@ mod tests {
         ]);
         assert_eq!((e.regs[EAX], e.regs[EDX]), (14, 2));
 
-        let e = run_ok(&[
-            0xB8, 0, 0, 1, 0, 0xB9, 0, 0, 1, 0, 0xF7, 0xE1, 0xF4,
-        ]);
+        let e = run_ok(&[0xB8, 0, 0, 1, 0, 0xB9, 0, 0, 1, 0, 0xF7, 0xE1, 0xF4]);
         assert_eq!((e.regs[EDX], e.regs[EAX]), (1, 0));
         assert!(e.eflags & CF != 0);
     }
@@ -1453,11 +1558,14 @@ mod tests {
         let mut e = Emu::new();
         e.mem.map(CODE, 0x10000);
         e.mem.write_bytes(0x2000, b"abcdef").unwrap();
-        e.mem.write_bytes(
-            CODE,
-            &[0xBE, 0, 0x20, 0, 0, 0xBF, 0, 0x30, 0, 0, 0xB9, 6, 0, 0, 0, 0xF3, 0xA4, 0xF4],
-        )
-        .unwrap();
+        e.mem
+            .write_bytes(
+                CODE,
+                &[
+                    0xBE, 0, 0x20, 0, 0, 0xBF, 0, 0x30, 0, 0, 0xB9, 6, 0, 0, 0, 0xF3, 0xA4, 0xF4,
+                ],
+            )
+            .unwrap();
         e.eip = CODE;
         assert_eq!(e.run(1000), Stop::Halt);
         assert_eq!(e.mem.read_bytes(0x3000, 6).unwrap(), b"abcdef");
@@ -1471,7 +1579,9 @@ mod tests {
         e.mem
             .write_bytes(
                 CODE,
-                &[0xBF, 0, 0x20, 0, 0, 0xB9, 0xFF, 0, 0, 0, 0x31, 0xC0, 0xF2, 0xAE, 0xF4],
+                &[
+                    0xBF, 0, 0x20, 0, 0, 0xB9, 0xFF, 0, 0, 0, 0x31, 0xC0, 0xF2, 0xAE, 0xF4,
+                ],
             )
             .unwrap();
         e.eip = CODE;
@@ -1577,7 +1687,9 @@ mod tests {
         e.mem.map(CODE, 0x10000);
         e.fs_base = 0x2000;
         e.mem.write(0x2018, 4, 0xCAFE).unwrap();
-        e.mem.write_bytes(CODE, &[0x64, 0xA1, 0x18, 0, 0, 0, 0xF4]).unwrap();
+        e.mem
+            .write_bytes(CODE, &[0x64, 0xA1, 0x18, 0, 0, 0, 0xF4])
+            .unwrap();
         e.eip = CODE;
         assert_eq!(e.run(10), Stop::Halt);
         assert_eq!(e.regs[EAX], 0xCAFE);
@@ -1599,7 +1711,9 @@ mod tests {
         e.mem
             .write_bytes(
                 CODE,
-                &[0xFF, 0x15, 0, 0x20, 0, 0, 0xF4, 0x90, 0xB8, 77, 0, 0, 0, 0xC3],
+                &[
+                    0xFF, 0x15, 0, 0x20, 0, 0, 0xF4, 0x90, 0xB8, 77, 0, 0, 0, 0xC3,
+                ],
             )
             .unwrap();
         e.eip = CODE;
@@ -1693,7 +1807,8 @@ mod tests {
                     0xF0, 0x0F, 0xB1, 0x1D, 0, 0x20, 0, 0, // lock cmpxchg [0x2000], ebx
                     0x9C, 0x59, // flags -> ecx
                     0xB8, 7, 0, 0, 0, // eax = 7 (no longer matches 9)
-                    0x0F, 0xB1, 0x1D, 0, 0x20, 0, 0, // cmpxchg [0x2000], ebx -> fails, eax = 9
+                    0x0F, 0xB1, 0x1D, 0, 0x20, 0,
+                    0, // cmpxchg [0x2000], ebx -> fails, eax = 9
                     0x9C, 0x5A, // flags -> edx
                     0xF4,
                 ],
@@ -1702,9 +1817,16 @@ mod tests {
         e.eip = CODE;
         e.regs[ESP] = 0x10000;
         assert_eq!(e.run(100), Stop::Halt);
-        assert_eq!(e.mem.read(0x2000, 4).unwrap(), 9, "exchange happened on the first, matching compare");
+        assert_eq!(
+            e.mem.read(0x2000, 4).unwrap(),
+            9,
+            "exchange happened on the first, matching compare"
+        );
         assert!(e.regs[ECX] & ZF != 0, "ZF set on success");
-        assert_eq!(e.regs[EAX], 9, "failed compare loads the memory value into eax");
+        assert_eq!(
+            e.regs[EAX], 9,
+            "failed compare loads the memory value into eax"
+        );
         assert!(e.regs[EDX] & ZF == 0, "ZF clear on failure");
     }
 
@@ -1800,6 +1922,10 @@ mod bench {
         let t = std::time::Instant::now();
         let stop = e.run(200_000_000);
         let secs = t.elapsed().as_secs_f64();
-        eprintln!("{stop:?}: {} steps in {secs:.2}s = {:.1}M steps/s", e.steps, e.steps as f64 / secs / 1e6);
+        eprintln!(
+            "{stop:?}: {} steps in {secs:.2}s = {:.1}M steps/s",
+            e.steps,
+            e.steps as f64 / secs / 1e6
+        );
     }
 }

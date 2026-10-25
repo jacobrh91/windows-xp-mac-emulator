@@ -4,7 +4,7 @@
 //! is harmless, and fail with the error Windows would give where a device is missing.
 
 use crate::cpu::{Emu, Res};
-use crate::win32::{Args, Handler, CDECL};
+use crate::win32::{Args, CDECL, Handler};
 
 const MMSYSERR_NODRIVER: u32 = 6;
 const WSAEAFNOSUPPORT: u32 = 10047;
@@ -13,9 +13,13 @@ const INVALID_SOCKET: u32 = u32::MAX;
 pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
     let r: (usize, Handler) = match (dll, name) {
         // ---- user32 ----
-        ("user32", "BringWindowToTop") | ("user32", "ClipCursor") | ("user32", "DestroyCursor") => (1, |_, _| Ok(1)),
+        ("user32", "BringWindowToTop") | ("user32", "ClipCursor") | ("user32", "DestroyCursor") => {
+            (1, |_, _| Ok(1))
+        }
         ("user32", "CallNextHookEx") => (4, |_, _| Ok(0)),
-        ("user32", "CallWindowProcA") => (5, |e, a| e.call_function(a[0], &[a[1], a[2], a[3], a[4]])),
+        ("user32", "CallWindowProcA") => {
+            (5, |e, a| e.call_function(a[0], &[a[1], a[2], a[3], a[4]]))
+        }
         ("user32", "ChangeDisplaySettingsA") => (2, |_, _| Ok(0)), // DISP_CHANGE_SUCCESSFUL
         ("user32", "CharNextA") => (1, |e, a| Ok(a[0] + (e.mem.read_u8(a[0])? != 0) as u32)),
         ("user32", "CharPrevA") => (2, |_, a| Ok(if a[1] > a[0] { a[1] - 1 } else { a[0] })),
@@ -25,7 +29,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "EnumDisplaySettingsA") => (3, enum_display_settings),
         ("user32", "GetCaretBlinkTime") => (0, |_, _| Ok(530)),
         ("user32", "GetDoubleClickTime") => (0, |_, _| Ok(500)),
-        ("user32", "GetClassLongA") | ("user32", "GetKeyNameTextA") | ("user32", "MapVirtualKeyA") => (3, |_, _| Ok(0)),
+        ("user32", "GetClassLongA")
+        | ("user32", "GetKeyNameTextA")
+        | ("user32", "MapVirtualKeyA") => (3, |_, _| Ok(0)),
         ("user32", "GetClipCursor") => (1, |e, a| {
             for (i, v) in [0u32, 0, 1024, 768].iter().enumerate() {
                 e.mem.write(a[0] + 4 * i as u32, 4, *v)?;
@@ -33,13 +39,27 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(1)
         }),
         ("user32", "GetKeyboardLayout") => (1, |_, _| Ok(0x0409_0409)),
-        ("user32", "GetScrollInfo") | ("user32", "GetScrollRange") | ("user32", "SetScrollRange") => (5, |_, _| Ok(0)),
+        ("user32", "GetScrollInfo")
+        | ("user32", "GetScrollRange")
+        | ("user32", "SetScrollRange") => (5, |_, _| Ok(0)),
         ("user32", "GetScrollPos") | ("user32", "SetScrollPos") => (3, |_, _| Ok(0)),
-        ("user32", "GetTopWindow") => (1, |e, a| Ok(e.wm.windows.iter().rev().find(|w| w.parent == a[0]).map_or(0, |w| w.hwnd))),
+        ("user32", "GetTopWindow") => (1, |e, a| {
+            Ok(e.wm
+                .windows
+                .iter()
+                .rev()
+                .find(|w| w.parent == a[0])
+                .map_or(0, |w| w.hwnd))
+        }),
         ("user32", "GetWindow") => (2, get_window),
         ("user32", "GetWindowTextW") => (3, |e, a| {
-            let Some(t) = e.wm.window(a[0]).map(|w| w.title.clone()) else { return Ok(0) };
-            let units: Vec<u16> = t.encode_utf16().take((a[2] as usize).saturating_sub(1)).collect();
+            let Some(t) = e.wm.window(a[0]).map(|w| w.title.clone()) else {
+                return Ok(0);
+            };
+            let units: Vec<u16> = t
+                .encode_utf16()
+                .take((a[2] as usize).saturating_sub(1))
+                .collect();
             for (i, u) in units.iter().enumerate() {
                 e.mem.write(a[1] + 2 * i as u32, 2, *u as u32)?;
             }
@@ -84,7 +104,9 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         }),
         ("user32", "wvsprintfA") => (3, |e, a| {
             // The va_list is just consecutive argument words in guest memory.
-            let words: Vec<u32> = (0..16).map(|i| e.mem.read(a[2].wrapping_add(4 * i), 4).unwrap_or(0)).collect();
+            let words: Vec<u32> = (0..16)
+                .map(|i| e.mem.read(a[2].wrapping_add(4 * i), 4).unwrap_or(0))
+                .collect();
             let mut it = words.into_iter();
             let text = c_format(e, a[1], &mut || it.next().unwrap_or(0))?;
             write_limited(e, a[0], &text)
@@ -112,10 +134,18 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("ole32", "CoUninitialize") => (0, |_, _| Ok(0)),
         ("ole32", "CoCreateInstance") => (5, |_, _| Ok(0x8004_0154)), // REGDB_E_CLASSNOTREG
         ("rpcrt4", "UuidCreate") => (1, |e, a| {
-            let seed = e.win.rand_seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let seed = e
+                .win
+                .rand_seed
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
             e.win.rand_seed = seed;
             for i in 0..4u32 {
-                e.mem.write(a[0] + 4 * i, 4, seed.rotate_left(i * 8) ^ (0x9E37_79B9u32.wrapping_mul(i + 1)))?;
+                e.mem.write(
+                    a[0] + 4 * i,
+                    4,
+                    seed.rotate_left(i * 8) ^ (0x9E37_79B9u32.wrapping_mul(i + 1)),
+                )?;
             }
             Ok(0)
         }),
@@ -133,7 +163,14 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
                 u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
                 u16::from_le_bytes([b[4], b[5]]),
                 u16::from_le_bytes([b[6], b[7]]),
-                b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+                b[8],
+                b[9],
+                b[10],
+                b[11],
+                b[12],
+                b[13],
+                b[14],
+                b[15]
             );
             let p = e.heap_alloc(s.len() as u32 + 1)?;
             let mut bytes = s.into_bytes();
@@ -152,7 +189,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             e.mem.write(a[1] + 4, 2, n(8, 4) as u32)?;
             e.mem.write(a[1] + 6, 2, n(12, 4) as u32)?;
             for i in 0..8 {
-                e.mem.write(a[1] + 8 + i as u32, 1, n(16 + 2 * i, 2) as u32)?;
+                e.mem
+                    .write(a[1] + 8 + i as u32, 1, n(16 + 2 * i, 2) as u32)?;
             }
             Ok(0)
         }),
@@ -174,20 +212,41 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         // Timer callbacks do not fire yet; hand back a plausible id so callers carry on.
         ("winmm", "timeSetEvent") => (5, |_, _| Ok(1)),
         ("winmm", "auxGetNumDevs") | ("winmm", "mixerGetNumDevs") => (0, |_, _| Ok(0)),
-        ("winmm", "auxGetDevCapsA") | ("winmm", "auxGetVolume") | ("winmm", "auxSetVolume") => (3, |_, _| Ok(MMSYSERR_NODRIVER)),
-        ("winmm", "mciSendCommandA") => (4, |_, _| Ok(MMSYSERR_NODRIVER)),
-        ("winmm", "midiOutOpen") | ("winmm", "waveOutOpen") | ("winmm", "waveInOpen") | ("winmm", "mixerOpen") => {
-            (6, |_, _| Ok(MMSYSERR_NODRIVER))
+        ("winmm", "auxGetDevCapsA") | ("winmm", "auxGetVolume") | ("winmm", "auxSetVolume") => {
+            (3, |_, _| Ok(MMSYSERR_NODRIVER))
         }
-        ("winmm", "midiOutClose") | ("winmm", "midiOutReset") | ("winmm", "mixerClose") | ("winmm", "waveOutClose")
-        | ("winmm", "waveOutPause") | ("winmm", "waveOutReset") | ("winmm", "waveOutRestart") | ("winmm", "waveInClose")
-        | ("winmm", "waveInReset") | ("winmm", "waveInStart") => (1, |_, _| Ok(MMSYSERR_NODRIVER)),
-        ("winmm", "midiOutShortMsg") | ("winmm", "waveOutGetID") | ("winmm", "waveOutSetVolume") => (2, |_, _| Ok(MMSYSERR_NODRIVER)),
-        ("winmm", "midiOutLongMsg") | ("winmm", "midiOutPrepareHeader") | ("winmm", "midiOutUnprepareHeader")
-        | ("winmm", "waveOutPrepareHeader") | ("winmm", "waveOutUnprepareHeader") | ("winmm", "waveOutWrite")
-        | ("winmm", "waveInAddBuffer") | ("winmm", "waveInPrepareHeader") | ("winmm", "waveInUnprepareHeader")
-        | ("winmm", "waveOutGetDevCapsA") | ("winmm", "mixerGetLineInfoA") | ("winmm", "mixerGetLineControlsA")
-        | ("winmm", "mixerGetControlDetailsA") | ("winmm", "mixerSetControlDetails") => (3, |_, _| Ok(MMSYSERR_NODRIVER)),
+        ("winmm", "mciSendCommandA") => (4, |_, _| Ok(MMSYSERR_NODRIVER)),
+        ("winmm", "midiOutOpen")
+        | ("winmm", "waveOutOpen")
+        | ("winmm", "waveInOpen")
+        | ("winmm", "mixerOpen") => (6, |_, _| Ok(MMSYSERR_NODRIVER)),
+        ("winmm", "midiOutClose")
+        | ("winmm", "midiOutReset")
+        | ("winmm", "mixerClose")
+        | ("winmm", "waveOutClose")
+        | ("winmm", "waveOutPause")
+        | ("winmm", "waveOutReset")
+        | ("winmm", "waveOutRestart")
+        | ("winmm", "waveInClose")
+        | ("winmm", "waveInReset")
+        | ("winmm", "waveInStart") => (1, |_, _| Ok(MMSYSERR_NODRIVER)),
+        ("winmm", "midiOutShortMsg")
+        | ("winmm", "waveOutGetID")
+        | ("winmm", "waveOutSetVolume") => (2, |_, _| Ok(MMSYSERR_NODRIVER)),
+        ("winmm", "midiOutLongMsg")
+        | ("winmm", "midiOutPrepareHeader")
+        | ("winmm", "midiOutUnprepareHeader")
+        | ("winmm", "waveOutPrepareHeader")
+        | ("winmm", "waveOutUnprepareHeader")
+        | ("winmm", "waveOutWrite")
+        | ("winmm", "waveInAddBuffer")
+        | ("winmm", "waveInPrepareHeader")
+        | ("winmm", "waveInUnprepareHeader")
+        | ("winmm", "waveOutGetDevCapsA")
+        | ("winmm", "mixerGetLineInfoA")
+        | ("winmm", "mixerGetLineControlsA")
+        | ("winmm", "mixerGetControlDetailsA")
+        | ("winmm", "mixerSetControlDetails") => (3, |_, _| Ok(MMSYSERR_NODRIVER)),
 
         // ---- winsock (ordinals are how the game imports it): no network yet ----
         ("ws2_32", "#115") | ("ws2_32", "WSAStartup") => (2, |e, a| {
@@ -198,12 +257,20 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         }),
         ("ws2_32", "#116") | ("ws2_32", "WSACleanup") => (0, |_, _| Ok(0)),
         ("ws2_32", "#111") | ("ws2_32", "WSAGetLastError") => (0, |e, _| Ok(e.win.last_error)),
-        ("ws2_32", "#8") | ("ws2_32", "htonl") | ("ws2_32", "#14") | ("ws2_32", "ntohl") => (1, |_, a| Ok(a[0].swap_bytes())),
-        ("ws2_32", "#9") | ("ws2_32", "htons") | ("ws2_32", "#15") | ("ws2_32", "ntohs") => (1, |_, a| Ok((a[0] as u16).swap_bytes() as u32)),
+        ("ws2_32", "#8") | ("ws2_32", "htonl") | ("ws2_32", "#14") | ("ws2_32", "ntohl") => {
+            (1, |_, a| Ok(a[0].swap_bytes()))
+        }
+        ("ws2_32", "#9") | ("ws2_32", "htons") | ("ws2_32", "#15") | ("ws2_32", "ntohs") => {
+            (1, |_, a| Ok((a[0] as u16).swap_bytes() as u32))
+        }
         ("ws2_32", "#11") | ("ws2_32", "inet_addr") => (1, |e, a| {
             let s = e.mem.read_cstr(a[0])?;
             let parts: Vec<u8> = s.split('.').filter_map(|p| p.parse().ok()).collect();
-            Ok(if parts.len() == 4 { u32::from_le_bytes([parts[0], parts[1], parts[2], parts[3]]) } else { u32::MAX })
+            Ok(if parts.len() == 4 {
+                u32::from_le_bytes([parts[0], parts[1], parts[2], parts[3]])
+            } else {
+                u32::MAX
+            })
         }),
         ("ws2_32", "#12") | ("ws2_32", "inet_ntoa") => (1, |e, a| {
             let b = a[0].to_le_bytes();
@@ -226,11 +293,22 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             e.win.last_error = WSAEAFNOSUPPORT;
             Ok(INVALID_SOCKET)
         }),
-        ("ws2_32", "#3") | ("ws2_32", "closesocket") | ("ws2_32", "#22") | ("ws2_32", "shutdown") => (2, |_, _| Ok(0)),
+        ("ws2_32", "#3")
+        | ("ws2_32", "closesocket")
+        | ("ws2_32", "#22")
+        | ("ws2_32", "shutdown") => (2, |_, _| Ok(0)),
         // Everything else a socket does fails with SOCKET_ERROR (-1) and "not a socket".
         ("ws2_32", "#52") | ("ws2_32", "gethostbyname") => (1, |_, _| Ok(0)),
-        ("ws2_32", "#51") | ("ws2_32", "gethostbyaddr") | ("ws2_32", "#55") | ("ws2_32", "#56") => (3, |_, _| Ok(0)),
-        ("ws2_32", "#1") | ("ws2_32", "#2") | ("ws2_32", "#4") | ("ws2_32", "#5") | ("ws2_32", "#6") | ("ws2_32", "#10") | ("ws2_32", "#13") => {
+        ("ws2_32", "#51") | ("ws2_32", "gethostbyaddr") | ("ws2_32", "#55") | ("ws2_32", "#56") => {
+            (3, |_, _| Ok(0))
+        }
+        ("ws2_32", "#1")
+        | ("ws2_32", "#2")
+        | ("ws2_32", "#4")
+        | ("ws2_32", "#5")
+        | ("ws2_32", "#6")
+        | ("ws2_32", "#10")
+        | ("ws2_32", "#13") => {
             (3, |e, _| {
                 e.win.last_error = 10038; // WSAENOTSOCK
                 Ok(u32::MAX)
@@ -256,13 +334,24 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         }),
 
         // ---- imm32 (input method editors): behave as if no IME is installed ----
-        ("imm32", "ImmGetContext") | ("imm32", "ImmGetOpenStatus") | ("imm32", "ImmGetVirtualKey") | ("imm32", "ImmLockIMC")
-        | ("imm32", "ImmUnlockIMC") | ("imm32", "ImmLockIMCC") | ("imm32", "ImmUnlockIMCC") | ("imm32", "ImmGetDefaultIMEWnd")
-        | ("imm32", "ImmIsIME") | ("imm32", "ImmDisableTextFrameService") => (1, |_, _| Ok(0)),
+        ("imm32", "ImmGetContext")
+        | ("imm32", "ImmGetOpenStatus")
+        | ("imm32", "ImmGetVirtualKey")
+        | ("imm32", "ImmLockIMC")
+        | ("imm32", "ImmUnlockIMC")
+        | ("imm32", "ImmLockIMCC")
+        | ("imm32", "ImmUnlockIMCC")
+        | ("imm32", "ImmGetDefaultIMEWnd")
+        | ("imm32", "ImmIsIME")
+        | ("imm32", "ImmDisableTextFrameService") => (1, |_, _| Ok(0)),
         ("imm32", "ImmReleaseContext") | ("imm32", "ImmSetOpenStatus") => (2, |_, _| Ok(1)),
         ("imm32", "ImmAssociateContext") | ("imm32", "ImmSimulateHotKey") => (2, |_, _| Ok(0)),
-        ("imm32", "ImmGetConversionStatus") | ("imm32", "ImmSetConversionStatus") | ("imm32", "ImmGetIMEFileNameA") => (3, |_, _| Ok(0)),
-        ("imm32", "ImmNotifyIME") | ("imm32", "ImmGetCompositionStringA") | ("imm32", "ImmGetCandidateListA") => (4, |_, _| Ok(0)),
+        ("imm32", "ImmGetConversionStatus")
+        | ("imm32", "ImmSetConversionStatus")
+        | ("imm32", "ImmGetIMEFileNameA") => (3, |_, _| Ok(0)),
+        ("imm32", "ImmNotifyIME")
+        | ("imm32", "ImmGetCompositionStringA")
+        | ("imm32", "ImmGetCandidateListA") => (4, |_, _| Ok(0)),
 
         // ---- kernel32 extras looked up by name at run time ----
         // Report no optional CPU features (MMX/SSE/3DNow): the emulator runs plain x86 + x87.
@@ -293,16 +382,32 @@ fn char_upper(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 fn get_window(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(w) = e.wm.window(a[0]) else { return Ok(0) };
+    let Some(w) = e.wm.window(a[0]) else {
+        return Ok(0);
+    };
     let parent = w.parent;
-    let siblings: Vec<u32> = e.wm.windows.iter().filter(|x| x.parent == parent).map(|x| x.hwnd).collect();
+    let siblings: Vec<u32> =
+        e.wm.windows
+            .iter()
+            .filter(|x| x.parent == parent)
+            .map(|x| x.hwnd)
+            .collect();
     let pos = siblings.iter().position(|&h| h == a[0]).unwrap_or(0);
     Ok(match a[1] {
-        0 => siblings.first().copied().unwrap_or(0),      // GW_HWNDFIRST
-        1 => siblings.last().copied().unwrap_or(0),       // GW_HWNDLAST
+        0 => siblings.first().copied().unwrap_or(0), // GW_HWNDFIRST
+        1 => siblings.last().copied().unwrap_or(0),  // GW_HWNDLAST
         2 => siblings.get(pos + 1).copied().unwrap_or(0), // GW_HWNDNEXT
-        3 => pos.checked_sub(1).and_then(|i| siblings.get(i)).copied().unwrap_or(0), // GW_HWNDPREV
-        5 => e.wm.windows.iter().find(|x| x.parent == a[0]).map_or(0, |x| x.hwnd), // GW_CHILD
+        3 => pos
+            .checked_sub(1)
+            .and_then(|i| siblings.get(i))
+            .copied()
+            .unwrap_or(0), // GW_HWNDPREV
+        5 => {
+            e.wm.windows
+                .iter()
+                .find(|x| x.parent == a[0])
+                .map_or(0, |x| x.hwnd)
+        } // GW_CHILD
         _ => 0,
     })
 }
@@ -346,7 +451,8 @@ pub fn c_format(e: &Emu, fmt_ptr: u32, next: &mut dyn FnMut() -> u32) -> Res<Str
             out.push(c);
             continue;
         }
-        let (mut left, mut zero, mut plus, mut space, mut alt) = (false, false, false, false, false);
+        let (mut left, mut zero, mut plus, mut space, mut alt) =
+            (false, false, false, false, false);
         while let Some(&f) = chars.peek() {
             match f {
                 '-' => left = true,
@@ -392,7 +498,11 @@ pub fn c_format(e: &Emu, fmt_ptr: u32, next: &mut dyn FnMut() -> u32) -> Res<Str
             'c' => char::from_u32(next() & 0xff).unwrap_or('?').to_string(),
             's' => {
                 let p = next();
-                let s = if p == 0 { "(null)".to_string() } else { e.mem.read_cstr(p)? };
+                let s = if p == 0 {
+                    "(null)".to_string()
+                } else {
+                    e.mem.read_cstr(p)?
+                };
                 match precision {
                     Some(n) => s.chars().take(n).collect(),
                     None => s,
@@ -400,14 +510,26 @@ pub fn c_format(e: &Emu, fmt_ptr: u32, next: &mut dyn FnMut() -> u32) -> Res<Str
             }
             'd' | 'i' => {
                 let raw = next();
-                let v = if short { raw as u16 as i16 as i64 } else { raw as i32 as i64 };
+                let v = if short {
+                    raw as u16 as i16 as i64
+                } else {
+                    raw as i32 as i64
+                };
                 let mut digits = v.unsigned_abs().to_string();
                 if let Some(p) = precision {
                     while digits.len() < p {
                         digits.insert(0, '0');
                     }
                 }
-                let sign = if v < 0 { "-" } else if plus { "+" } else if space { " " } else { "" };
+                let sign = if v < 0 {
+                    "-"
+                } else if plus {
+                    "+"
+                } else if space {
+                    " "
+                } else {
+                    ""
+                };
                 pad_number(sign, &digits, width, left, zero && precision.is_none())
             }
             'u' | 'x' | 'X' => {
@@ -423,7 +545,11 @@ pub fn c_format(e: &Emu, fmt_ptr: u32, next: &mut dyn FnMut() -> u32) -> Res<Str
                         digits.insert(0, '0');
                     }
                 }
-                let prefix = if alt && v != 0 && conv != 'u' { if conv == 'x' { "0x" } else { "0X" } } else { "" };
+                let prefix = if alt && v != 0 && conv != 'u' {
+                    if conv == 'x' { "0x" } else { "0X" }
+                } else {
+                    ""
+                };
                 pad_number(prefix, &digits, width, left, zero && precision.is_none())
             }
             other => format!("%{other}"),
@@ -472,7 +598,9 @@ mod tests {
 
     fn fmt(e: &mut Emu, f: &str, args: &[u32]) -> String {
         e.mem.map(0x20000, 0x10000);
-        e.mem.write_bytes(0x20000, format!("{f}\0").as_bytes()).unwrap();
+        e.mem
+            .write_bytes(0x20000, format!("{f}\0").as_bytes())
+            .unwrap();
         let mut it = args.iter().copied();
         c_format(e, 0x20000, &mut || it.next().unwrap_or(0)).unwrap()
     }
@@ -480,15 +608,36 @@ mod tests {
     #[test]
     fn printf_integers_and_padding() {
         let mut e = Emu::new();
-        assert_eq!(fmt(&mut e, "%d|%5d|%-5d|%05d|%+d", &[42, 42, 42, 42, 42]), "42|   42|42   |00042|+42");
-        assert_eq!(fmt(&mut e, "%d %i", &[(-7i32) as u32, (-7i32) as u32]), "-7 -7");
-        assert_eq!(fmt(&mut e, "%05d", &[(-42i32) as u32]), "-0042", "zero padding goes after the sign");
+        assert_eq!(
+            fmt(&mut e, "%d|%5d|%-5d|%05d|%+d", &[42, 42, 42, 42, 42]),
+            "42|   42|42   |00042|+42"
+        );
+        assert_eq!(
+            fmt(&mut e, "%d %i", &[(-7i32) as u32, (-7i32) as u32]),
+            "-7 -7"
+        );
+        assert_eq!(
+            fmt(&mut e, "%05d", &[(-42i32) as u32]),
+            "-0042",
+            "zero padding goes after the sign"
+        );
         assert_eq!(fmt(&mut e, "%u", &[u32::MAX]), "4294967295");
-        assert_eq!(fmt(&mut e, "%x %X %#x %08X", &[255, 255, 255, 0xBEEF]), "ff FF 0xff 0000BEEF");
+        assert_eq!(
+            fmt(&mut e, "%x %X %#x %08X", &[255, 255, 255, 0xBEEF]),
+            "ff FF 0xff 0000BEEF"
+        );
         assert_eq!(fmt(&mut e, "%.3d", &[5]), "005");
-        assert_eq!(fmt(&mut e, "%hd", &[0x1_0001]), "1", "h truncates to 16 bits");
+        assert_eq!(
+            fmt(&mut e, "%hd", &[0x1_0001]),
+            "1",
+            "h truncates to 16 bits"
+        );
         assert_eq!(fmt(&mut e, "100%%", &[]), "100%");
-        assert_eq!(fmt(&mut e, "%*d", &[4, 9]), "   9", "width from an argument");
+        assert_eq!(
+            fmt(&mut e, "%*d", &[4, 9]),
+            "   9",
+            "width from an argument"
+        );
     }
 
     #[test]
@@ -497,10 +646,17 @@ mod tests {
         e.mem.map(0x30000, 0x1000);
         e.mem.write_bytes(0x30000, b"world\0").unwrap();
         assert_eq!(fmt(&mut e, "hello %s!", &[0x30000]), "hello world!");
-        assert_eq!(fmt(&mut e, "[%8s][%-8s][%.3s]", &[0x30000, 0x30000, 0x30000]), "[   world][world   ][wor]");
+        assert_eq!(
+            fmt(&mut e, "[%8s][%-8s][%.3s]", &[0x30000, 0x30000, 0x30000]),
+            "[   world][world   ][wor]"
+        );
         assert_eq!(fmt(&mut e, "%s", &[0]), "(null)");
         assert_eq!(fmt(&mut e, "%c%c", &[b'o' as u32, b'k' as u32]), "ok");
-        assert_eq!(fmt(&mut e, "%q", &[]), "%q", "unknown conversions are left visible");
+        assert_eq!(
+            fmt(&mut e, "%q", &[]),
+            "%q",
+            "unknown conversions are left visible"
+        );
     }
 
     #[test]
@@ -523,7 +679,10 @@ mod tests {
         e.mem.write_bytes(0x20100, b"%d-%x\0").unwrap();
         e.mem.write(0x22000, 4, 12).unwrap();
         e.mem.write(0x22004, 4, 255).unwrap();
-        assert_eq!(call(&mut e, "user32", "wvsprintfA", &[0x21000, 0x20100, 0x22000]), 5);
+        assert_eq!(
+            call(&mut e, "user32", "wvsprintfA", &[0x21000, 0x20100, 0x22000]),
+            5
+        );
         assert_eq!(e.mem.read_cstr(0x21000).unwrap(), "12-ff");
     }
 
@@ -531,22 +690,50 @@ mod tests {
     fn winsock_reports_no_network_cleanly() {
         let mut e = Emu::new();
         e.mem.map(0x20000, 0x10000);
-        assert_eq!(call(&mut e, "ws2_32", "#115", &[0x0202, 0x21000]), 0, "WSAStartup succeeds");
+        assert_eq!(
+            call(&mut e, "ws2_32", "#115", &[0x0202, 0x21000]),
+            0,
+            "WSAStartup succeeds"
+        );
         assert_eq!(e.mem.read(0x21000, 2).unwrap(), 0x0202);
-        assert_eq!(call(&mut e, "ws2_32", "#23", &[2, 2, 17]), u32::MAX, "socket() fails");
-        assert_eq!(call(&mut e, "ws2_32", "#111", &[]), WSAEAFNOSUPPORT, "WSAGetLastError says why");
+        assert_eq!(
+            call(&mut e, "ws2_32", "#23", &[2, 2, 17]),
+            u32::MAX,
+            "socket() fails"
+        );
+        assert_eq!(
+            call(&mut e, "ws2_32", "#111", &[]),
+            WSAEAFNOSUPPORT,
+            "WSAGetLastError says why"
+        );
         assert_eq!(call(&mut e, "ws2_32", "#9", &[0x1234]), 0x3412, "htons");
-        assert_eq!(call(&mut e, "ws2_32", "#8", &[0x1234_5678]), 0x7856_3412, "htonl");
+        assert_eq!(
+            call(&mut e, "ws2_32", "#8", &[0x1234_5678]),
+            0x7856_3412,
+            "htonl"
+        );
         e.mem.write_bytes(0x20000, b"192.168.1.5\0").unwrap();
-        assert_eq!(call(&mut e, "ws2_32", "#11", &[0x20000]), u32::from_le_bytes([192, 168, 1, 5]));
-        let p = call(&mut e, "ws2_32", "#12", &[u32::from_le_bytes([10, 0, 0, 1])]);
+        assert_eq!(
+            call(&mut e, "ws2_32", "#11", &[0x20000]),
+            u32::from_le_bytes([192, 168, 1, 5])
+        );
+        let p = call(
+            &mut e,
+            "ws2_32",
+            "#12",
+            &[u32::from_le_bytes([10, 0, 0, 1])],
+        );
         assert_eq!(e.mem.read_cstr(p).unwrap(), "10.0.0.1");
     }
 
     #[test]
     fn audio_devices_are_reported_missing_not_present() {
         let mut e = Emu::new();
-        assert_eq!(call(&mut e, "winmm", "midiOutOpen", &[0; 6]), MMSYSERR_NODRIVER, "no MIDI hardware");
+        assert_eq!(
+            call(&mut e, "winmm", "midiOutOpen", &[0; 6]),
+            MMSYSERR_NODRIVER,
+            "no MIDI hardware"
+        );
         assert_eq!(call(&mut e, "winmm", "mixerGetNumDevs", &[]), 0);
         assert_eq!(call(&mut e, "winmm", "auxGetNumDevs", &[]), 0);
         let t1 = call(&mut e, "winmm", "timeGetTime", &[]);
@@ -556,14 +743,29 @@ mod tests {
     #[test]
     fn ime_calls_behave_as_if_no_ime_is_installed() {
         let mut e = Emu::new();
-        assert_eq!(call(&mut e, "imm32", "ImmGetContext", &[0x10010]), 0, "no input context");
+        assert_eq!(
+            call(&mut e, "imm32", "ImmGetContext", &[0x10010]),
+            0,
+            "no input context"
+        );
         assert_eq!(call(&mut e, "imm32", "ImmIsIME", &[0]), 0);
         assert_eq!(call(&mut e, "imm32", "ImmReleaseContext", &[0x10010, 0]), 1);
-        for name in ["ImmAssociateContext", "ImmGetOpenStatus", "ImmNotifyIME", "ImmGetCompositionStringA"] {
+        for name in [
+            "ImmAssociateContext",
+            "ImmGetOpenStatus",
+            "ImmNotifyIME",
+            "ImmGetCompositionStringA",
+        ] {
             assert!(crate::win32::Win32::is_supported("imm32", name), "{name}");
         }
-        assert!(crate::win32::Win32::is_supported("kernel32", "IsProcessorFeaturePresent"));
-        assert_eq!(call(&mut e, "kernel32", "IsProcessorFeaturePresent", &[10]), 0);
+        assert!(crate::win32::Win32::is_supported(
+            "kernel32",
+            "IsProcessorFeaturePresent"
+        ));
+        assert_eq!(
+            call(&mut e, "kernel32", "IsProcessorFeaturePresent", &[10]),
+            0
+        );
     }
 
     #[test]
@@ -571,28 +773,64 @@ mod tests {
         let mut e = Emu::new();
         e.mem.map(0x20000, 0x10000);
         assert_eq!(call(&mut e, "rpcrt4", "UuidCreate", &[0x21000]), 0);
-        assert_eq!(call(&mut e, "rpcrt4", "UuidToStringA", &[0x21000, 0x22000]), 0);
+        assert_eq!(
+            call(&mut e, "rpcrt4", "UuidToStringA", &[0x21000, 0x22000]),
+            0
+        );
         let s = e.mem.read_cstr(e.mem.read(0x22000, 4).unwrap()).unwrap();
         assert_eq!(s.len(), 36);
-        e.mem.write_bytes(0x23000, format!("{s}\0").as_bytes()).unwrap();
-        assert_eq!(call(&mut e, "rpcrt4", "UuidFromStringA", &[0x23000, 0x24000]), 0);
-        assert_eq!(call(&mut e, "rpcrt4", "UuidEqual", &[0x21000, 0x24000, 0]), 1, "string round trip preserves the UUID");
+        e.mem
+            .write_bytes(0x23000, format!("{s}\0").as_bytes())
+            .unwrap();
+        assert_eq!(
+            call(&mut e, "rpcrt4", "UuidFromStringA", &[0x23000, 0x24000]),
+            0
+        );
+        assert_eq!(
+            call(&mut e, "rpcrt4", "UuidEqual", &[0x21000, 0x24000, 0]),
+            1,
+            "string round trip preserves the UUID"
+        );
         e.mem.write_bytes(0x23000, b"nope\0").unwrap();
-        assert_eq!(call(&mut e, "rpcrt4", "UuidFromStringA", &[0x23000, 0x24000]), 1705);
+        assert_eq!(
+            call(&mut e, "rpcrt4", "UuidFromStringA", &[0x23000, 0x24000]),
+            1705
+        );
     }
 
     #[test]
     fn display_modes_and_char_helpers() {
         let mut e = Emu::new();
         e.mem.map(0x20000, 0x10000);
-        assert_eq!(call(&mut e, "user32", "EnumDisplaySettingsA", &[0, 2, 0x21000]), 1);
-        assert_eq!((e.mem.read(0x21000 + 108, 4).unwrap(), e.mem.read(0x21000 + 112, 4).unwrap()), (1024, 768));
-        assert_eq!(call(&mut e, "user32", "EnumDisplaySettingsA", &[0, 99, 0x21000]), 0, "ran out of modes");
+        assert_eq!(
+            call(&mut e, "user32", "EnumDisplaySettingsA", &[0, 2, 0x21000]),
+            1
+        );
+        assert_eq!(
+            (
+                e.mem.read(0x21000 + 108, 4).unwrap(),
+                e.mem.read(0x21000 + 112, 4).unwrap()
+            ),
+            (1024, 768)
+        );
+        assert_eq!(
+            call(&mut e, "user32", "EnumDisplaySettingsA", &[0, 99, 0x21000]),
+            0,
+            "ran out of modes"
+        );
         e.mem.write_bytes(0x22000, b"abc\0").unwrap();
         call(&mut e, "user32", "CharUpperA", &[0x22000]);
         assert_eq!(e.mem.read_cstr(0x22000).unwrap(), "ABC");
-        assert_eq!(call(&mut e, "user32", "CharUpperA", &[b'q' as u32]), b'Q' as u32, "single character form");
+        assert_eq!(
+            call(&mut e, "user32", "CharUpperA", &[b'q' as u32]),
+            b'Q' as u32,
+            "single character form"
+        );
         assert_eq!(call(&mut e, "user32", "CharNextA", &[0x22000]), 0x22001);
-        assert_eq!(call(&mut e, "user32", "CharNextA", &[0x22003]), 0x22003, "stops at NUL");
+        assert_eq!(
+            call(&mut e, "user32", "CharNextA", &[0x22003]),
+            0x22003,
+            "stops at NUL"
+        );
     }
 }

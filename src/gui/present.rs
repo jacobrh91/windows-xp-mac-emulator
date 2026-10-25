@@ -3,7 +3,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use minifb::{InputCallback, Key, KeyRepeat, MouseButton, MouseMode, ScaleMode, Window, WindowOptions};
+use minifb::{
+    InputCallback, Key, KeyRepeat, MouseButton, MouseMode, ScaleMode, Window, WindowOptions,
+};
 
 use crate::cpu::Emu;
 use crate::gui::wm::{WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
@@ -60,7 +62,9 @@ mod cocoa {
     /// (NSView, NSWindow) for a minifb window, if it has been attached to a window yet.
     fn handles(window: &Window) -> Option<(Id, Id)> {
         let handle = window.window_handle().ok()?;
-        let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_raw() else { return None };
+        let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+            return None;
+        };
         let view = appkit.ns_view.as_ptr();
         // SAFETY: `view` is the live NSView minifb created for this window.
         let ns_window = unsafe { send_id(view, sel(c"window")) };
@@ -70,41 +74,74 @@ mod cocoa {
     // SAFETY (all senders): `obj` must be a live Objective-C object that responds to `sel`
     // with the matching argument/return types. Each wrapper's types are fixed to one shape.
     unsafe fn send_id(obj: Id, sel: *mut c_void) -> Id {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Id>(objc_msgSend as *const ())(obj, sel) }
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Id>(
+                objc_msgSend as *const (),
+            )(obj, sel)
+        }
     }
 
     unsafe fn send_usize(obj: Id, sel: *mut c_void) -> usize {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> usize>(objc_msgSend as *const ())(obj, sel) }
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> usize>(
+                objc_msgSend as *const (),
+            )(obj, sel)
+        }
     }
 
     unsafe fn send_rect(obj: Id, sel: *mut c_void) -> Rect {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Rect>(objc_msgSend as *const ())(obj, sel) }
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Rect>(
+                objc_msgSend as *const (),
+            )(obj, sel)
+        }
     }
 
     unsafe fn send_2f(obj: Id, sel: *mut c_void, a: f64, b: f64) {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, f64, f64)>(objc_msgSend as *const ())(obj, sel, a, b) }
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, f64, f64)>(
+                objc_msgSend as *const (),
+            )(obj, sel, a, b)
+        }
     }
 
     unsafe fn send_4f(obj: Id, sel: *mut c_void, a: f64, b: f64, c: f64, d: f64) {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, f64, f64, f64, f64)>(objc_msgSend as *const ())(obj, sel, a, b, c, d) }
+        unsafe {
+            std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(Id, *mut c_void, f64, f64, f64, f64),
+            >(objc_msgSend as *const ())(obj, sel, a, b, c, d)
+        }
     }
 
     unsafe fn send_usize_arg(obj: Id, sel: *mut c_void, a: usize) {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, usize)>(objc_msgSend as *const ())(obj, sel, a) }
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, usize)>(
+                objc_msgSend as *const (),
+            )(obj, sel, a)
+        }
     }
 
     unsafe fn send_id_arg(obj: Id, sel: *mut c_void, a: Id) {
-        unsafe { std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, Id)>(objc_msgSend as *const ())(obj, sel, a) }
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, Id)>(
+                objc_msgSend as *const (),
+            )(obj, sel, a)
+        }
     }
 
     /// Keep the content area at `w`:`h` while the user resizes. Returns whether it was
     /// applied and read back correctly.
     pub fn lock_aspect(window: &Window, w: u32, h: u32) -> bool {
-        let Some((_, win)) = handles(window) else { return false };
+        let Some((_, win)) = handles(window) else {
+            return false;
+        };
         // SAFETY: see module docs.
         unsafe {
             send_2f(win, sel(c"setContentAspectRatio:"), w as f64, h as f64);
-            let s = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Size>(objc_msgSend as *const ())(win, sel(c"contentAspectRatio"));
+            let s = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Size>(
+                objc_msgSend as *const (),
+            )(win, sel(c"contentAspectRatio"));
             (s.w - w as f64).abs() < 0.5 && (s.h - h as f64).abs() < 0.5
         }
     }
@@ -129,16 +166,39 @@ mod cocoa {
         unsafe {
             let frame = send_rect(win, sel(c"frame"));
             // The title bar's height is what AppKit's own frame->content conversion removes.
-            let titled_content = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, f64, f64, f64, f64, usize) -> Rect>(
-                objc_msgSend as *const (),
-            )(send_class(c"NSWindow"), sel(c"contentRectForFrameRect:styleMask:"), frame.x, frame.y, frame.w, frame.h, 1);
+            let titled_content = std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(Id, *mut c_void, f64, f64, f64, f64, usize) -> Rect,
+            >(objc_msgSend as *const ())(
+                send_class(c"NSWindow"),
+                sel(c"contentRectForFrameRect:styleMask:"),
+                frame.x,
+                frame.y,
+                frame.w,
+                frame.h,
+                1,
+            );
             let titlebar = (frame.h - titled_content.h).max(0.0);
-            let area = Rect { x: 0.0, y: 0.0, w: frame.w, h: if fullscreen { frame.h } else { frame.h - titlebar } };
+            let area = Rect {
+                x: 0.0,
+                y: 0.0,
+                w: frame.w,
+                h: if fullscreen {
+                    frame.h
+                } else {
+                    frame.h - titlebar
+                },
+            };
 
             let target = if fullscreen && aspect.0 > 0 && aspect.1 > 0 {
                 let scale = (area.w / aspect.0 as f64).min(area.h / aspect.1 as f64);
                 let (tw, th) = (aspect.0 as f64 * scale, aspect.1 as f64 * scale);
-                Rect { x: ((area.w - tw) / 2.0).floor(), y: ((area.h - th) / 2.0).floor(), w: tw.floor(), h: th.floor() }
+                Rect {
+                    x: ((area.w - tw) / 2.0).floor(),
+                    y: ((area.h - th) / 2.0).floor(),
+                    w: tw.floor(),
+                    h: th.floor(),
+                }
             } else {
                 area
             };
@@ -158,7 +218,11 @@ mod cocoa {
     unsafe fn set_frame_if_changed(view: Id, r: Rect) {
         unsafe {
             let cur = send_rect(view, sel(c"frame"));
-            if (cur.x - r.x).abs() > 0.5 || (cur.y - r.y).abs() > 0.5 || (cur.w - r.w).abs() > 0.5 || (cur.h - r.h).abs() > 0.5 {
+            if (cur.x - r.x).abs() > 0.5
+                || (cur.y - r.y).abs() > 0.5
+                || (cur.w - r.w).abs() > 0.5
+                || (cur.h - r.h).abs() > 0.5
+            {
                 send_4f(view, sel(c"setFrame:"), r.x, r.y, r.w, r.h);
             }
         }
@@ -170,10 +234,10 @@ mod cocoa {
         let (view, win) = handles(window)?;
         // SAFETY: see module docs.
         unsafe {
-            let point = std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Size>(objc_msgSend as *const ())(
-                send_class(c"NSEvent"),
-                sel(c"mouseLocation"),
-            );
+            let point =
+                std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void) -> Size>(
+                    objc_msgSend as *const (),
+                )(send_class(c"NSEvent"), sel(c"mouseLocation"));
             let frame = send_rect(win, sel(c"frame"));
             let v = send_rect(view, sel(c"frame"));
             let (lx, ly_bottom) = (point.w - frame.x - v.x, point.h - frame.y - v.y);
@@ -189,7 +253,10 @@ mod cocoa {
 
     unsafe fn send_set_frame_display(obj: Id, r: Rect, display: bool) {
         unsafe {
-            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, f64, f64, f64, f64, bool)>(objc_msgSend as *const ())(
+            std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(Id, *mut c_void, f64, f64, f64, f64, bool),
+            >(objc_msgSend as *const ())(
                 obj,
                 sel(c"setFrame:display:"),
                 r.x,
@@ -221,7 +288,10 @@ mod cocoa {
         let (_, win) = handles(window)?;
         // SAFETY: see module docs.
         unsafe {
-            let saved = Saved { frame: send_rect(win, sel(c"frame")), style_mask: send_usize(win, sel(c"styleMask")) };
+            let saved = Saved {
+                frame: send_rect(win, sel(c"frame")),
+                style_mask: send_usize(win, sel(c"styleMask")),
+            };
             let screen = send_id(win, sel(c"screen"));
             if screen.is_null() {
                 return None;
@@ -236,7 +306,9 @@ mod cocoa {
     }
 
     pub fn exit_fullscreen(window: &Window, saved: &Saved) {
-        let Some((_, win)) = handles(window) else { return };
+        let Some((_, win)) = handles(window) else {
+            return;
+        };
         // SAFETY: see module docs.
         unsafe {
             send_usize_arg(win, sel(c"setLevel:"), 0);
@@ -248,21 +320,29 @@ mod cocoa {
 
     /// Debug: resize the window's content area, as if the user had dragged its edge.
     pub fn debug_resize(window: &Window, w: f64, h: f64) {
-        let Some((_, win)) = handles(window) else { return };
+        let Some((_, win)) = handles(window) else {
+            return;
+        };
         // SAFETY: see module docs.
         unsafe { send_2f(win, sel(c"setContentSize:"), w, h) }
     }
 
     /// Debug: NSWindow frame, content view frame, drawing view frame, screen frame.
     pub fn describe(window: &Window) -> String {
-        let Some((view, win)) = handles(window) else { return "not attached".into() };
+        let Some((view, win)) = handles(window) else {
+            return "not attached".into();
+        };
         // SAFETY: see module docs.
         unsafe {
             let wf = send_rect(win, sel(c"frame"));
             let cf = send_rect(send_id(win, sel(c"contentView")), sel(c"frame"));
             let vf = send_rect(view, sel(c"frame"));
             let screen = send_id(win, sel(c"screen"));
-            let sf = if screen.is_null() { None } else { Some(send_rect(screen, sel(c"frame"))) };
+            let sf = if screen.is_null() {
+                None
+            } else {
+                Some(send_rect(screen, sel(c"frame")))
+            };
             format!("window={wf:?} content={cf:?} drawView={vf:?} screen={sf:?}")
         }
     }
@@ -295,8 +375,16 @@ mod cocoa {
 
 /// A resizable window whose picture fills it completely (no letterbox bars): the OS-level
 /// aspect lock keeps the proportions, so nothing visibly distorts.
-fn open(title: &str, size: (u32, u32), chars: &Arc<Mutex<Vec<u32>>>) -> Result<Window, minifb::Error> {
-    let options = WindowOptions { resize: true, scale_mode: ScaleMode::Stretch, ..WindowOptions::default() };
+fn open(
+    title: &str,
+    size: (u32, u32),
+    chars: &Arc<Mutex<Vec<u32>>>,
+) -> Result<Window, minifb::Error> {
+    let options = WindowOptions {
+        resize: true,
+        scale_mode: ScaleMode::Stretch,
+        ..WindowOptions::default()
+    };
     let mut window = Window::new(title, size.0 as usize, size.1 as usize, options)?;
     window.set_target_fps(60);
     window.set_input_callback(Box::new(Chars(chars.clone())));
@@ -304,7 +392,12 @@ fn open(title: &str, size: (u32, u32), chars: &Arc<Mutex<Vec<u32>>>) -> Result<W
 }
 
 /// Map a window point to game coordinates when the picture fills the whole window.
-pub fn window_to_game_stretch(mx: f32, my: f32, win: (f32, f32), game: (u32, u32)) -> Option<(i32, i32)> {
+pub fn window_to_game_stretch(
+    mx: f32,
+    my: f32,
+    win: (f32, f32),
+    game: (u32, u32),
+) -> Option<(i32, i32)> {
     if win.0 <= 0.0 || win.1 <= 0.0 || game.0 == 0 || game.1 == 0 {
         return None;
     }
@@ -357,7 +450,10 @@ impl Presenter {
         let debug = std::env::var_os("XP_DEBUG_TOGGLE").is_some();
         let was_fullscreen = self.fs.is_some();
 
-        let want = emu.wm.content_bounds().unwrap_or((0, 0, self.region.2, self.region.3));
+        let want = emu
+            .wm
+            .content_bounds()
+            .unwrap_or((0, 0, self.region.2, self.region.3));
         let resized = (want.2, want.3) != (self.region.2, self.region.3);
         self.region = want;
         if let Some(w) = emu.wm.windows.iter().find(|w| w.parent == 0 && w.visible) {
@@ -365,11 +461,13 @@ impl Presenter {
         }
         // Follow the game window's size by making a fresh host window; never while in
         // fullscreen, where the system owns the size.
-        if resized && !was_fullscreen
-            && let Ok(w) = open(&self.title, (want.2, want.3), &self.chars) {
-                self.window = w;
-                self.fitted = false;
-            }
+        if resized
+            && !was_fullscreen
+            && let Ok(w) = open(&self.title, (want.2, want.3), &self.chars)
+        {
+            self.window = w;
+            self.fitted = false;
+        }
         let (rx, ry, rw, rh) = self.region;
 
         // Lay the drawing view out over what AppKit really shows (see `cocoa::layout`).
@@ -387,19 +485,26 @@ impl Presenter {
         self.buf.clear();
         for y in 0..rh {
             let row = ((ry as u32 + y) * fb.width + rx as u32) as usize;
-            self.buf.extend_from_slice(&fb.pixels[row..row + rw as usize]);
+            self.buf
+                .extend_from_slice(&fb.pixels[row..row + rw as usize]);
         }
-        let _ = self.window.update_with_buffer(&self.buf, rw as usize, rh as usize);
+        let _ = self
+            .window
+            .update_with_buffer(&self.buf, rw as usize, rh as usize);
 
         // Prefer macOS's own mouse position relative to the drawing view; fall back to
         // minifb's where that is unavailable.
         let mouse = match cocoa::mouse_in_view(&self.window) {
-            Some(((mx, my), (vw, vh))) => window_to_game_stretch(mx as f32, my as f32, (vw as f32, vh as f32), (rw, rh)),
+            Some(((mx, my), (vw, vh))) => {
+                window_to_game_stretch(mx as f32, my as f32, (vw as f32, vh as f32), (rw, rh))
+            }
             None => {
                 let (ww, wh) = self.window.get_size();
                 self.window
                     .get_unscaled_mouse_pos(MouseMode::Discard)
-                    .and_then(|(mx, my)| window_to_game_stretch(mx, my, (ww as f32, wh as f32), (rw, rh)))
+                    .and_then(|(mx, my)| {
+                        window_to_game_stretch(mx, my, (ww as f32, wh as f32), (rw, rh))
+                    })
             }
         };
         if let Some((mx, my)) = mouse {
@@ -411,11 +516,16 @@ impl Presenter {
             let down = self.window.get_mouse_down(MouseButton::Left);
             if down != self.left_down {
                 self.left_down = down;
-                emu.wm.post_mouse(if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP }, pos.0, pos.1);
+                emu.wm.post_mouse(
+                    if down { WM_LBUTTONDOWN } else { WM_LBUTTONUP },
+                    pos.0,
+                    pos.1,
+                );
             }
         } else if self.left_down && !self.window.get_mouse_down(MouseButton::Left) {
             self.left_down = false; // released outside the picture: don't leave a drag stuck
-            emu.wm.post_mouse(WM_LBUTTONUP, self.last_pos.0, self.last_pos.1);
+            emu.wm
+                .post_mouse(WM_LBUTTONUP, self.last_pos.0, self.last_pos.1);
         }
 
         // Option+Enter toggles macOS fullscreen and is not forwarded to the game.
@@ -459,7 +569,11 @@ impl Presenter {
                 emu.wm.post_key(vk, false);
             }
         }
-        let typed: Vec<u32> = self.chars.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default();
+        let typed: Vec<u32> = self
+            .chars
+            .lock()
+            .map(|mut v| std::mem::take(&mut *v))
+            .unwrap_or_default();
         for c in typed {
             emu.wm.post_char(c);
         }
@@ -471,11 +585,14 @@ impl Presenter {
 pub fn virtual_key(key: Key) -> Option<u32> {
     use Key::*;
     Some(match key {
-        Key0 | Key1 | Key2 | Key3 | Key4 | Key5 | Key6 | Key7 | Key8 | Key9 => 0x30 + (key as u32 - Key0 as u32),
-        A | B | C | D | E | F | G | H | I | J | K | L | M | N | O | P | Q | R | S | T | U | V | W | X | Y | Z => {
-            0x41 + (key as u32 - A as u32)
+        Key0 | Key1 | Key2 | Key3 | Key4 | Key5 | Key6 | Key7 | Key8 | Key9 => {
+            0x30 + (key as u32 - Key0 as u32)
         }
-        F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12 => 0x70 + (key as u32 - F1 as u32),
+        A | B | C | D | E | F | G | H | I | J | K | L | M | N | O | P | Q | R | S | T | U | V
+        | W | X | Y | Z => 0x41 + (key as u32 - A as u32),
+        F1 | F2 | F3 | F4 | F5 | F6 | F7 | F8 | F9 | F10 | F11 | F12 => {
+            0x70 + (key as u32 - F1 as u32)
+        }
         Left => 0x25,
         Up => 0x26,
         Right => 0x27,
@@ -504,17 +621,41 @@ mod tests {
 
     #[test]
     fn stretch_mapping_fills_the_window() {
-        assert_eq!(window_to_game_stretch(0.0, 0.0, (1182.0, 818.0), (591, 409)), Some((0, 0)));
-        assert_eq!(window_to_game_stretch(1181.0, 817.0, (1182.0, 818.0), (591, 409)), Some((590, 408)));
-        assert_eq!(window_to_game_stretch(591.0, 409.0, (1182.0, 818.0), (591, 409)), Some((295, 204)));
-        assert_eq!(window_to_game_stretch(1182.0, 10.0, (1182.0, 818.0), (591, 409)), None);
-        assert_eq!(window_to_game_stretch(-1.0, 10.0, (1182.0, 818.0), (591, 409)), None);
-        assert_eq!(window_to_game_stretch(1.0, 1.0, (0.0, 0.0), (591, 409)), None);
+        assert_eq!(
+            window_to_game_stretch(0.0, 0.0, (1182.0, 818.0), (591, 409)),
+            Some((0, 0))
+        );
+        assert_eq!(
+            window_to_game_stretch(1181.0, 817.0, (1182.0, 818.0), (591, 409)),
+            Some((590, 408))
+        );
+        assert_eq!(
+            window_to_game_stretch(591.0, 409.0, (1182.0, 818.0), (591, 409)),
+            Some((295, 204))
+        );
+        assert_eq!(
+            window_to_game_stretch(1182.0, 10.0, (1182.0, 818.0), (591, 409)),
+            None
+        );
+        assert_eq!(
+            window_to_game_stretch(-1.0, 10.0, (1182.0, 818.0), (591, 409)),
+            None
+        );
+        assert_eq!(
+            window_to_game_stretch(1.0, 1.0, (0.0, 0.0), (591, 409)),
+            None
+        );
     }
 
     #[test]
     fn unscaled_window_maps_one_to_one() {
-        assert_eq!(window_to_game_stretch(10.0, 20.0, (640.0, 480.0), (640, 480)), Some((10, 20)));
-        assert_eq!(window_to_game_stretch(640.0, 0.0, (640.0, 480.0), (640, 480)), None);
+        assert_eq!(
+            window_to_game_stretch(10.0, 20.0, (640.0, 480.0), (640, 480)),
+            Some((10, 20))
+        );
+        assert_eq!(
+            window_to_game_stretch(640.0, 0.0, (640.0, 480.0), (640, 480)),
+            None
+        );
     }
 }

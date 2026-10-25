@@ -6,9 +6,9 @@ pub mod pe;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::cpu::{Emu, Res, Stop, ESP};
-use crate::memory::Fault;
+use crate::cpu::{ESP, Emu, Res, Stop};
 use crate::loader::pe::{Pe, PeError};
+use crate::memory::Fault;
 use crate::win32::{Exports, Module, PEB_ADDR, STACK_SIZE, STACK_TOP, TEB_ADDR};
 
 #[derive(Debug)]
@@ -60,7 +60,11 @@ pub fn load(emu: &mut Emu, data: &[u8]) -> Result<Image, LoadError> {
     let mut unsupported = Vec::new();
     bind_imports(emu, &pe, base, &mut unsupported)?;
     start_at(emu, base + pe.entry_rva)?;
-    Ok(Image { base, entry: base + pe.entry_rva, unsupported })
+    Ok(Image {
+        base,
+        entry: base + pe.entry_rva,
+        unsupported,
+    })
 }
 
 /// Load a DLL from raw bytes, run its DllMain(DLL_PROCESS_ATTACH) and return its handle.
@@ -76,7 +80,11 @@ pub fn load_dll(emu: &mut Emu, data: &[u8], name: &str, path: &str) -> Result<u3
         exports.by_ordinal.insert(ex.ordinal, base + ex.rva);
     }
     // Register before binding imports/DllMain so circular imports find us.
-    let entry = if pe.is_dll && pe.entry_rva != 0 { base + pe.entry_rva } else { 0 };
+    let entry = if pe.is_dll && pe.entry_rva != 0 {
+        base + pe.entry_rva
+    } else {
+        0
+    };
     emu.win.modules.push(Module {
         name: crate::win32::normalize_dll(name),
         path: path.to_string(),
@@ -118,7 +126,9 @@ impl Emu {
     /// FreeLibrary: drop a reference; at zero the DLL gets DLL_PROCESS_DETACH and its memory is
     /// released, so loading it again starts it from scratch (its static objects included).
     pub fn free_library(&mut self, handle: u32) -> Res<bool> {
-        let Some(i) = self.win.modules.iter().position(|m| m.handle == handle) else { return Ok(false) };
+        let Some(i) = self.win.modules.iter().position(|m| m.handle == handle) else {
+            return Ok(false);
+        };
         let m = &mut self.win.modules[i];
         if m.exports.is_none() {
             return Ok(true); // an emulated DLL has nothing to unload
@@ -188,8 +198,14 @@ fn map_image(emu: &mut Emu, pe: &Pe, data: &[u8]) -> Result<u32, LoadError> {
 }
 
 /// Fill each import address table slot with either a real DLL's export or an HLE stub.
-fn bind_imports(emu: &mut Emu, pe: &Pe, base: u32, unsupported: &mut Vec<String>) -> Result<(), LoadError> {
-    let mut real_exports: HashMap<String, Option<(HashMap<String, u32>, HashMap<u32, u32>)>> = HashMap::new();
+fn bind_imports(
+    emu: &mut Emu,
+    pe: &Pe,
+    base: u32,
+    unsupported: &mut Vec<String>,
+) -> Result<(), LoadError> {
+    let mut real_exports: HashMap<String, Option<(HashMap<String, u32>, HashMap<u32, u32>)>> =
+        HashMap::new();
     for imp in &pe.imports {
         let key = imp.dll.to_ascii_lowercase();
         if !real_exports.contains_key(&key) {
@@ -203,11 +219,14 @@ fn bind_imports(emu: &mut Emu, pe: &Pe, base: u32, unsupported: &mut Vec<String>
         }
         let real = &real_exports[&key];
         for (i, name) in imp.functions.iter().enumerate() {
-            let from_real = real.as_ref().and_then(|(by_name, by_ord)| match name.strip_prefix('#') {
-                Some(n) => n.parse().ok().and_then(|o| by_ord.get(&o)),
-                None => by_name.get(name),
-            });
-            let data = crate::win32::msvcrt::data_symbol(emu, &imp.dll, name).map_err(LoadError::Stop)?;
+            let from_real =
+                real.as_ref()
+                    .and_then(|(by_name, by_ord)| match name.strip_prefix('#') {
+                        Some(n) => n.parse().ok().and_then(|o| by_ord.get(&o)),
+                        None => by_name.get(name),
+                    });
+            let data =
+                crate::win32::msvcrt::data_symbol(emu, &imp.dll, name).map_err(LoadError::Stop)?;
             let addr = match (from_real, data) {
                 (Some(&a), _) => a,
                 (None, Some(a)) => a,

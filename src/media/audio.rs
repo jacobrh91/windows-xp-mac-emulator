@@ -8,8 +8,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use super::speaker::{decode_pcm, Resampler, Speaker, SpeakerHandle};
-use crate::cpu::{Emu, Res, Stop, ESP};
+use super::speaker::{Resampler, Speaker, SpeakerHandle, decode_pcm};
+use crate::cpu::{ESP, Emu, Res, Stop};
 use crate::win32::threads::Block;
 use crate::win32::{Args, Handler};
 
@@ -128,7 +128,19 @@ impl AudioState {
     /// a queued buffer. With speakers, buffers finish as they are heard, so check often.
     pub fn next_due(&self) -> Option<u64> {
         let timers = self.timers.iter().map(|t| t.next_ms).min();
-        let buffers = self.waves.values().filter(|w| w.paused_at.is_none()).filter_map(|w| w.queue.front()).map(|q| if q.end_frame.is_some() { q.start_ms } else { q.done_ms }).min();
+        let buffers = self
+            .waves
+            .values()
+            .filter(|w| w.paused_at.is_none())
+            .filter_map(|w| w.queue.front())
+            .map(|q| {
+                if q.end_frame.is_some() {
+                    q.start_ms
+                } else {
+                    q.done_ms
+                }
+            })
+            .min();
         timers.into_iter().chain(buffers).min()
     }
 
@@ -139,9 +151,17 @@ impl AudioState {
 }
 
 enum Notify {
-    Call { callback: u32, args: [u32; 5] },
+    Call {
+        callback: u32,
+        args: [u32; 5],
+    },
     SetEvent(u32),
-    Post { hwnd: u32, msg: u32, wparam: u32, lparam: u32 },
+    Post {
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+    },
 }
 
 impl Emu {
@@ -164,7 +184,10 @@ impl Emu {
             if t.flags & (TIME_CALLBACK_EVENT_SET | TIME_CALLBACK_EVENT_PULSE) != 0 {
                 notes.push(Notify::SetEvent(t.callback));
             } else if t.callback != 0 {
-                notes.push(Notify::Call { callback: t.callback, args: [t.id, 0, t.user, 0, 0] });
+                notes.push(Notify::Call {
+                    callback: t.callback,
+                    args: [t.id, 0, t.user, 0, 0],
+                });
             }
             if t.flags & TIME_PERIODIC != 0 {
                 // Skip missed periods instead of firing a burst to catch up.
@@ -182,13 +205,19 @@ impl Emu {
             let played = speaker.as_ref().map(|s| s.progress(h).1);
             let buffering = speaker.as_ref().is_some_and(|s| s.buffering(h));
             loop {
-                let Some(w) = self.win.audio.waves.get_mut(&h) else { break };
+                let Some(w) = self.win.audio.waves.get_mut(&h) else {
+                    break;
+                };
                 // With speakers, a buffer is done when they have played it: their clock, not
                 // ours, so the two cannot drift apart. (If they stall, time decides after all.)
                 // While they are still building up their prebuffer (a lone short buffer, such as
                 // the probe Miles writes at start-up), the emulated clock decides.
                 let finished = |q: &Queued| match (q.end_frame, played) {
-                    (Some(end), Some(p)) => p >= end || (buffering && now >= q.done_ms) || now >= q.done_ms + SPEAKER_GRACE_MS,
+                    (Some(end), Some(p)) => {
+                        p >= end
+                            || (buffering && now >= q.done_ms)
+                            || now >= q.done_ms + SPEAKER_GRACE_MS
+                    }
                     _ => q.done_ms <= now,
                 };
                 if w.paused_at.is_some() || w.queue.front().is_none_or(|q| !finished(q)) {
@@ -198,8 +227,11 @@ impl Emu {
                 w.played_bytes += q.len as u64;
                 let (mode, callback, instance) = (w.mode, w.callback, w.instance);
                 let flags = self.mem.read(q.header + 16, 4)?;
-                self.mem.write(q.header + 16, 4, (flags & !WHDR_INQUEUE) | WHDR_DONE)?;
-                notes.push(notification(mode, callback, h, WOM_DONE, instance, q.header));
+                self.mem
+                    .write(q.header + 16, 4, (flags & !WHDR_INQUEUE) | WHDR_DONE)?;
+                notes.push(notification(
+                    mode, callback, h, WOM_DONE, instance, q.header,
+                ));
             }
         }
 
@@ -251,37 +283,80 @@ impl Emu {
                 result?;
             }
             Notify::SetEvent(h) => {
-                if let Some(crate::win32::vfs::Obj::Event { signaled, .. }) = self.win.vfs.get_mut(h) {
+                if let Some(crate::win32::vfs::Obj::Event { signaled, .. }) =
+                    self.win.vfs.get_mut(h)
+                {
                     *signaled = true;
                 }
             }
-            Notify::Post { hwnd, msg, wparam, lparam } => self.wm.post(hwnd, msg, wparam, lparam),
+            Notify::Post {
+                hwnd,
+                msg,
+                wparam,
+                lparam,
+            } => self.wm.post(hwnd, msg, wparam, lparam),
         }
         Ok(())
     }
 }
 
 /// What to do to tell the program about `msg` on wave device `hwo`.
-fn notification(mode: u32, callback: u32, hwo: u32, msg: u32, instance: u32, param1: u32) -> Notify {
+fn notification(
+    mode: u32,
+    callback: u32,
+    hwo: u32,
+    msg: u32,
+    instance: u32,
+    param1: u32,
+) -> Notify {
     match mode {
-        CALLBACK_FUNCTION => Notify::Call { callback, args: [hwo, msg, instance, param1, 0] },
+        CALLBACK_FUNCTION => Notify::Call {
+            callback,
+            args: [hwo, msg, instance, param1, 0],
+        },
         CALLBACK_EVENT => Notify::SetEvent(callback),
-        CALLBACK_WINDOW => Notify::Post { hwnd: callback, msg, wparam: hwo, lparam: param1 },
-        CALLBACK_THREAD => Notify::Post { hwnd: 0, msg, wparam: hwo, lparam: param1 },
+        CALLBACK_WINDOW => Notify::Post {
+            hwnd: callback,
+            msg,
+            wparam: hwo,
+            lparam: param1,
+        },
+        CALLBACK_THREAD => Notify::Post {
+            hwnd: 0,
+            msg,
+            wparam: hwo,
+            lparam: param1,
+        },
         _ => Notify::SetEvent(0),
     }
 }
 
 fn read_format(e: &Emu, p: u32) -> Res<Option<Format>> {
     let tag = e.mem.read(p, 2)?;
-    let (channels, rate, avg, bits) = (e.mem.read(p + 2, 2)?, e.mem.read(p + 4, 4)?, e.mem.read(p + 8, 4)?, e.mem.read(p + 14, 2)?);
-    let valid = tag == 1 && (1..=2).contains(&channels) && matches!(bits, 8 | 16) && rate >= 1000 && avg > 0;
-    Ok(valid.then_some(Format { channels, rate, bits, avg_bytes: avg }))
+    let (channels, rate, avg, bits) = (
+        e.mem.read(p + 2, 2)?,
+        e.mem.read(p + 4, 4)?,
+        e.mem.read(p + 8, 4)?,
+        e.mem.read(p + 14, 2)?,
+    );
+    let valid = tag == 1
+        && (1..=2).contains(&channels)
+        && matches!(bits, 8 | 16)
+        && rate >= 1000
+        && avg > 0;
+    Ok(valid.then_some(Format {
+        channels,
+        rate,
+        bits,
+        avg_bytes: avg,
+    }))
 }
 
 fn wave_open(e: &mut Emu, a: &Args) -> Res<u32> {
     let (phwo, pwfx, callback, instance, open) = (a[0], a[2], a[3], a[4], a[5]);
-    let Some(format) = read_format(e, pwfx)? else { return Ok(WAVERR_BADFORMAT) };
+    let Some(format) = read_format(e, pwfx)? else {
+        return Ok(WAVERR_BADFORMAT);
+    };
     if open & WAVE_FORMAT_QUERY != 0 {
         return Ok(0);
     }
@@ -290,7 +365,18 @@ fn wave_open(e: &mut Emu, a: &Args) -> Res<u32> {
     let mode = open & CALLBACK_MASK;
     e.win.audio.waves.insert(
         handle,
-        WaveOut { format, mode, callback, instance, queue: VecDeque::new(), tail_ms: 0, played_bytes: 0, paused_at: None, volume: 0xFFFF_FFFF, resampler: None },
+        WaveOut {
+            format,
+            mode,
+            callback,
+            instance,
+            queue: VecDeque::new(),
+            tail_ms: 0,
+            played_bytes: 0,
+            paused_at: None,
+            volume: 0xFFFF_FFFF,
+            resampler: None,
+        },
     );
     if phwo != 0 {
         e.mem.write(phwo, 4, handle)?;
@@ -303,7 +389,9 @@ fn wave_open(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 fn wave_close(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(w) = e.win.audio.waves.get(&a[0]) else { return Ok(MMSYSERR_INVALHANDLE) };
+    let Some(w) = e.win.audio.waves.get(&a[0]) else {
+        return Ok(MMSYSERR_INVALHANDLE);
+    };
     if !w.queue.is_empty() {
         return Ok(WAVERR_STILLPLAYING);
     }
@@ -323,26 +411,45 @@ fn wave_write(e: &mut Emu, a: &Args) -> Res<u32> {
     let now = e.win.now_ms();
     let flags = e.mem.read(hdr + 16, 4)?;
     let len = e.mem.read(hdr + 4, 4)?;
-    let Some(w) = e.win.audio.waves.get_mut(&hwo) else { return Ok(MMSYSERR_INVALHANDLE) };
+    let Some(w) = e.win.audio.waves.get_mut(&hwo) else {
+        return Ok(MMSYSERR_INVALHANDLE);
+    };
     if flags & WHDR_PREPARED == 0 {
         return Ok(WAVERR_UNPREPARED);
     }
-    let dur = (len as u64 * 1000).div_ceil(w.format.avg_bytes as u64).max(1);
+    let dur = (len as u64 * 1000)
+        .div_ceil(w.format.avg_bytes as u64)
+        .max(1);
     let start = w.tail_ms.max(now);
     w.tail_ms = start + dur;
-    w.queue.push_back(Queued { header: hdr, len, start_ms: start, done_ms: start + dur, end_frame: None });
+    w.queue.push_back(Queued {
+        header: hdr,
+        len,
+        start_ms: start,
+        done_ms: start + dur,
+        end_frame: None,
+    });
     let format = w.format;
-    e.mem.write(hdr + 16, 4, (flags & !WHDR_DONE) | WHDR_INQUEUE)?;
+    e.mem
+        .write(hdr + 16, 4, (flags & !WHDR_DONE) | WHDR_INQUEUE)?;
     // And to the speakers.
     if let Some(s) = e.speaker() {
         let data = e.mem.read(hdr, 4)?;
         let pcm = decode_pcm(&e.mem.read_bytes(data, len)?, format.bits, format.channels);
         let mut out = Vec::with_capacity(pcm.len() * 2);
         if let Some(w) = e.win.audio.waves.get_mut(&hwo) {
-            w.resampler.get_or_insert_with(|| Resampler::new(format.rate, s.rate)).process(&pcm, &mut out);
+            w.resampler
+                .get_or_insert_with(|| Resampler::new(format.rate, s.rate))
+                .process(&pcm, &mut out);
         }
         s.queue(hwo, &out);
-        if let Some(q) = e.win.audio.waves.get_mut(&hwo).and_then(|w| w.queue.back_mut()) {
+        if let Some(q) = e
+            .win
+            .audio
+            .waves
+            .get_mut(&hwo)
+            .and_then(|w| w.queue.back_mut())
+        {
             q.end_frame = Some(s.progress(hwo).0);
         }
     }
@@ -351,7 +458,9 @@ fn wave_write(e: &mut Emu, a: &Args) -> Res<u32> {
 
 /// Finish every queued buffer right now (waveOutReset).
 fn wave_reset(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(w) = e.win.audio.waves.get_mut(&a[0]) else { return Ok(MMSYSERR_INVALHANDLE) };
+    let Some(w) = e.win.audio.waves.get_mut(&a[0]) else {
+        return Ok(MMSYSERR_INVALHANDLE);
+    };
     let queued: Vec<Queued> = w.queue.drain(..).collect();
     w.paused_at = None;
     w.tail_ms = 0;
@@ -363,9 +472,12 @@ fn wave_reset(e: &mut Emu, a: &Args) -> Res<u32> {
     }
     for q in queued {
         let flags = e.mem.read(q.header + 16, 4)?;
-        e.mem.write(q.header + 16, 4, (flags & !WHDR_INQUEUE) | WHDR_DONE)?;
+        e.mem
+            .write(q.header + 16, 4, (flags & !WHDR_INQUEUE) | WHDR_DONE)?;
         if mode != 0 {
-            e.deliver(notification(mode, callback, a[0], WOM_DONE, instance, q.header))?;
+            e.deliver(notification(
+                mode, callback, a[0], WOM_DONE, instance, q.header,
+            ))?;
         }
     }
     Ok(0)
@@ -410,18 +522,24 @@ fn wave_restart(e: &mut Emu, a: &Args) -> Res<u32> {
 /// How much of the stream has been played, in the unit the caller asked for.
 fn wave_position(e: &mut Emu, a: &Args) -> Res<u32> {
     let now = e.win.now_ms();
-    let Some(w) = e.win.audio.waves.get(&a[0]) else { return Ok(MMSYSERR_INVALHANDLE) };
+    let Some(w) = e.win.audio.waves.get(&a[0]) else {
+        return Ok(MMSYSERR_INVALHANDLE);
+    };
     let mut bytes = w.played_bytes;
     if let (Some(q), None) = (w.queue.front(), w.paused_at)
-        && now > q.start_ms {
-            let (elapsed, total) = ((now - q.start_ms).min(q.done_ms - q.start_ms), (q.done_ms - q.start_ms).max(1));
-            bytes += q.len as u64 * elapsed / total;
-        }
+        && now > q.start_ms
+    {
+        let (elapsed, total) = (
+            (now - q.start_ms).min(q.done_ms - q.start_ms),
+            (q.done_ms - q.start_ms).max(1),
+        );
+        bytes += q.len as u64 * elapsed / total;
+    }
     let f = w.format;
     let (kind, value) = match e.mem.read(a[1], 4)? {
-        1 => (1, (bytes * 1000 / f.avg_bytes as u64) as u32),                     // TIME_MS
-        2 => (2, (bytes / (f.channels * f.bits / 8).max(1) as u64) as u32),       // TIME_SAMPLES
-        _ => (4, bytes as u32),                                                   // TIME_BYTES
+        1 => (1, (bytes * 1000 / f.avg_bytes as u64) as u32), // TIME_MS
+        2 => (2, (bytes / (f.channels * f.bits / 8).max(1) as u64) as u32), // TIME_SAMPLES
+        _ => (4, bytes as u32),                               // TIME_BYTES
     };
     e.mem.write(a[1], 4, kind)?;
     e.mem.write(a[1] + 4, 4, value)?;
@@ -433,7 +551,14 @@ fn time_set_event(e: &mut Emu, a: &Args) -> Res<u32> {
     let id = e.win.audio.next_timer + 1;
     e.win.audio.next_timer = id;
     let now = e.win.now_ms();
-    e.win.audio.timers.push(Timer { id, delay, callback, user, flags, next_ms: now + delay.max(1) as u64 });
+    e.win.audio.timers.push(Timer {
+        id,
+        delay,
+        callback,
+        user,
+        flags,
+        next_ms: now + delay.max(1) as u64,
+    });
     Ok(id)
 }
 
@@ -490,19 +615,25 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "waveOutRestart" => (1, wave_restart),
         "waveOutBreakLoop" => (1, |_, _| Ok(0)),
         "waveOutGetPosition" => (3, wave_position),
-        "waveOutGetVolume" => (2, |e, a| match e.win.audio.waves.get(&a[0]).map(|w| w.volume) {
-            Some(v) => {
-                e.mem.write(a[1], 4, v)?;
-                Ok(0)
+        "waveOutGetVolume" => (2, |e, a| {
+            match e.win.audio.waves.get(&a[0]).map(|w| w.volume) {
+                Some(v) => {
+                    e.mem.write(a[1], 4, v)?;
+                    Ok(0)
+                }
+                None => Ok(MMSYSERR_INVALHANDLE),
             }
-            None => Ok(MMSYSERR_INVALHANDLE),
         }),
         "waveOutSetVolume" => (2, |e, a| match e.win.audio.waves.get_mut(&a[0]) {
             Some(w) => {
                 w.volume = a[1];
                 // Low word is the left channel, high word the right; 0xFFFF is full volume.
                 if let Some(s) = e.speaker() {
-                    s.set_volume(a[0], (a[1] & 0xFFFF) as f32 / 65535.0, (a[1] >> 16) as f32 / 65535.0);
+                    s.set_volume(
+                        a[0],
+                        (a[1] & 0xFFFF) as f32 / 65535.0,
+                        (a[1] >> 16) as f32 / 65535.0,
+                    );
                 }
                 Ok(0)
             }
@@ -534,7 +665,11 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "timeKillEvent" => (1, |e, a| {
             let before = e.win.audio.timers.len();
             e.win.audio.timers.retain(|t| t.id != a[0]);
-            Ok(if e.win.audio.timers.len() < before { 0 } else { MMSYSERR_INVALPARAM })
+            Ok(if e.win.audio.timers.len() < before {
+                0
+            } else {
+                MMSYSERR_INVALPARAM
+            })
         }),
         "timeGetDevCaps" => (2, |e, a| {
             e.mem.write(a[0], 4, 1)?; // wPeriodMin
@@ -577,7 +712,14 @@ mod tests {
         code.extend_from_slice(&[0xC2, 20, 0]);
         e.mem.write_bytes(CB, &code).unwrap();
         // 22.05 kHz, 16-bit stereo PCM: 88200 bytes per second
-        for (off, v, n) in [(0u32, 1u32, 2u32), (2, 2, 2), (4, 22050, 4), (8, 88200, 4), (12, 4, 2), (14, 16, 2)] {
+        for (off, v, n) in [
+            (0u32, 1u32, 2u32),
+            (2, 2, 2),
+            (4, 22050, 4),
+            (8, 88200, 4),
+            (12, 4, 2),
+            (14, 16, 2),
+        ] {
             e.mem.write(FMT + off, n, v).unwrap();
         }
         e
@@ -601,7 +743,14 @@ mod tests {
     }
 
     fn open(e: &mut Emu) -> u32 {
-        assert_eq!(call(e, "waveOutOpen", &[0x2100, 0xFFFF_FFFF, FMT, CB, 77, CALLBACK_FUNCTION]), 0);
+        assert_eq!(
+            call(
+                e,
+                "waveOutOpen",
+                &[0x2100, 0xFFFF_FFFF, FMT, CB, 77, CALLBACK_FUNCTION]
+            ),
+            0
+        );
         e.mem.read(0x2100, 4).unwrap()
     }
 
@@ -616,18 +765,38 @@ mod tests {
         assert_ne!(h, 0);
         assert_eq!((count(&e), e.mem.read(LAST_MSG, 4).unwrap()), (1, WOM_OPEN));
         assert_eq!(call(&mut e, "waveOutClose", &[h]), 0);
-        assert_eq!((count(&e), e.mem.read(LAST_MSG, 4).unwrap()), (2, WOM_CLOSE));
-        assert_eq!(call(&mut e, "waveOutClose", &[h]), MMSYSERR_INVALHANDLE, "already closed");
+        assert_eq!(
+            (count(&e), e.mem.read(LAST_MSG, 4).unwrap()),
+            (2, WOM_CLOSE)
+        );
+        assert_eq!(
+            call(&mut e, "waveOutClose", &[h]),
+            MMSYSERR_INVALHANDLE,
+            "already closed"
+        );
     }
 
     #[test]
     fn unsupported_formats_are_refused_and_queries_open_nothing() {
         let mut e = setup();
         e.mem.write(FMT, 2, 3).unwrap(); // WAVE_FORMAT_IEEE_FLOAT
-        assert_eq!(call(&mut e, "waveOutOpen", &[0x2100, 0xFFFF_FFFF, FMT, 0, 0, 0]), WAVERR_BADFORMAT);
+        assert_eq!(
+            call(&mut e, "waveOutOpen", &[0x2100, 0xFFFF_FFFF, FMT, 0, 0, 0]),
+            WAVERR_BADFORMAT
+        );
         e.mem.write(FMT, 2, 1).unwrap();
-        assert_eq!(call(&mut e, "waveOutOpen", &[0x2100, 0xFFFF_FFFF, FMT, 0, 0, WAVE_FORMAT_QUERY]), 0);
-        assert!(e.win.audio.waves.is_empty(), "WAVE_FORMAT_QUERY must not open a device");
+        assert_eq!(
+            call(
+                &mut e,
+                "waveOutOpen",
+                &[0x2100, 0xFFFF_FFFF, FMT, 0, 0, WAVE_FORMAT_QUERY]
+            ),
+            0
+        );
+        assert!(
+            e.win.audio.waves.is_empty(),
+            "WAVE_FORMAT_QUERY must not open a device"
+        );
     }
 
     #[test]
@@ -635,7 +804,11 @@ mod tests {
         let mut e = setup();
         let h = open(&mut e);
         header(&mut e, HDR, 8820); // 8820 bytes at 88200 B/s = 100 ms
-        assert_eq!(call(&mut e, "waveOutWrite", &[h, HDR, 32]), WAVERR_UNPREPARED, "must be prepared first");
+        assert_eq!(
+            call(&mut e, "waveOutWrite", &[h, HDR, 32]),
+            WAVERR_UNPREPARED,
+            "must be prepared first"
+        );
         assert_eq!(call(&mut e, "waveOutPrepareHeader", &[h, HDR, 32]), 0);
         assert_eq!(call(&mut e, "waveOutWrite", &[h, HDR, 32]), 0);
         assert_eq!(flags(&e, HDR) & (WHDR_INQUEUE | WHDR_DONE), WHDR_INQUEUE);
@@ -645,8 +818,16 @@ mod tests {
         assert_eq!(flags(&e, HDR) & WHDR_DONE, 0);
         e.win.virtual_now = Some(100);
         assert!(pump(&mut e));
-        assert_eq!(flags(&e, HDR) & (WHDR_INQUEUE | WHDR_DONE), WHDR_DONE, "done, no longer queued");
-        assert_eq!((count(&e), e.mem.read(LAST_MSG, 4).unwrap()), (2, WOM_DONE), "WOM_OPEN then WOM_DONE");
+        assert_eq!(
+            flags(&e, HDR) & (WHDR_INQUEUE | WHDR_DONE),
+            WHDR_DONE,
+            "done, no longer queued"
+        );
+        assert_eq!(
+            (count(&e), e.mem.read(LAST_MSG, 4).unwrap()),
+            (2, WOM_DONE),
+            "WOM_OPEN then WOM_DONE"
+        );
         assert_eq!(call(&mut e, "waveOutUnprepareHeader", &[h, HDR, 32]), 0);
     }
 
@@ -662,7 +843,11 @@ mod tests {
         }
         e.win.virtual_now = Some(100);
         pump(&mut e);
-        assert_eq!((flags(&e, HDR) & WHDR_DONE, flags(&e, h2) & WHDR_DONE), (WHDR_DONE, 0), "the second is still playing");
+        assert_eq!(
+            (flags(&e, HDR) & WHDR_DONE, flags(&e, h2) & WHDR_DONE),
+            (WHDR_DONE, 0),
+            "the second is still playing"
+        );
         e.win.virtual_now = Some(200);
         pump(&mut e);
         assert_eq!(flags(&e, h2) & WHDR_DONE, WHDR_DONE);
@@ -697,7 +882,10 @@ mod tests {
         call(&mut e, "waveOutPrepareHeader", &[h, HDR, 32]);
         call(&mut e, "waveOutWrite", &[h, HDR, 32]);
         assert_eq!(call(&mut e, "waveOutClose", &[h]), WAVERR_STILLPLAYING);
-        assert_eq!(call(&mut e, "waveOutUnprepareHeader", &[h, HDR, 32]), WAVERR_STILLPLAYING);
+        assert_eq!(
+            call(&mut e, "waveOutUnprepareHeader", &[h, HDR, 32]),
+            WAVERR_STILLPLAYING
+        );
         assert_eq!(call(&mut e, "waveOutReset", &[h]), 0);
         assert_eq!(flags(&e, HDR) & (WHDR_DONE | WHDR_INQUEUE), WHDR_DONE);
         assert_eq!(e.mem.read(LAST_MSG, 4).unwrap(), WOM_DONE);
@@ -714,7 +902,11 @@ mod tests {
         e.win.virtual_now = Some(50);
         e.mem.write(0x2200, 4, 4).unwrap(); // ask for TIME_BYTES
         call(&mut e, "waveOutGetPosition", &[h, 0x2200, 8]);
-        assert_eq!(e.mem.read(0x2204, 4).unwrap(), 4410, "half of the 8820-byte buffer after 50 of 100 ms");
+        assert_eq!(
+            e.mem.read(0x2204, 4).unwrap(),
+            4410,
+            "half of the 8820-byte buffer after 50 of 100 ms"
+        );
         e.mem.write(0x2200, 4, 1).unwrap(); // TIME_MS
         call(&mut e, "waveOutGetPosition", &[h, 0x2200, 8]);
         assert_eq!(e.mem.read(0x2204, 4).unwrap(), 50);
@@ -733,10 +925,16 @@ mod tests {
         e.win.virtual_now = Some(40);
         call(&mut e, "waveOutPause", &[h]);
         e.win.virtual_now = Some(500);
-        assert!(!pump(&mut e), "paused: nothing completes however long it takes");
+        assert!(
+            !pump(&mut e),
+            "paused: nothing completes however long it takes"
+        );
         call(&mut e, "waveOutRestart", &[h]);
         e.win.virtual_now = Some(559);
-        assert!(!pump(&mut e), "60 ms of the 100 ms remain after restart at 500");
+        assert!(
+            !pump(&mut e),
+            "60 ms of the 100 ms remain after restart at 500"
+        );
         e.win.virtual_now = Some(560);
         assert!(pump(&mut e));
     }
@@ -745,16 +943,36 @@ mod tests {
     fn event_and_window_callbacks() {
         let mut e = setup();
         let ev = e.win.vfs.create_event(false, false);
-        assert_eq!(call(&mut e, "waveOutOpen", &[0x2100, 0xFFFF_FFFF, FMT, ev, 0, CALLBACK_EVENT]), 0);
+        assert_eq!(
+            call(
+                &mut e,
+                "waveOutOpen",
+                &[0x2100, 0xFFFF_FFFF, FMT, ev, 0, CALLBACK_EVENT]
+            ),
+            0
+        );
         let h = e.mem.read(0x2100, 4).unwrap();
         header(&mut e, HDR, 882);
         call(&mut e, "waveOutPrepareHeader", &[h, HDR, 32]);
         call(&mut e, "waveOutWrite", &[h, HDR, 32]);
         e.win.virtual_now = Some(10);
         pump(&mut e);
-        assert!(matches!(e.win.vfs.get(ev), Some(crate::win32::vfs::Obj::Event { signaled: true, .. })), "CALLBACK_EVENT sets the event");
+        assert!(
+            matches!(
+                e.win.vfs.get(ev),
+                Some(crate::win32::vfs::Obj::Event { signaled: true, .. })
+            ),
+            "CALLBACK_EVENT sets the event"
+        );
 
-        assert_eq!(call(&mut e, "waveOutOpen", &[0x2100, 0xFFFF_FFFF, FMT, 0x10010, 0, CALLBACK_WINDOW]), 0);
+        assert_eq!(
+            call(
+                &mut e,
+                "waveOutOpen",
+                &[0x2100, 0xFFFF_FFFF, FMT, 0x10010, 0, CALLBACK_WINDOW]
+            ),
+            0
+        );
         let h2 = e.mem.read(0x2100, 4).unwrap();
         e.wm.queue.clear();
         header(&mut e, HDR + 0x100, 882);
@@ -763,7 +981,11 @@ mod tests {
         e.win.virtual_now = Some(30);
         pump(&mut e);
         let m = e.wm.queue.pop_front().unwrap();
-        assert_eq!((m.hwnd, m.message, m.wparam, m.lparam), (0x10010, WOM_DONE, h2, HDR + 0x100), "MM_WOM_DONE posted to the window");
+        assert_eq!(
+            (m.hwnd, m.message, m.wparam, m.lparam),
+            (0x10010, WOM_DONE, h2, HDR + 0x100),
+            "MM_WOM_DONE posted to the window"
+        );
     }
 
     #[test]
@@ -783,7 +1005,11 @@ mod tests {
         e.win.virtual_now = Some(100);
         pump(&mut e);
         assert_eq!(count(&e), 2, "killed timers stay quiet");
-        assert_eq!(call(&mut e, "timeKillEvent", &[id]), MMSYSERR_INVALPARAM, "unknown id");
+        assert_eq!(
+            call(&mut e, "timeKillEvent", &[id]),
+            MMSYSERR_INVALPARAM,
+            "unknown id"
+        );
     }
 
     #[test]
@@ -807,10 +1033,17 @@ mod tests {
     fn timer_event_mode_sets_an_event() {
         let mut e = setup();
         let ev = e.win.vfs.create_event(false, false);
-        call(&mut e, "timeSetEvent", &[5, 1, ev, 0, TIME_CALLBACK_EVENT_SET]);
+        call(
+            &mut e,
+            "timeSetEvent",
+            &[5, 1, ev, 0, TIME_CALLBACK_EVENT_SET],
+        );
         e.win.virtual_now = Some(5);
         assert!(pump(&mut e));
-        assert!(matches!(e.win.vfs.get(ev), Some(crate::win32::vfs::Obj::Event { signaled: true, .. })));
+        assert!(matches!(
+            e.win.vfs.get(ev),
+            Some(crate::win32::vfs::Obj::Event { signaled: true, .. })
+        ));
     }
 
     #[test]
@@ -820,7 +1053,13 @@ mod tests {
         let mut e = setup();
         let evil = 0x1100;
         e.mem
-            .write_bytes(evil, &[0xB8, 0xEF, 0xBE, 0xAD, 0xDE, 0xB9, 1, 2, 3, 4, 0xBA, 5, 6, 7, 8, 0x31, 0xDB, 0x39, 0xDB, 0xFF, 0x05, 0, 0x20, 0, 0, 0xC2, 20, 0])
+            .write_bytes(
+                evil,
+                &[
+                    0xB8, 0xEF, 0xBE, 0xAD, 0xDE, 0xB9, 1, 2, 3, 4, 0xBA, 5, 6, 7, 8, 0x31, 0xDB,
+                    0x39, 0xDB, 0xFF, 0x05, 0, 0x20, 0, 0, 0xC2, 20, 0,
+                ],
+            )
             .unwrap();
         // The main thread spins: `jmp $`.
         e.mem.write_bytes(0x1200, &[0xEB, 0xFE]).unwrap();
@@ -840,7 +1079,14 @@ mod tests {
         while e.cur_tid() != crate::win32::threads::MAIN_THREAD_ID {
             e.rotate();
         }
-        assert_eq!((e.regs[crate::cpu::EAX], e.regs[crate::cpu::ECX], e.regs[crate::cpu::EDX]), (0x1111, 0x2222, 0x3333));
+        assert_eq!(
+            (
+                e.regs[crate::cpu::EAX],
+                e.regs[crate::cpu::ECX],
+                e.regs[crate::cpu::EDX]
+            ),
+            (0x1111, 0x2222, 0x3333)
+        );
         assert_eq!(e.eflags & 0x8D5, 0x246 & 0x8D5);
         assert_eq!(e.eip, 0x1200);
     }
