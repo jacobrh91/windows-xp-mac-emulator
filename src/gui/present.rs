@@ -382,6 +382,7 @@ impl Presenter {
 
         // Double clicks are timed against the host's real clock.
         emu.wm.now_ms = emu.wm.now_ms.max(emu.win.elapsed_ms());
+        crate::d3d::d3d8::finish_present(emu, false);
         let fb = emu.wm.compose();
         self.buf.clear();
         for y in 0..rh {

@@ -193,10 +193,14 @@ pub struct Gpu {
     pub h: u32,
     color: Texture,
     depth: Texture,
-    /// CPU-visible copy of the color buffer, filled by a GPU blit (reading a GPU texture
-    /// directly would make the driver decompress it on the CPU).
-    stage: Buffer,
-    ring: Buffer,
+    /// CPU-visible copies of the color buffer, filled by a GPU blit (reading a GPU texture
+    /// directly would make the driver decompress it on the CPU). There are two of these and
+    /// of the vertex ring, so one frame can render while the CPU builds the next: index
+    /// `cur` is the frame being built, and `pending` the submitted one being read back.
+    stage: [Buffer; 2],
+    ring: [Buffer; 2],
+    cur: usize,
+    pending: Option<CommandBuffer>,
     ring_off: usize,
     cmd: Option<CommandBuffer>,
     enc: Option<RenderCommandEncoder>,
@@ -270,9 +274,9 @@ impl Gpu {
         let fs = lib.get_function("fs_main", None).ok()?;
         let white = new_texture(&device, 1, 1, MTLPixelFormat::BGRA8Unorm, false, false);
         white.replace_region(region(1, 1), 0, [255u8; 4].as_ptr() as *const c_void, 4);
-        let ring = device.new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared);
+        let ring = [0; 2].map(|_| device.new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared));
         let color = new_texture(&device, w, h, MTLPixelFormat::BGRA8Unorm, true, true);
-        let stage = device.new_buffer((w.max(1) * h.max(1) * 4) as u64, MTLResourceOptions::StorageModeShared);
+        let stage = [0; 2].map(|_| device.new_buffer((w.max(1) * h.max(1) * 4) as u64, MTLResourceOptions::StorageModeShared));
         let depth = new_texture(&device, w, h, MTLPixelFormat::Depth32Float, true, true);
         Some(Gpu {
             device,
@@ -290,6 +294,8 @@ impl Gpu {
             depth,
             stage,
             ring,
+            cur: 0,
+            pending: None,
             ring_off: 0,
             cmd: None,
             enc: None,
@@ -301,10 +307,11 @@ impl Gpu {
 
     pub fn resize(&mut self, w: u32, h: u32) {
         self.flush();
+        self.pending = None;
         self.w = w;
         self.h = h;
         self.color = new_texture(&self.device, w, h, MTLPixelFormat::BGRA8Unorm, true, true);
-        self.stage = self.device.new_buffer((w.max(1) * h.max(1) * 4) as u64, MTLResourceOptions::StorageModeShared);
+        self.stage = [0; 2].map(|_| self.device.new_buffer((w.max(1) * h.max(1) * 4) as u64, MTLResourceOptions::StorageModeShared));
         self.depth = new_texture(&self.device, w, h, MTLPixelFormat::Depth32Float, true, true);
         self.clear_color = None;
         self.clear_depth = None;
@@ -383,6 +390,16 @@ impl Gpu {
         }
         // Copy the frame into the staging buffer on the GPU, in the same command buffer as the
         // frame's drawing, then wait once.
+        let cmd = self.submit_readback();
+        cmd.wait_until_completed();
+        self.ring_off = 0;
+        // SAFETY: the buffer holds w*h*4 bytes and the GPU is done with it.
+        let src = unsafe { std::slice::from_raw_parts(self.stage[self.cur].contents() as *const u32, n) };
+        out[..n].copy_from_slice(src);
+    }
+
+    /// Commit everything drawn so far plus a copy of the frame into `stage[cur]`.
+    fn submit_readback(&mut self) -> CommandBuffer {
         if self.clear_color.is_some() || self.clear_depth.is_some() {
             self.ensure_encoder();
         }
@@ -390,14 +407,41 @@ impl Gpu {
         let cmd = self.cmd.take().unwrap_or_else(|| self.queue.new_command_buffer().to_owned());
         let blit = cmd.new_blit_command_encoder();
         let row = (self.w * 4) as u64;
-        blit.copy_from_texture_to_buffer(&self.color, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, region(self.w, self.h).size, &self.stage, 0, row, row * self.h as u64, MTLBlitOption::empty());
+        blit.copy_from_texture_to_buffer(&self.color, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, region(self.w, self.h).size, &self.stage[self.cur], 0, row, row * self.h as u64, MTLBlitOption::empty());
         blit.end_encoding();
         cmd.commit();
-        cmd.wait_until_completed();
+        cmd
+    }
+
+    /// Submit the finished frame without waiting for it; `finish_frame` collects its pixels.
+    /// A frame still being read back is collected (waiting if need be) first, into `out`.
+    pub fn submit_frame(&mut self, out: &mut [u32]) -> bool {
+        let collected = self.finish_frame(out, true);
+        let cmd = self.submit_readback();
+        self.pending = Some(cmd);
+        // The next frame uses the other ring and staging buffer, whose last frame is done.
+        self.cur ^= 1;
         self.ring_off = 0;
+        collected
+    }
+
+    /// Copy the submitted frame into `out` once the GPU has finished it; without `wait`, only
+    /// if it already has. True when `out` was written.
+    pub fn finish_frame(&mut self, out: &mut [u32], wait: bool) -> bool {
+        let n = (self.w * self.h) as usize;
+        let Some(cmd) = self.pending.as_ref() else { return false };
+        if !wait && cmd.status() != MTLCommandBufferStatus::Completed {
+            return false;
+        }
+        cmd.wait_until_completed();
+        self.pending = None;
+        if out.len() < n {
+            return false;
+        }
         // SAFETY: the buffer holds w*h*4 bytes and the GPU is done with it.
-        let src = unsafe { std::slice::from_raw_parts(self.stage.contents() as *const u32, n) };
+        let src = unsafe { std::slice::from_raw_parts(self.stage[self.cur ^ 1].contents() as *const u32, n) };
         out[..n].copy_from_slice(src);
+        true
     }
 
     /// Replace the color buffer with `px` (ARGB).
@@ -408,11 +452,11 @@ impl Gpu {
         }
         self.flush();
         // SAFETY: as above; nothing on the GPU is using the buffer after `flush`.
-        unsafe { std::slice::from_raw_parts_mut(self.stage.contents() as *mut u32, n) }.copy_from_slice(&px[..n]);
+        unsafe { std::slice::from_raw_parts_mut(self.stage[self.cur].contents() as *mut u32, n) }.copy_from_slice(&px[..n]);
         let cmd = self.queue.new_command_buffer();
         let blit = cmd.new_blit_command_encoder();
         let row = (self.w * 4) as u64;
-        blit.copy_from_buffer_to_texture(&self.stage, 0, row, row * self.h as u64, region(self.w, self.h).size, &self.color, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, MTLBlitOption::empty());
+        blit.copy_from_buffer_to_texture(&self.stage[self.cur], 0, row, row * self.h as u64, region(self.w, self.h).size, &self.color, 0, 0, MTLOrigin { x: 0, y: 0, z: 0 }, MTLBlitOption::empty());
         blit.end_encoding();
         cmd.commit();
         cmd.wait_until_completed();
@@ -559,7 +603,7 @@ impl Gpu {
         // Vertex data goes into the ring buffer.
         let base = self.ring_off;
         unsafe {
-            let dst = (self.ring.contents() as *mut u8).add(base) as *mut GpuVertex;
+            let dst = (self.ring[self.cur].contents() as *mut u8).add(base) as *mut GpuVertex;
             for (i, v) in verts.iter().enumerate() {
                 dst.add(i).write(GpuVertex {
                     pos: [v.x, v.y, v.z, v.rhw],
@@ -582,7 +626,7 @@ impl Gpu {
             3 => MTLCullMode::Back,
             _ => MTLCullMode::None,
         });
-        enc.set_vertex_buffer(0, Some(&self.ring), base as u64);
+        enc.set_vertex_buffer(0, Some(&self.ring[self.cur]), base as u64);
         let size = [self.w as f32, self.h as f32];
         enc.set_vertex_bytes(1, 8, size.as_ptr() as *const c_void);
         enc.set_fragment_bytes(0, std::mem::size_of::<FragU>() as u64, &u as *const FragU as *const c_void);

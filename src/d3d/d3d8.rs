@@ -265,6 +265,18 @@ pub struct Device {
     recording: Option<StateBlock>,
     blocks: HashMap<u32, StateBlock>,
     next_token: u32,
+    scratch: DrawScratch,
+    /// The window of a frame Present submitted whose pixels have not been collected yet.
+    pending_present: Option<u32>,
+}
+
+/// Buffers reused from draw to draw.
+#[derive(Default)]
+struct DrawScratch {
+    /// Transformed vertices by vertex index, valid when the stamp is the current draw's.
+    cache: Vec<(u32, PipeVertex)>,
+    stamp: u32,
+    verts: Vec<Vertex>,
 }
 
 fn identity() -> [f32; 16] {
@@ -747,6 +759,8 @@ fn create_device(e: &mut Emu, a: &Args) -> Res<u32> {
         recording: None,
         blocks: HashMap::new(),
         next_token: 1,
+        scratch: DrawScratch::default(),
+        pending_present: None,
     };
     let obj = new_object(e, Iface::Device, Obj::Device { refs: 1 })?;
     e.win.d3d.dev = Some(dev);
@@ -1642,6 +1656,7 @@ fn clear(e: &mut Emu, a: &Args) -> Res<u32> {
 
 /// Bring the CPU copy of the back buffer up to date with what the GPU has drawn.
 fn sync_back_buffer(e: &mut Emu) {
+    finish_present(e, true);
     if let Some(d) = e.win.d3d.dev.as_mut()
         && let Some(g) = d.gpu.as_mut()
             && d.target.color.len() == (g.w * g.h) as usize {
@@ -1659,12 +1674,51 @@ fn mark_dirty(e: &mut Emu, obj: u32) {
 }
 
 /// Show the back buffer: copy it into the surface of the game's window.
+///
+/// With the GPU, the frame is only submitted here: its pixels reach the window when it is
+/// done (`finish_present`), so the CPU goes on with the next frame meanwhile.
 fn present(e: &mut Emu, override_hwnd: u32) -> Res<()> {
-    let Some((hwnd, w, h)) = e.win.d3d.dev.as_ref().map(|d| (if override_hwnd != 0 { override_hwnd } else { d.hwnd }, d.target.w, d.target.h)) else {
+    let Some(hwnd) = e.win.d3d.dev.as_ref().map(|d| if override_hwnd != 0 { override_hwnd } else { d.hwnd }) else {
         return Ok(());
     };
-    sync_back_buffer(e);
-    // Copy (scaling if the sizes differ) into the window, straight from the device's frame.
+    // Some(the previous frame's window, if that frame was collected just now)
+    let submitted = e.win.d3d.dev.as_mut().and_then(|d| {
+        let g = d.gpu.as_mut().filter(|g| d.target.color.len() == (g.w * g.h) as usize)?;
+        let collected = g.submit_frame(&mut d.target.color);
+        Some(std::mem::replace(&mut d.pending_present, Some(hwnd)).filter(|_| collected))
+    });
+    match submitted {
+        Some(Some(prev)) => show_frame(e, prev),
+        Some(None) => {}
+        None => show_frame(e, hwnd),
+    }
+    if let Some(d) = e.win.d3d.dev.as_mut() {
+        d.frames += 1;
+        let now = std::time::Instant::now();
+        if let Some(prev) = d.last_present.replace(now) {
+            d.frame_times.push((now - prev).as_secs_f32() * 1000.0);
+        }
+    }
+    Ok(())
+}
+
+/// Put a frame submitted by Present into its window once the GPU has finished it (without
+/// `wait`, only if it already has).
+pub fn finish_present(e: &mut Emu, wait: bool) {
+    let Some(d) = e.win.d3d.dev.as_mut() else { return };
+    let Some(hwnd) = d.pending_present else { return };
+    let Some(g) = d.gpu.as_mut() else { return };
+    if g.finish_frame(&mut d.target.color, wait) {
+        d.pending_present = None;
+        show_frame(e, hwnd);
+    } else if wait {
+        d.pending_present = None;
+    }
+}
+
+/// Copy (scaling if the sizes differ) the device's frame into the window.
+fn show_frame(e: &mut Emu, hwnd: u32) {
+    let Some((w, h)) = e.win.d3d.dev.as_ref().map(|d| (d.target.w, d.target.h)) else { return };
     if let (Some(d), Some(win)) = (e.win.d3d.dev.as_ref(), e.wm.window_mut(hwnd)) {
         let pixels = &d.target.color;
         let (sw, sh) = (win.surface.width as usize, win.surface.height as usize);
@@ -1686,14 +1740,6 @@ fn present(e: &mut Emu, override_hwnd: u32) -> Res<()> {
         }
         win.needs_paint = false;
     }
-    if let Some(d) = e.win.d3d.dev.as_mut() {
-        d.frames += 1;
-        let now = std::time::Instant::now();
-        if let Some(prev) = d.last_present.replace(now) {
-            d.frame_times.push((now - prev).as_secs_f32() * 1000.0);
-        }
-    }
-    Ok(())
 }
 
 // ---- vertex pipeline & drawing ----------------------------------------------------------------
@@ -1968,23 +2014,27 @@ fn lerp_pv(a: &PipeVertex, b: &PipeVertex, t: f32) -> PipeVertex {
     o
 }
 
-/// Clip a triangle against the near plane (z >= 0 and w > 0) in clip space.
-fn clip_near(tri: [PipeVertex; 3]) -> Vec<PipeVertex> {
+/// Clip a triangle against the near plane (z >= 0 and w > 0) in clip space: the polygon
+/// (at most four vertices) and how many vertices it has.
+fn clip_near(tri: [PipeVertex; 3]) -> ([PipeVertex; 4], usize) {
     let inside = |v: &PipeVertex| v.clip[2] >= 0.0 && v.clip[3] > 1e-6;
-    let mut out: Vec<PipeVertex> = Vec::with_capacity(4);
+    let mut out = [PipeVertex::default(); 4];
+    let mut len = 0;
     for i in 0..3 {
         let (cur, next) = (&tri[i], &tri[(i + 1) % 3]);
         let (ci, ni) = (inside(cur), inside(next));
         if ci {
-            out.push(*cur);
+            out[len] = *cur;
+            len += 1;
         }
         if ci != ni {
             // Intersect with z = 0 (or w = epsilon if z is fine but w is not).
             let t = if (cur.clip[2] - next.clip[2]).abs() > 1e-12 { cur.clip[2] / (cur.clip[2] - next.clip[2]) } else { 0.5 };
-            out.push(lerp_pv(cur, next, t.clamp(0.0, 1.0)));
+            out[len] = lerp_pv(cur, next, t.clamp(0.0, 1.0));
+            len += 1;
         }
     }
-    out
+    (out, len)
 }
 
 enum DrawCall {
@@ -2002,30 +2052,25 @@ fn index_count(ptype: u32, prims: u32) -> u32 {
     }
 }
 
-/// Triples of vertex slots for a primitive type (triangles only; lines and points are
+/// How many triangles `n` vertex slots make for a primitive type (lines and points are
 /// handled separately).
-fn triangle_slots(ptype: u32, n: u32) -> Vec<[u32; 3]> {
-    let mut out = Vec::new();
+fn triangle_count(ptype: u32, n: u32) -> u32 {
     match ptype {
-        4 => {
-            for i in 0..n / 3 {
-                out.push([3 * i, 3 * i + 1, 3 * i + 2]);
-            }
-        }
-        5 => {
-            for i in 0..n.saturating_sub(2) {
-                // alternate winding so every triangle faces the same way
-                out.push(if i % 2 == 0 { [i, i + 1, i + 2] } else { [i + 1, i, i + 2] });
-            }
-        }
-        6 => {
-            for i in 1..n.saturating_sub(1) {
-                out.push([0, i, i + 1]);
-            }
-        }
-        _ => {}
+        4 => n / 3,
+        5 | 6 => n.saturating_sub(2),
+        _ => 0,
     }
-    out
+}
+
+/// The vertex slots of triangle `i`.
+fn triangle_slot(ptype: u32, i: u32) -> [u32; 3] {
+    match ptype {
+        4 => [3 * i, 3 * i + 1, 3 * i + 2],
+        // alternate winding so every triangle faces the same way
+        5 if i % 2 == 0 => [i, i + 1, i + 2],
+        5 => [i + 1, i, i + 2],
+        _ => [0, i + 1, i + 2],
+    }
 }
 
 fn draw(e: &mut Emu, call: &DrawCall) -> Res<u32> {
@@ -2077,21 +2122,31 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         wvp: mat_mul(&mat_mul(&d.world, &d.view), &d.proj),
         lights: if d.rs_bool(137) && layout.normal { d.light_params() } else { Vec::new() },
     };
-    // Indexed meshes reuse vertices; each is transformed once per draw.
+    // Indexed meshes reuse vertices; each is transformed once per draw. The cache and the
+    // GPU vertex list live in the device between draws so drawing allocates nothing; a cache
+    // entry is valid when its stamp is this draw's.
     const CACHE_LIMIT: usize = 1 << 16;
-    let mut cache: Vec<Option<PipeVertex>> = Vec::new();
+    let mut scratch = std::mem::take(&mut d.scratch);
+    scratch.stamp = scratch.stamp.wrapping_add(1);
+    if scratch.stamp == 0 {
+        scratch.cache.iter_mut().for_each(|c| c.0 = 0);
+        scratch.stamp = 1;
+    }
+    let stamp = scratch.stamp;
+    let cache = &mut scratch.cache;
     let mut fetch = |e: &Emu, d: &Device, slot: u32| -> Res<PipeVertex> {
         let vi = slot_to_vertex(e, slot)?;
         let i = vi as usize;
-        if let Some(Some(v)) = cache.get(i) {
-            return Ok(*v);
-        }
+        if let Some((s, v)) = cache.get(i)
+            && *s == stamp {
+                return Ok(*v);
+            }
         let v = d.process(e, &layout, &setup, vbase + vi * stride)?;
         if i < CACHE_LIMIT {
             if cache.len() <= i {
-                cache.resize(i + 1, None);
+                cache.resize((i + 1).next_power_of_two(), (0, PipeVertex::default()));
             }
-            cache[i] = Some(v);
+            cache[i] = (stamp, v);
         }
         Ok(v)
     };
@@ -2143,7 +2198,8 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         }
     }
     let use_gpu = d.gpu.is_some() && d.rt.is_none();
-    let mut gpu_verts: Vec<Vertex> = Vec::new();
+    let gpu_verts = &mut scratch.verts;
+    gpu_verts.clear();
 
     // Rasterize into a target taken out of the device, so vertex fetching can borrow it.
     let mut rt = d.rt.take();
@@ -2155,14 +2211,18 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         };
         let dev_view: &Device = d;
     if ptype >= 4 {
-        for tri in triangle_slots(ptype, n) {
+        for t in 0..triangle_count(ptype, n) {
+            let tri = triangle_slot(ptype, t);
             let v = [fetch(e, dev_view, tri[0])?, fetch(e, dev_view, tri[1])?, fetch(e, dev_view, tri[2])?];
-            let poly: Vec<PipeVertex> = if v.iter().all(|x| x.screen) { v.to_vec() } else { clip_near(v) };
-            if poly.len() < 3 {
+            let (poly, len) = if v.iter().all(|x| x.screen) { ([v[0], v[1], v[2], v[2]], 3) } else { clip_near(v) };
+            if len < 3 {
                 continue;
             }
-            let scr: Vec<Vertex> = poly.iter().map(|p| dev_view.to_screen(p)).collect();
-            for i in 1..scr.len() - 1 {
+            let mut scr = [Vertex::default(); 4];
+            for (o, p) in scr.iter_mut().zip(&poly[..len]) {
+                *o = dev_view.to_screen(p);
+            }
+            for i in 1..len - 1 {
                 if use_gpu {
                     gpu_verts.extend_from_slice(&[scr[0], scr[i], scr[i + 1]]);
                 } else {
@@ -2179,7 +2239,7 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
             }
             let (sa, sb) = (dev_view.to_screen(&a), dev_view.to_screen(&b));
             if use_gpu {
-                thin_quad(&mut gpu_verts, &sa, &sb);
+                thin_quad(gpu_verts, &sa, &sb);
             } else {
                 draw_line(target, &sa, &sb, &rs);
             }
@@ -2189,7 +2249,7 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
             let v = fetch(e, dev_view, slot)?;
             let s = dev_view.to_screen(&v);
             if use_gpu {
-                thin_quad(&mut gpu_verts, &s, &s);
+                thin_quad(gpu_verts, &s, &s);
             } else if s.x >= 0.0 && s.y >= 0.0 && (s.x as u32) < target.w && (s.y as u32) < target.h {
                 target.color[(s.y as u32 * target.w + s.x as u32) as usize] = pack(s.color);
             }
@@ -2199,14 +2259,15 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
     })();
     d.rt = rt;
     d.target = main;
-    r?;
-    if use_gpu && !gpu_verts.is_empty() {
-        let gtex: [Option<(u32, TextureRef)>; 2] = [0, 1].map(|s| texs[s].clone().map(|t| (d.textures[s], t)));
+    if r.is_ok() && use_gpu && !scratch.verts.is_empty() {
+        let [t0, t1] = texs;
+        let gtex = [t0.map(|t| (d.textures[0], t)), t1.map(|t| (d.textures[1], t))];
         if let Some(g) = d.gpu.as_mut() {
-            g.draw(&e.mem, &rs, &stages, &gtex, &gpu_verts);
+            g.draw(&e.mem, &rs, &stages, &gtex, &scratch.verts);
         }
     }
-    Ok(())
+    d.scratch = scratch;
+    r
 }
 
 /// A line or point as a one-pixel-wide quad (two triangles), for the GPU path.
@@ -2343,16 +2404,17 @@ mod tests {
     fn near_plane_clipping_cuts_a_triangle() {
         let v = |x: f32, z: f32| PipeVertex { clip: [x, 0.0, z, 1.0], ..PipeVertex::default() };
         // one vertex behind the near plane: the triangle becomes a quad
-        let quad = clip_near([v(0.0, 1.0), v(1.0, 1.0), v(0.0, -1.0)]);
-        assert_eq!(quad.len(), 4);
-        assert!(quad.iter().all(|p| p.clip[2] >= -1e-6), "nothing left behind the plane");
+        let (quad, len) = clip_near([v(0.0, 1.0), v(1.0, 1.0), v(0.0, -1.0)]);
+        assert_eq!(len, 4);
+        assert!(quad[..len].iter().all(|p| p.clip[2] >= -1e-6), "nothing left behind the plane");
         // all behind: gone; all in front: untouched
-        assert!(clip_near([v(0.0, -1.0), v(1.0, -1.0), v(0.0, -2.0)]).is_empty());
-        assert_eq!(clip_near([v(0.0, 1.0), v(1.0, 1.0), v(0.0, 2.0)]).len(), 3);
+        assert!(clip_near([v(0.0, -1.0), v(1.0, -1.0), v(0.0, -2.0)]).1 == 0);
+        assert_eq!(clip_near([v(0.0, 1.0), v(1.0, 1.0), v(0.0, 2.0)]).1, 3);
     }
 
     #[test]
     fn primitive_assembly() {
+        let triangle_slots = |p: u32, n: u32| (0..triangle_count(p, n)).map(|i| triangle_slot(p, i)).collect::<Vec<_>>();
         assert_eq!(triangle_slots(4, 6), vec![[0, 1, 2], [3, 4, 5]], "list");
         assert_eq!(triangle_slots(5, 5), vec![[0, 1, 2], [2, 1, 3], [2, 3, 4]], "strip alternates winding");
         assert_eq!(triangle_slots(6, 5), vec![[0, 1, 2], [0, 2, 3], [0, 3, 4]], "fan");
@@ -2388,6 +2450,8 @@ mod tests {
             recording: None,
             blocks: HashMap::new(),
             next_token: 1,
+            scratch: DrawScratch::default(),
+            pending_present: None,
         }
     }
 
@@ -2491,6 +2555,7 @@ mod tests {
             assert_eq!(g.draws, 1, "the triangle went through Metal, not the software rasterizer");
         }
 
+        finish_present(&mut emu, true);
         let (w, h, px) = emu.win.d3d.frame().unwrap();
         assert_eq!((w, h), (64, 48));
         assert_eq!(px[(5 * 64 + 5) as usize], 0xFFFF0000, "inside the triangle: red");

@@ -274,6 +274,7 @@ fn run(path: &str, data: &[u8], window: bool, fullscreen: bool, screenshot: Opti
     }
     if let Some(out) = screenshot {
         // Same region the live window shows: content only, without the emulated frame.
+        crate::d3d::d3d8::finish_present(&mut emu, true);
         let region = emu.wm.content_bounds();
         let desktop = emu.wm.compose();
         let shot = match region {
