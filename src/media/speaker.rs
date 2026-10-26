@@ -6,6 +6,7 @@
 //! emulator decides *what* plays and the hardware decides *when*.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -80,6 +81,9 @@ impl Mixer {
 }
 
 /// A cheap, thread-safe way to queue sound; the video decoder thread holds one too.
+/// The master volume in percent, changed from the emulator's menu while the sound plays.
+pub static MASTER_PERCENT: AtomicU32 = AtomicU32::new(100);
+
 #[derive(Clone)]
 pub struct SpeakerHandle {
     mixer: Arc<Mutex<Mixer>>,
@@ -255,6 +259,7 @@ impl Speaker {
             .ok()
             .and_then(|v| v.trim_end_matches('%').parse::<f32>().ok())
             .map_or(1.0, |p| (p / 100.0).clamp(0.0, 1.0));
+        MASTER_PERCENT.store((master * 100.0).round() as u32, Ordering::Relaxed);
         let handle = SpeakerHandle::new(
             config.sample_rate,
             (config.sample_rate as f32 * PREBUFFER_SECS) as usize,
@@ -268,6 +273,7 @@ impl Speaker {
             .build_output_stream(
                 config,
                 move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    let master = MASTER_PERCENT.load(Ordering::Relaxed) as f32 / 100.0;
                     let mut m = mixer.lock().unwrap();
                     for frame in out.chunks_mut(channels) {
                         let [l, r] = m.next_frame();

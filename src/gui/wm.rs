@@ -224,6 +224,8 @@ pub struct WindowManager {
     pub gdi: HashMap<u32, Gdi>,
     next_gdi: u32,
     pub desktop: Framebuffer,
+    /// The screen's size: the desktop's, or the display mode a full-screen game set.
+    pub screen: (u32, u32),
     font: Option<Font>,
     pub focus: u32,
     /// The active (foreground) top-level window.
@@ -306,6 +308,7 @@ impl WindowManager {
             gdi,
             next_gdi: 0x8100_0000,
             desktop,
+            screen: (DESKTOP_W, DESKTOP_H),
             font: None,
             focus: 0,
             active: 0,
@@ -372,8 +375,9 @@ impl WindowManager {
             x1 = x1.max(w.x + w.w);
             y1 = y1.max(w.y + w.h);
         }
-        let (x0, y0) = (x0.clamp(0, DESKTOP_W as i32), y0.clamp(0, DESKTOP_H as i32));
-        let (x1, y1) = (x1.clamp(0, DESKTOP_W as i32), y1.clamp(0, DESKTOP_H as i32));
+        let (sw, sh) = (self.screen.0 as i32, self.screen.1 as i32);
+        let (x0, y0) = (x0.clamp(0, sw), y0.clamp(0, sh));
+        let (x1, y1) = (x1.clamp(0, sw), y1.clamp(0, sh));
         (x1 > x0 && y1 > y0).then(|| (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
     }
 
@@ -396,8 +400,9 @@ impl WindowManager {
             });
         }
         let (x0, y0, x1, y1) = acc?;
-        let (x0, y0) = (x0.clamp(0, DESKTOP_W as i32), y0.clamp(0, DESKTOP_H as i32));
-        let (x1, y1) = (x1.clamp(0, DESKTOP_W as i32), y1.clamp(0, DESKTOP_H as i32));
+        let (sw, sh) = (self.screen.0 as i32, self.screen.1 as i32);
+        let (x0, y0) = (x0.clamp(0, sw), y0.clamp(0, sh));
+        let (x1, y1) = (x1.clamp(0, sw), y1.clamp(0, sh));
         (x1 > x0 && y1 > y0).then(|| (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32))
     }
 
@@ -703,6 +708,25 @@ impl WindowManager {
                 ((cy as u32 & 0xffff) << 16) | (cx as u32 & 0xffff),
             );
         }
+    }
+
+    /// The mouse wheel turned by `delta` (120 per notch, positive away from the user) with
+    /// the cursor at desktop position (x, y): WM_MOUSEWHEEL for the window under it, or the
+    /// focus window.
+    pub fn post_wheel(&mut self, delta: i32, x: i32, y: i32) {
+        let hwnd = self.hit_test(x, y).map_or(self.focus, |(h, _, _)| h);
+        if hwnd == 0 {
+            return;
+        }
+        let keys = self.buttons
+            | if self.key_down[0x10] { 4 } else { 0 }
+            | if self.key_down[0x11] { 8 } else { 0 };
+        self.post(
+            hwnd,
+            0x020A,
+            ((delta as u32 & 0xffff) << 16) | keys,
+            ((y as u32 & 0xffff) << 16) | (x as u32 & 0xffff),
+        );
     }
 
     /// A left-button press is a plain WM_LBUTTONDOWN, or WM_LBUTTONDBLCLK when it is the
@@ -1291,6 +1315,15 @@ impl WindowManager {
 
     // ---- compositor ---------------------------------------------------------------------
 
+    /// Change the screen's size (a full-screen game setting its display mode).
+    pub fn set_screen(&mut self, w: u32, h: u32) {
+        let (w, h) = (w.clamp(320, 4096), h.clamp(200, 4096));
+        if self.screen != (w, h) {
+            self.screen = (w, h);
+            self.desktop = Framebuffer::new(w, h);
+        }
+    }
+
     /// Draw every visible window onto the desktop and return it.
     pub fn compose(&mut self) -> &Framebuffer {
         let font = self.font.take().unwrap_or_else(Font::load_system);
@@ -1298,8 +1331,8 @@ impl WindowManager {
         for w in self.windows.iter_mut().filter(|w| w.wndproc == 0) {
             render_builtin(w, &font);
         }
-        self.desktop
-            .fill_rect(0, 0, DESKTOP_W, DESKTOP_H, DESKTOP_COLOR);
+        let (sw, sh) = self.screen;
+        self.desktop.fill_rect(0, 0, sw, sh, DESKTOP_COLOR);
         let order: Vec<u32> = self.windows.iter().map(|w| w.hwnd).collect();
         for hwnd in order {
             if !self.is_visible(hwnd) {

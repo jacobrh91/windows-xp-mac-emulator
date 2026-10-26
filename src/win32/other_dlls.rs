@@ -27,7 +27,16 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "CallWindowProcA") => {
             (5, |e, a| e.call_function(a[0], &[a[1], a[2], a[3], a[4]]))
         }
-        ("user32", "ChangeDisplaySettingsA") => (2, |_, _| Ok(0)), // DISP_CHANGE_SUCCESSFUL
+        ("user32", "ChangeDisplaySettingsA") => (2, |e, a| {
+            // A new size (DM_PELSWIDTH | DM_PELSHEIGHT) changes the screen; null restores it.
+            if a[0] == 0 {
+                e.wm.set_screen(crate::gui::wm::DESKTOP_W, crate::gui::wm::DESKTOP_H);
+            } else if e.mem.read(a[0] + 40, 4)? & 0x0018_0000 == 0x0018_0000 {
+                let (w, h) = (e.mem.read(a[0] + 108, 4)?, e.mem.read(a[0] + 112, 4)?);
+                e.wm.set_screen(w, h);
+            }
+            Ok(0) // DISP_CHANGE_SUCCESSFUL
+        }),
         ("user32", "CharNextA") => (1, |e, a| Ok(a[0] + (e.mem.read_u8(a[0])? != 0) as u32)),
         ("user32", "CharPrevA") => (2, |_, a| Ok(if a[1] > a[0] { a[1] - 1 } else { a[0] })),
         ("user32", "CharUpperA") => (1, char_upper),
@@ -58,7 +67,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             Ok(n as u32)
         }),
         ("user32", "GetClipCursor") => (1, |e, a| {
-            for (i, v) in [0u32, 0, 1024, 768].iter().enumerate() {
+            let (w, h) = e.wm.screen;
+            for (i, v) in [0u32, 0, w, h].iter().enumerate() {
                 e.mem.write(a[0] + 4 * i as u32, 4, *v)?;
             }
             Ok(1)
@@ -110,7 +120,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "SystemParametersInfoA") => (4, |e, a| {
             if a[0] == 0x30 {
                 // SPI_GETWORKAREA
-                for (i, v) in [0u32, 0, 1024, 768].iter().enumerate() {
+                let (w, h) = e.wm.screen;
+                for (i, v) in [0u32, 0, w, h].iter().enumerate() {
                     e.mem.write(a[2] + 4 * i as u32, 4, *v)?;
                 }
             }
@@ -519,7 +530,7 @@ fn get_window(e: &mut Emu, a: &Args) -> Res<u32> {
 fn enum_display_settings(e: &mut Emu, a: &Args) -> Res<u32> {
     const MODES: [(u32, u32); 4] = [(640, 480), (800, 600), (1024, 768), (1280, 1024)];
     let (w, h) = match a[1] {
-        0xFFFF_FFFF | 0xFFFF_FFFE => (1024, 768), // ENUM_CURRENT_SETTINGS / ENUM_REGISTRY_SETTINGS
+        0xFFFF_FFFF | 0xFFFF_FFFE => e.wm.screen, // ENUM_CURRENT_SETTINGS / ENUM_REGISTRY_SETTINGS
         n if (n as usize) < MODES.len() => MODES[n as usize],
         _ => return Ok(0),
     };

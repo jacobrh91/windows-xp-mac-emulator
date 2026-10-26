@@ -364,10 +364,10 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
                 a[7] as i32,
             ) as u32)
         }),
-        ("gdi32", "GetDeviceCaps") => (2, |_, a| {
+        ("gdi32", "GetDeviceCaps") => (2, |e, a| {
             Ok(match a[1] {
-                8 => DESKTOP_W,
-                10 => DESKTOP_H,
+                8 => e.wm.screen.0,
+                10 => e.wm.screen.1,
                 12 => 32,
                 14 => 1,
                 88 | 90 => 96,
@@ -1323,7 +1323,7 @@ fn build_dialog(e: &mut Emu, t: &DlgTemplate, parent: u32, dlgproc: u32, lparam:
     // Centred over the owner (or the desktop).
     let (px, py, pw, ph) = match e.wm.window(parent) {
         Some(o) => (o.x, o.y, o.w, o.h),
-        None => (0, 0, DESKTOP_W as i32, DESKTOP_H as i32),
+        None => (0, 0, e.wm.screen.0 as i32, e.wm.screen.1 as i32),
     };
     let (x, y) = (px + (pw - w) / 2, py + (ph - h) / 2);
     let hwnd = e.wm.add_window(

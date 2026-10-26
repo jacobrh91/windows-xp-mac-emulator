@@ -89,6 +89,8 @@ pub struct RenderState {
     pub texture_factor: u32,
     pub color_write: u32,
     pub specular: bool,
+    /// Pixels outside this rectangle (x0, y0, x1, y1; exclusive end) are left alone: the viewport.
+    pub scissor: [u32; 4],
 }
 
 impl Default for RenderState {
@@ -107,6 +109,7 @@ impl Default for RenderState {
             texture_factor: 0xFFFF_FFFF,
             color_write: 0xF,
             specular: false,
+            scissor: [0, 0, u32::MAX, u32::MAX],
         }
     }
 }
@@ -610,10 +613,12 @@ pub fn draw_triangle(
         3 if !clockwise => return,
         _ => {}
     }
-    let min_x = a.x.min(b.x).min(c.x).floor().max(0.0) as i32;
-    let max_x = a.x.max(b.x).max(c.x).ceil().min(target.w as f32 - 1.0) as i32;
-    let min_y = a.y.min(b.y).min(c.y).floor().max(0.0) as i32;
-    let max_y = a.y.max(b.y).max(c.y).ceil().min(target.h as f32 - 1.0) as i32;
+    let [sx0, sy0, sx1, sy1] = st.scissor;
+    let (right, bottom) = (sx1.min(target.w) as f32 - 1.0, sy1.min(target.h) as f32 - 1.0);
+    let min_x = a.x.min(b.x).min(c.x).floor().max(sx0 as f32) as i32;
+    let max_x = a.x.max(b.x).max(c.x).ceil().min(right) as i32;
+    let min_y = a.y.min(b.y).min(c.y).floor().max(sy0 as f32) as i32;
+    let max_y = a.y.max(b.y).max(c.y).ceil().min(bottom) as i32;
     if min_x > max_x || min_y > max_y {
         return;
     }
@@ -685,7 +690,9 @@ pub fn draw_triangle(
                 continue;
             }
             if st.alpha_blend {
-                let dst = unpack(target.color[idx]);
+                // X8R8G8B8 has no alpha: the destination's reads back as 1.
+                let mut dst = unpack(target.color[idx]);
+                dst[3] = 1.0;
                 let (sf, df) = (
                     blend_factor(st.src_blend, color, dst),
                     blend_factor(st.dst_blend, color, dst),
@@ -695,6 +702,7 @@ pub fn draw_triangle(
                 }
             }
             if st.color_write & 0xF != 0 {
+                color[3] = 1.0;
                 target.color[idx] = pack(color);
             }
             if st.zenable && st.zwrite {

@@ -177,6 +177,7 @@ struct SamplerKey {
     min: u32,
 }
 
+/// Size of one chunk of a frame's vertex ring (a frame takes more chunks as it needs them).
 const RING_BYTES: usize = 32 << 20;
 
 pub struct Gpu {
@@ -197,10 +198,14 @@ pub struct Gpu {
     /// directly would make the driver decompress it on the CPU). There are two of these and
     /// of the vertex ring, so one frame can render while the CPU builds the next: index
     /// `cur` is the frame being built, and `pending` the submitted one being read back.
+    /// A frame's ring is a list of chunks: one that fills up moves on to the next (made the
+    /// first time a frame needs it) rather than waiting for the GPU.
     stage: [Buffer; 2],
-    ring: [Buffer; 2],
+    ring: [Vec<Buffer>; 2],
     cur: usize,
     pending: Option<CommandBuffer>,
+    /// The chunk of `ring[cur]` being filled, and how far.
+    chunk: usize,
     ring_off: usize,
     cmd: Option<CommandBuffer>,
     enc: Option<RenderCommandEncoder>,
@@ -299,8 +304,9 @@ impl Gpu {
         let fs = lib.get_function("fs_main", None).ok()?;
         let white = new_texture(&device, 1, 1, MTLPixelFormat::BGRA8Unorm, false, false);
         white.replace_region(region(1, 1), 0, [255u8; 4].as_ptr() as *const c_void, 4);
-        let ring = [0; 2]
-            .map(|_| device.new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared));
+        let ring = [0; 2].map(|_| {
+            vec![device.new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared)]
+        });
         let color = new_texture(&device, w, h, MTLPixelFormat::BGRA8Unorm, true, true);
         let stage = [0; 2].map(|_| {
             device.new_buffer(
@@ -327,6 +333,7 @@ impl Gpu {
             ring,
             cur: 0,
             pending: None,
+            chunk: 0,
             ring_off: 0,
             cmd: None,
             enc: None,
@@ -378,7 +385,8 @@ impl Gpu {
         match self.clear_color.take() {
             Some(rgba) => {
                 c.set_load_action(MTLLoadAction::Clear);
-                c.set_clear_color(MTLClearColor::new(rgba[0], rgba[1], rgba[2], rgba[3]));
+                // The back buffer is X8R8G8B8: it has no alpha, which reads back as 1.
+                c.set_clear_color(MTLClearColor::new(rgba[0], rgba[1], rgba[2], 1.0));
             }
             None => c.set_load_action(MTLLoadAction::Load),
         }
@@ -405,7 +413,7 @@ impl Gpu {
             c.commit();
             c.wait_until_completed();
         }
-        self.ring_off = 0;
+        (self.chunk, self.ring_off) = (0, 0);
     }
 
     /// Clear the whole color and/or depth buffer (ARGB color).
@@ -430,7 +438,7 @@ impl Gpu {
         // frame's drawing, then wait once.
         let cmd = self.submit_readback();
         cmd.wait_until_completed();
-        self.ring_off = 0;
+        (self.chunk, self.ring_off) = (0, 0);
         // SAFETY: the buffer holds w*h*4 bytes and the GPU is done with it.
         let src =
             unsafe { std::slice::from_raw_parts(self.stage[self.cur].contents() as *const u32, n) };
@@ -474,7 +482,7 @@ impl Gpu {
         self.pending = Some(cmd);
         // The next frame uses the other ring and staging buffer, whose last frame is done.
         self.cur ^= 1;
-        self.ring_off = 0;
+        (self.chunk, self.ring_off) = (0, 0);
         collected
     }
 
@@ -557,9 +565,6 @@ impl Gpu {
         }
         if key.mask & 4 != 0 {
             mask |= MTLColorWriteMask::Blue;
-        }
-        if key.mask & 8 != 0 {
-            mask |= MTLColorWriteMask::Alpha;
         }
         c.set_write_mask(mask);
         if key.blend {
@@ -669,7 +674,14 @@ impl Gpu {
         }
         let bytes = verts.len() * std::mem::size_of::<GpuVertex>();
         if self.ring_off + bytes > RING_BYTES {
-            self.flush();
+            self.chunk += 1;
+            self.ring_off = 0;
+            if self.ring[self.cur].len() <= self.chunk {
+                let b = self
+                    .device
+                    .new_buffer(RING_BYTES as u64, MTLResourceOptions::StorageModeShared);
+                self.ring[self.cur].push(b);
+            }
         }
         if bytes > RING_BYTES {
             return;
@@ -723,7 +735,7 @@ impl Gpu {
         // Vertex data goes into the ring buffer.
         let base = self.ring_off;
         unsafe {
-            let dst = (self.ring[self.cur].contents() as *mut u8).add(base) as *mut GpuVertex;
+            let dst = (self.ring[self.cur][self.chunk].contents() as *mut u8).add(base) as *mut GpuVertex;
             for (i, v) in verts.iter().enumerate() {
                 dst.add(i).write(GpuVertex {
                     pos: [v.x, v.y, v.z, v.rhw],
@@ -746,7 +758,18 @@ impl Gpu {
             3 => MTLCullMode::Back,
             _ => MTLCullMode::None,
         });
-        enc.set_vertex_buffer(0, Some(&self.ring[self.cur]), base as u64);
+        let [x0, y0, x1, y1] = st.scissor;
+        let (x1, y1) = (x1.min(self.w), y1.min(self.h));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        enc.set_scissor_rect(MTLScissorRect {
+            x: x0 as u64,
+            y: y0 as u64,
+            width: (x1 - x0) as u64,
+            height: (y1 - y0) as u64,
+        });
+        enc.set_vertex_buffer(0, Some(&self.ring[self.cur][self.chunk]), base as u64);
         let size = [self.w as f32, self.h as f32];
         enc.set_vertex_bytes(1, 8, size.as_ptr() as *const c_void);
         enc.set_fragment_bytes(

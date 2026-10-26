@@ -64,6 +64,14 @@ pub struct Info {
 }
 
 /// Parse ffprobe's `width,height,num/den,packets` line.
+/// Does the movie's header flag it as grayscale (video flags, at byte 36, bit 0x20000)?
+fn is_grayscale(path: &Path) -> bool {
+    let mut head = [0u8; 40];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|_| head.starts_with(b"BIK") && u32::from_le_bytes([head[36], head[37], head[38], head[39]]) & 0x20000 != 0)
+}
+
 fn parse_probe(line: &str) -> Option<Info> {
     let f: Vec<&str> = line.trim().split(',').collect();
     let (num, den) = f.get(2)?.split_once('/')?;
@@ -191,9 +199,13 @@ impl Movie {
     fn start_decoder(&mut self) {
         self.stop_decoder();
         let Some(ffmpeg) = ffmpeg() else { return };
-        let child = Command::new(ffmpeg)
-            .args(["-v", "error", "-nostdin", "-i"])
-            .arg(&self.path)
+        let mut cmd = Command::new(ffmpeg);
+        cmd.args(["-v", "error", "-nostdin", "-i"]).arg(&self.path);
+        if is_grayscale(&self.path) {
+            // A grayscale movie carries no colour planes, which ffmpeg leaves at zero (green).
+            cmd.args(["-vf", "lutyuv=u=128:v=128"]);
+        }
+        let child = cmd
             .args(["-an", "-f", "rawvideo", "-pix_fmt", "bgra", "-"])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -429,6 +441,9 @@ fn copy_to_buffer(e: &mut Emu, a: &Args) -> Res<u32> {
     let Some(m) = e.win.bink.movies.get(&a[0]) else {
         return Ok(0);
     };
+    if std::env::var_os("XP_BINK_LOG").is_some() {
+        eprintln!("[bink] copy flags {:#x} kind {kind} pitch {pitch} dest_h {dest_h} movie {}x{}", a[6], m.info.width, m.info.height);
+    }
     let (w, h) = (m.info.width, m.info.height);
     let rows = h.min(dest_h.saturating_sub(dy));
     let mut line = Vec::with_capacity((w * 4) as usize);

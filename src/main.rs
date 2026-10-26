@@ -184,19 +184,26 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
     let show_fps = env::var_os("XP_FPS").is_some();
     let mut fps_mark = (std::time::Instant::now(), 0u64, 0u64);
     let mut idle = std::time::Duration::ZERO;
-    // XP_CLICKS=<secs>:<x>:<y>,...  scripted left clicks at desktop coordinates (headless testing).
-    let mut clicks: Vec<(u64, i32, i32)> = env::var("XP_CLICKS")
+    // XP_CLICKS=<secs>:<x>:<y>[:r],...  scripted clicks at desktop coordinates (headless
+    // testing): left clicks, or right clicks with `:r`.
+    let mut clicks: Vec<(u64, i32, i32, bool)> = env::var("XP_CLICKS")
         .map(|v| {
             v.split(',')
                 .filter_map(|c| {
-                    let mut p = c.split(':').map(|n| n.trim().parse::<i64>().ok());
-                    Some((p.next()?? as u64, p.next()?? as i32, p.next()?? as i32))
+                    let f: Vec<&str> = c.split(':').map(str::trim).collect();
+                    Some((
+                        f.first()?.parse().ok()?,
+                        f.get(1)?.parse().ok()?,
+                        f.get(2)?.parse().ok()?,
+                        f.get(3) == Some(&"r"),
+                    ))
                 })
                 .collect()
         })
         .unwrap_or_default();
     clicks.reverse();
-    let mut release_at: Option<(std::time::Instant, i32, i32)> = None;
+    // When to let go of the button pressed by a scripted click, where, and its button-up message.
+    let mut release_at: Option<(std::time::Instant, i32, i32, u32)> = None;
     // XP_KEYS=<secs>:<virtual key>[+<virtual key>...],...  scripted key presses (27 is Esc;
     // 17+69 is Ctrl+E): pressed in order, held a moment, released in reverse.
     let mut keys: Vec<(u64, Vec<u32>)> = env::var("XP_KEYS")
@@ -282,10 +289,24 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
+                eprintln!("[chain] {} chained, {} back to the run loop", emu.jit_exits[0], emu.jit_exits[1]);
+                emu.jit_exits = [0; 2];
+                eprintln!("[exits] budget {}, api {}, undecodable {}, not compiled {}, chain miss {}", emu.exit_why[0], emu.exit_why[1], emu.exit_why[2], emu.exit_why[3], emu.exit_why[4]);
+                emu.exit_why = [0; 5];
                 emu.jit.helper_calls = 0;
                 emu.jit.runs = 0;
                 emu.icache.built = 0;
                 emu.icache.runs = 0;
+            }
+            if let Some(counts) = emu.win.api_counts.as_mut() {
+                let mut top: Vec<(u64, usize)> = counts.iter().enumerate().filter(|c| *c.1 > 0).map(|(i, &n)| (n, i)).collect();
+                top.sort_by(|a, b| b.cmp(a));
+                let names: Vec<String> = top
+                    .iter()
+                    .map(|&(n, i)| format!("{}!{} {n}", emu.win.stubs[i].dll, emu.win.stubs[i].name))
+                    .collect();
+                eprintln!("[api] {}", names.join(", "));
+                counts.iter_mut().for_each(|c| *c = 0);
             }
             fps_mark = (std::time::Instant::now(), frames, emu.steps);
             idle = std::time::Duration::ZERO;
@@ -310,17 +331,20 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
             .last()
             .is_some_and(|c| started.elapsed().as_secs() >= c.0)
         {
-            let (_, x, y) = clicks.pop().unwrap();
+            let (_, x, y, right) = clicks.pop().unwrap();
+            // WM_LBUTTONDOWN / WM_RBUTTONDOWN; the button-up message is the next one.
+            let down = if right { 0x0204 } else { 0x0201 };
             emu.wm.post_mouse(0x0200, x, y); // WM_MOUSEMOVE
-            emu.wm.post_mouse(0x0201, x, y); // WM_LBUTTONDOWN
+            emu.wm.post_mouse(down, x, y);
             // The button is held a moment, as a hand would: games that poll once a frame
             // must see it down.
-            release_at = Some((std::time::Instant::now() + std::time::Duration::from_millis(100), x, y));
+            let at = std::time::Instant::now() + std::time::Duration::from_millis(100);
+            release_at = Some((at, x, y, down + 1));
         }
-        if let Some((at, x, y)) = release_at
+        if let Some((at, x, y, up)) = release_at
             && std::time::Instant::now() >= at
         {
-            emu.wm.post_mouse(0x0202, x, y); // WM_LBUTTONUP
+            emu.wm.post_mouse(up, x, y);
             release_at = None;
         }
         if let Some(d) = dump_after

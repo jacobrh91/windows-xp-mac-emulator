@@ -96,6 +96,15 @@ impl Fpu {
         r as i64 as u64
     }
 
+    /// The result of an add, subtract, multiply, divide or square root as the precision control
+    /// (control word bits 8-9) leaves it: 00 rounds to single precision (24-bit mantissa).
+    /// That is the setting Direct3D gives a program, so its arithmetic is all single precision.
+    /// (Extended precision is computed as double.) Rounding the double result again to single
+    /// gives the correctly rounded single result for these operations.
+    pub(crate) fn rounded(&self, v: f64) -> f64 {
+        if (self.cw >> 8) & 3 == 0 { v as f32 as f64 } else { v }
+    }
+
     /// op: 0 add, 1 mul, 4 sub (a-b), 5 subr (b-a), 6 div (a/b), 7 divr (b/a).
     fn arith(op: usize, a: f64, b: f64) -> f64 {
         match op {
@@ -170,7 +179,8 @@ impl Emu {
             }
             _ => {
                 let a = self.fpu.get(0);
-                self.fpu.set(0, Fpu::arith(op, a, b));
+                let r = self.fpu.rounded(Fpu::arith(op, a, b));
+                self.fpu.set(0, r);
             }
         }
     }
@@ -318,7 +328,7 @@ impl Emu {
                     7 => 6,
                     o => o,
                 };
-                let r = Fpu::arith(eff, self.fpu.get(i), self.fpu.get(0));
+                let r = self.fpu.rounded(Fpu::arith(eff, self.fpu.get(i), self.fpu.get(0)));
                 self.fpu.set(i, r);
                 if group == 6 {
                     self.fpu.pop();
@@ -422,7 +432,7 @@ impl Emu {
                         self.fpu.set(1, y * (x + 1.0).log2());
                         self.fpu.pop();
                     }
-                    2 => self.fpu.set(0, x.sqrt()),
+                    2 => self.fpu.set(0, self.fpu.rounded(x.sqrt())),
                     3 => {
                         self.fpu.set(0, x.sin());
                         self.fpu.push(x.cos());
@@ -522,6 +532,63 @@ mod tests {
         let lo = e.mem.read(addr, 4).unwrap() as u64;
         let hi = e.mem.read(addr + 4, 4).unwrap() as u64;
         f64::from_bits((hi << 32) | lo)
+    }
+
+    /// The x87 instructions the JIT compiles natively (64-bit fild/fistp, fist/fistp m32 under
+    /// every rounding mode, fsqrt, fldcw, integer-operand arithmetic) give the same results
+    /// compiled as interpreted: a loop runs them until the block is hot.
+    #[test]
+    fn compiled_x87_matches_the_interpreter() {
+        const I: u32 = 0x2300;
+        const J: u32 = 0x2310;
+        let body: Vec<u8> = [
+            abs(&[0xD9, 0x2D], B),       // fldcw [B]
+            abs(&[0xDD, 0x05], A),       // fld qword [A]
+            abs(&[0xDB, 0x15], OUT),     // fist dword
+            vec![0xD9, 0xC0],            // fld st0
+            abs(&[0xDF, 0x3D], OUT + 8), // fistp qword
+            vec![0xD9, 0xC0],
+            abs(&[0xDB, 0x1D], OUT + 16), // fistp dword
+            abs(&[0xDF, 0x2D], I),        // fild qword
+            vec![0xD8, 0xC1],             // fadd st0, st1
+            abs(&[0xDD, 0x1D], OUT + 24), // fstp qword
+            abs(&[0xDD, 0x05], A),
+            vec![0xD9, 0xE1, 0xD9, 0xFA], // fabs, fsqrt
+            abs(&[0xDD, 0x1D], OUT + 32),
+            abs(&[0xDA, 0x35], J), // fidiv dword
+            abs(&[0xDA, 0x0D], J), // fimul dword
+            abs(&[0xDA, 0x25], J), // fisub dword
+            abs(&[0xDD, 0x1D], OUT + 40),
+        ]
+        .concat();
+        let mut code = body.clone();
+        code.push(0x49); // dec ecx
+        code.extend([0x75, (-(code.len() as i32 + 2)) as u8]); // jnz to the top
+        for v in [2.5, -2.5, 3.7, -3.7, 1e20, -1e20, 9.3e18, -9.3e18, f64::NAN, 0.0, -0.4] {
+            for cw in [0x037Fu32, 0x077F, 0x0B7F, 0x0F7F, 0x007F, 0x0C7F, 0x027F] {
+                let go = |jit: bool| {
+                    let e = run(
+                        |e| {
+                            e.jit.enabled &= jit;
+                            e.jit.stats = true;
+                            e.regs[crate::cpu::ECX] = 40;
+                            write_f64(e, A, v);
+                            e.mem.write(B, 2, cw).unwrap();
+                            e.mem.write(I, 4, 0x8000_0001).unwrap();
+                            e.mem.write(I + 4, 4, 0xFFFF_FFF0).unwrap();
+                            e.mem.write(J, 4, (-7i32) as u32).unwrap();
+                        },
+                        &[code.clone()],
+                    );
+                    if e.jit.enabled {
+                        assert!(e.jit.compiled > 0, "the loop was compiled");
+                        assert!(e.jit.helper_kinds.is_empty(), "natively: {:?}", e.jit.helper_kinds);
+                    }
+                    e.mem.read_bytes(OUT, 48).unwrap()
+                };
+                assert_eq!(go(true), go(false), "value {v} control word {cw:#x}");
+            }
+        }
     }
 
     #[test]
@@ -647,6 +714,29 @@ mod tests {
             "round to nearest"
         );
         assert_eq!(prog(0x0F7F).mem.read(OUT, 4).unwrap(), 2, "truncate");
+    }
+
+    #[test]
+    fn precision_control_rounds_arithmetic_to_single() {
+        // fldcw [B]; fld1; fld qword [A] (3.0); fdivp st1 (1/3); fstp qword [OUT]
+        let third = |cw: u16| {
+            let e = run(
+                |e| {
+                    write_f64(e, A, 3.0);
+                    e.mem.write(B, 2, cw as u32).unwrap();
+                },
+                &[
+                    abs(&[0xD9, 0x2D], B),
+                    vec![0xD9, 0xE8],
+                    abs(&[0xDD, 0x05], A),
+                    vec![0xDE, 0xF9],
+                    abs(&[0xDD, 0x1D], OUT),
+                ],
+            );
+            read_f64(&e, OUT)
+        };
+        assert_eq!(third(0x007F), (1.0f32 / 3.0) as f64, "single precision (Direct3D's)");
+        assert_eq!(third(0x027F), 1.0 / 3.0, "double precision");
     }
 
     #[test]

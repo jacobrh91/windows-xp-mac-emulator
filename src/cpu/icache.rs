@@ -19,7 +19,7 @@
 
 use std::rc::Rc;
 
-use super::{CF, EAX, EBP, ECX, ESP, Emu, Op, Res, Stop, sext};
+use super::{CF, DF, EAX, EBP, ECX, EDI, EDX, ESI, ESP, Emu, Op, Res, Stop, sext};
 use crate::win32::{HLE_BASE, HLE_END};
 
 /// Entries in the table (a power of two).
@@ -44,7 +44,8 @@ pub(crate) enum Ea {
 /// A decoded instruction. Sizes are 32 bits unless a `bits` field says otherwise.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Dop {
-    /// Not handled here: run the full interpreter.
+    /// Not handled here: run the full interpreter. In a block it is always the last
+    /// instruction (its length is not known here).
     Unsupported,
     /// `rm = rm op reg` (op as in `alu`: 0 add .. 7 cmp), 8 or 32 bits.
     AluRmR {
@@ -143,6 +144,16 @@ pub(crate) enum Dop {
         imm: u32,
     },
     Nop,
+    /// mov r/m8, imm8
+    MovRmI8 { rm: Ea, imm: u8 },
+    /// setcc r/m8
+    Setcc { cc: u8, rm: Ea },
+    /// cdq: edx = sign of eax
+    Cdq,
+    /// movsb / movsd without a rep prefix
+    Movs { bits: u8 },
+    /// not / neg r/m32
+    Unary { neg: bool, rm: Ea },
 }
 
 #[derive(Clone, Copy)]
@@ -152,8 +163,12 @@ pub(crate) struct Entry {
     op: Dop,
 }
 
-/// Entries in the block table (a power of two).
+/// Entries in the block table (a power of two), in sets of `WAYS`: a block can sit in any
+/// entry of its set, so two hot blocks whose addresses hash alike do not keep evicting each
+/// other.
 const BLOCK_SLOTS: usize = 1 << 19;
+const WAYS: usize = 4;
+const SET_BITS: u32 = (BLOCK_SLOTS / WAYS).trailing_zeros();
 /// Longest block, in instructions.
 const MAX_BLOCK: usize = 32;
 
@@ -175,11 +190,15 @@ pub(crate) struct Block {
     hits: u32,
     code: usize,
     jit_gen: u32,
+    /// `ICache::clock` when last run: the set's least recently run block is replaced.
+    used: u32,
 }
 
 pub struct ICache {
     entries: Vec<Entry>,
     blocks: Vec<Block>,
+    /// Counts block lookups, for `Block::used`.
+    clock: u32,
     /// Blocks built and block runs (statistics for XP_FPS).
     pub(crate) built: u64,
     pub(crate) runs: u64,
@@ -204,10 +223,12 @@ impl ICache {
                     ops: empty,
                     hits: 0,
                     code: 0,
-                    jit_gen: 0
+                    jit_gen: 0,
+                    used: 0,
                 };
                 BLOCK_SLOTS
             ],
+            clock: 0,
             built: 0,
             runs: 0,
             flushes: 0,
@@ -231,15 +252,42 @@ fn slot(eip: u32) -> usize {
 }
 
 #[inline(always)]
-fn block_slot(eip: u32) -> usize {
-    ((eip ^ (eip >> 19)) as usize) & (BLOCK_SLOTS - 1)
+/// XP_COVER=<lo>-<hi> (hex): the address range whose blocks are reported at their first run,
+/// and kept out of compiled code.
+pub(crate) fn cover_range() -> Option<(u32, u32)> {
+    static R: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *R.get_or_init(|| {
+        let v = std::env::var("XP_COVER").ok()?;
+        let (a, b) = v.split_once('-')?;
+        Some((u32::from_str_radix(a.trim(), 16).ok()?, u32::from_str_radix(b.trim(), 16).ok()?))
+    })
+}
+
+/// XP_TRACE_AT=<hex>,...: addresses whose blocks are logged each time they run (and kept out
+/// of compiled code, so that every run passes through here).
+pub(crate) fn trace_at(eip: u32) -> bool {
+    static AT: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    let at = AT.get_or_init(|| {
+        std::env::var("XP_TRACE_AT")
+            .map(|v| v.split(',').filter_map(|a| u32::from_str_radix(a.trim().trim_start_matches("0x"), 16).ok()).collect())
+            .unwrap_or_default()
+    });
+    !at.is_empty() && at.contains(&eip)
+}
+
+/// The first entry of the set a block starting at `eip` belongs to. A multiplicative
+/// (Fibonacci) hash: code addresses that differ only in their high bits, as a program's
+/// functions do, still spread over the whole table.
+fn block_set(eip: u32) -> usize {
+    (eip.wrapping_mul(0x9E37_79B1) >> (32 - SET_BITS)) as usize * WAYS
 }
 
 /// Does this instruction end a block (it may change where execution goes)?
 fn ends_block(op: &Dop) -> bool {
     matches!(
         op,
-        Dop::Jcc { .. }
+        Dop::Unsupported
+            | Dop::Jcc { .. }
             | Dop::Jmp(_)
             | Dop::Call(_)
             | Dop::Ret(_)
@@ -428,6 +476,108 @@ fn decode(b: &[u8], start: u32) -> Option<(u8, Dop)> {
                 bits: if opc == 0x8A { 8 } else { 32 },
             }
         }
+        // operand-size prefix: the 16-bit forms of mov, test and the ALU operations
+        0x66 => {
+            let o = c.u8()?;
+            match o {
+                0x00..=0x3F if o & 7 == 1 => {
+                    let (reg, rm) = c.modrm()?;
+                    Dop::AluRmR {
+                        op: o >> 3,
+                        rm,
+                        reg,
+                        bits: 16,
+                    }
+                }
+                0x00..=0x3F if o & 7 == 3 => {
+                    let (reg, rm) = c.modrm()?;
+                    Dop::AluRRm {
+                        op: o >> 3,
+                        reg,
+                        rm,
+                        bits: 16,
+                    }
+                }
+                0x81 | 0x83 => {
+                    let (op, rm) = c.modrm()?;
+                    let imm = if o == 0x81 {
+                        u16::from_le_bytes([c.u8()?, c.u8()?]) as u32
+                    } else {
+                        c.u8()? as i8 as i16 as u16 as u32
+                    };
+                    Dop::AluRmI {
+                        op,
+                        rm,
+                        imm,
+                        bits: 16,
+                    }
+                }
+                0x85 => {
+                    let (reg, rm) = c.modrm()?;
+                    Dop::Test { rm, reg, bits: 16 }
+                }
+                0x89 => {
+                    let (reg, rm) = c.modrm()?;
+                    Dop::MovRmR { rm, reg, bits: 16 }
+                }
+                0x8B => {
+                    let (reg, rm) = c.modrm()?;
+                    Dop::MovRRm { reg, rm, bits: 16 }
+                }
+                _ => return None,
+            }
+        }
+        0x99 => Dop::Cdq,
+        // mov eax, [moffs] / mov [moffs], eax
+        0xA1 | 0xA3 => {
+            let rm = Ea::Mem {
+                base: NONE,
+                index: NONE,
+                scale: 0,
+                disp: c.u32()?,
+            };
+            if opc == 0xA1 {
+                Dop::MovRRm {
+                    reg: EAX as u8,
+                    rm,
+                    bits: 32,
+                }
+            } else {
+                Dop::MovRmR {
+                    rm,
+                    reg: EAX as u8,
+                    bits: 32,
+                }
+            }
+        }
+        0xA4 => Dop::Movs { bits: 8 },
+        0xA5 => Dop::Movs { bits: 32 },
+        0xB0..=0xB7 => Dop::MovRmI8 {
+            rm: Ea::Reg(opc & 7),
+            imm: c.u8()?,
+        },
+        0xC6 => match c.modrm()? {
+            (0, rm) => Dop::MovRmI8 { rm, imm: c.u8()? },
+            _ => return None,
+        },
+        0xF6 => match c.modrm()? {
+            (0, rm) => Dop::TestI {
+                rm,
+                imm: c.u8()? as u32,
+                bits: 8,
+            },
+            _ => return None,
+        },
+        0xF7 => match c.modrm()? {
+            (0, rm) => Dop::TestI {
+                rm,
+                imm: c.u32()?,
+                bits: 32,
+            },
+            (2, rm) => Dop::Unary { neg: false, rm },
+            (3, rm) => Dop::Unary { neg: true, rm },
+            _ => return None,
+        },
         0x8D => match c.modrm()? {
             (reg, ea @ Ea::Mem { .. }) => Dop::Lea { reg, ea },
             _ => return None,
@@ -492,6 +642,11 @@ fn decode(b: &[u8], start: u32) -> Option<(u8, Dop)> {
             _ => return None,
         },
         0x0F => match c.u8()? {
+            0x90..=0x9F => {
+                let cc = b[1] & 15;
+                let (_, rm) = c.modrm()?;
+                Dop::Setcc { cc, rm }
+            }
             0x80..=0x8F => {
                 let cc = b[1] & 15;
                 let rel = c.u32()?;
@@ -556,22 +711,24 @@ impl Emu {
         if start.wrapping_sub(HLE_BASE) < HLE_END - HLE_BASE || start == self.seh_ret {
             return None;
         }
+        if trace_at(start) {
+            self.trace_here(start);
+        }
+        if cover_range().is_some_and(|(lo, hi)| (lo..hi).contains(&start)) {
+            self.cover_here(start);
+        }
         if self.mem.code_dirty {
-            self.icache.clear();
-            self.mem.forget_code_pages();
-            self.jit.reset();
+            self.flush_code_caches();
         }
-        let i = block_slot(start);
-        if self.icache.blocks[i].start != start {
-            self.build_block(i, start);
-        }
+        let i = self.block_index(start);
         let ops = self.icache.blocks[i].ops.clone();
         if ops.is_empty() {
             return None;
         }
         self.icache.runs += 1;
         let n = ops.len().min(limit as usize);
-        if self.jit.enabled && n == ops.len() {
+        let covered = cover_range().is_some_and(|(lo, hi)| (lo..hi).contains(&start));
+        if self.jit.enabled && n == ops.len() && !trace_at(start) && !covered {
             if let Some(r) = self.run_compiled(i, start, limit) {
                 return Some(r);
             }
@@ -604,6 +761,12 @@ impl Emu {
         let current = self.jit.generation;
         let b = &mut self.icache.blocks[i];
         if b.jit_gen != current || b.code == 0 {
+            // Rebuilt after being evicted: its compiled code is still there.
+            if let Some(f) = self.jit.compiled_for(start, b.ops.len()) {
+                b.code = f as usize;
+                b.jit_gen = current;
+                return self.run_compiled(i, start, limit);
+            }
             b.hits += 1;
             if b.hits < super::jit::HOT {
                 return None;
@@ -632,6 +795,38 @@ impl Emu {
         let r = unsafe { f(self, limit) };
         self.jit.runs += 1;
         let count = r & 0xFFFF_FFFF;
+        if self.jit.stats && r >> 32 == 0 {
+            let eip = self.eip;
+            let set = block_set(eip);
+            let b = self.icache.blocks[set..set + WAYS].iter().find(|b| b.start == eip);
+            let why = if eip.wrapping_sub(HLE_BASE) < HLE_END - HLE_BASE {
+                1 // an API stub
+            } else if b.is_some_and(|b| b.ops.is_empty()) {
+                2 // an instruction blocks do not handle
+            } else if b.is_some_and(|b| b.code != 0 && b.jit_gen == self.jit.generation) {
+                if limit.saturating_sub(count) < b.map_or(0, |b| b.ops.len() as u64) { 0 } else { 4 }
+            } else {
+                3 // not compiled (yet)
+            };
+            self.exit_why[why] += 1;
+            if why == 2 {
+                let mut k = String::new();
+                let mut a = eip;
+                for _ in 0..4 {
+                    let b = self.mem.read_u8(a).unwrap_or(0);
+                    k.push_str(&format!("{b:02X}"));
+                    a += 1;
+                    if !matches!(b, 0x66 | 0xF2 | 0xF3 | 0x0F) {
+                        break;
+                    }
+                }
+                if matches!(k.as_str(), "F7" | "F6" | "FF" | "FE" | "D9" | "DB" | "DD" | "DF" | "D8" | "DA" | "DC" | "DE" | "C1" | "D3" | "0FAE") || k.ends_with("0F") {
+                    let m = self.mem.read_u8(a).unwrap_or(0);
+                    k.push_str(&format!("/{}", (m >> 3) & 7));
+                }
+                *self.jit.helper_kinds.entry(format!("undecodable {k}")).or_insert(0) += 1;
+            }
+        }
         self.steps += count;
         self.recent[(self.steps & 15) as usize] = start;
         if r >> 32 != 0 {
@@ -639,6 +834,68 @@ impl Emu {
             return Some((count, Err(stop)));
         }
         Some((count, Ok(())))
+    }
+
+    /// XP_TRACE_AT: the registers, the top of the stack (return address, then the first
+    /// arguments) and the dword ecx points to where a traced block starts.
+    #[cold]
+    fn trace_here(&self, at: u32) {
+        let r = |a: u32| self.mem.read(a, 4).unwrap_or(0xDEAD_DEAD);
+        let esp = self.regs[ESP];
+        let regs: Vec<String> = self.regs.iter().map(|v| format!("{v:#x}")).collect();
+        let stack: Vec<String> = (0..4).map(|i| format!("{:#x}", r(esp.wrapping_add(4 * i)))).collect();
+        // (*ecx: the vtable, when ecx is a C++ `this`.)
+        eprintln!(
+            "[trace] {at:#x} regs [{}] stack [{}] *ecx {:#x}",
+            regs.join(" "),
+            stack.join(" "),
+            r(self.regs[1])
+        );
+    }
+
+    /// Cached code was written to: throw away everything made from the old bytes, the decoded
+    /// instructions and blocks and the compiled code (which chained blocks jump into directly).
+    #[cold]
+    fn flush_code_caches(&mut self) {
+        self.icache.clear();
+        self.mem.forget_code_pages();
+        self.jit.reset();
+    }
+
+    /// XP_COVER: report the first run of each block in the range, with the time (debugging).
+    #[cold]
+    fn cover_here(&self, at: u32) {
+        thread_local! {
+            static SEEN: std::cell::RefCell<std::collections::HashSet<u32>> = Default::default();
+        }
+        if SEEN.with(|s| s.borrow_mut().insert(at)) {
+            eprintln!("[cover] {:.1} {at:x}", self.win.elapsed_ms() as f64 / 1000.0);
+        }
+    }
+
+    /// The entry holding the block that starts at `start`, building it (in place of the set's
+    /// least recently run block) if there is none.
+    #[inline(always)]
+    fn block_index(&mut self, start: u32) -> usize {
+        let set = block_set(start);
+        let clock = self.icache.clock.wrapping_add(1);
+        self.icache.clock = clock;
+        let mut victim = set;
+        let mut oldest = 0;
+        for i in set..set + WAYS {
+            let b = &mut self.icache.blocks[i];
+            if b.start == start {
+                b.used = clock;
+                return i;
+            }
+            let age = if b.start == EMPTY { u32::MAX } else { clock.wrapping_sub(b.used) };
+            if age >= oldest {
+                (victim, oldest) = (i, age);
+            }
+        }
+        self.build_block(victim, start);
+        self.icache.blocks[victim].used = clock;
+        victim
     }
 
     #[cold]
@@ -658,6 +915,13 @@ impl Emu {
             }
             self.mem.note_code(at, buf.len() as u32);
             let Some((len, op)) = decode(&buf[..n], at) else {
+                // Not decoded here: the block ends with it, run by the full interpreter
+                // (which leaves eip wherever the instruction goes).
+                ops.push(BlockOp {
+                    op: Dop::Unsupported,
+                    start: at,
+                    next: at,
+                });
                 break;
             };
             let next = at.wrapping_add(len as u32);
@@ -678,6 +942,7 @@ impl Emu {
             hits: 0,
             code: 0,
             jit_gen: 0,
+            used: 0,
         };
     }
 
@@ -685,8 +950,7 @@ impl Emu {
     #[inline(always)]
     pub(crate) fn step_cached(&mut self, start: u32) -> Res<()> {
         if self.mem.code_dirty {
-            self.icache.clear();
-            self.mem.forget_code_pages();
+            self.flush_code_caches();
         }
         let i = slot(start);
         let e = self.icache.entries[i];
@@ -869,7 +1133,32 @@ impl Emu {
                 self.regs[reg as usize] = r;
             }
             Dop::Nop => {}
-            Dop::Unsupported => unreachable!("unsupported instructions go to the interpreter"),
+            Dop::MovRmI8 { rm, imm } => self.write_op(self.ea_op(rm), 8, imm as u32)?,
+            Dop::Setcc { cc, rm } => {
+                let v = self.cond(cc) as u32;
+                self.write_op(self.ea_op(rm), 8, v)?;
+            }
+            Dop::Cdq => self.regs[EDX] = ((self.regs[EAX] as i32) >> 31) as u32,
+            Dop::Movs { bits } => {
+                let bits = bits as u32;
+                let v = self.read_op(Op::Mem(self.regs[ESI]), bits)?;
+                self.write_op(Op::Mem(self.regs[EDI]), bits, v)?;
+                let n = bits / 8;
+                let d = if self.eflags & DF != 0 { n.wrapping_neg() } else { n };
+                self.regs[ESI] = self.regs[ESI].wrapping_add(d);
+                self.regs[EDI] = self.regs[EDI].wrapping_add(d);
+            }
+            Dop::Unary { neg, rm } => {
+                let op = self.ea_op(rm);
+                let a = self.read_op(op, 32)?;
+                // neg is 0 - a, flags and all (CF: a was not zero)
+                let r = if neg { self.alu(5, 0, a, 32) } else { !a };
+                self.write_op(op, 32, r)?;
+            }
+            Dop::Unsupported => {
+                self.eip = start;
+                return self.step_decoded(start);
+            }
         }
         Ok(())
     }
@@ -879,6 +1168,191 @@ impl Emu {
 mod tests {
     use super::*;
     use crate::cpu::{EBX, ESI, Stop};
+
+    /// Every instruction the block decoder accepts runs the same through `exec_dop` as through
+    /// the full interpreter: random instruction bytes, registers, flags and memory, compared
+    /// afterwards (registers, flags, eip, the memory window, and whether it faulted).
+    #[test]
+    fn decoded_instructions_match_the_full_interpreter() {
+        const CODE: u32 = 0x1000;
+        const DATA: u32 = 0x10_0000;
+        let mut x = 0x9E37_79B9u32;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        let mut tried = 0;
+        let mut mismatches = Vec::new();
+        let (mut a, mut b) = (Emu::new(), Emu::new());
+        for e in [&mut a, &mut b] {
+            e.mem.map(CODE, 0x1000);
+            e.mem.map(DATA, 0x1_0000);
+        }
+        // (Far fewer unoptimized: the full run takes minutes in a debug build.)
+        let tries = if cfg!(debug_assertions) { 30_000 } else { 300_000 };
+        for _ in 0..tries {
+            let mut bytes = [0u8; 16];
+            for b in bytes.iter_mut() {
+                *b = rnd() as u8;
+            }
+            // Mostly small displacements so memory operands land in the mapped window.
+            if rnd() % 4 != 0 {
+                for b in bytes[2..8].iter_mut() {
+                    if rnd() % 2 == 0 {
+                        *b = 0;
+                    }
+                }
+            }
+            // Two-byte and operand-size forms come up rarely at random: make some.
+            match rnd() % 8 {
+                0 => {
+                    const OPS: [u8; 7] = [0xAF, 0xB6, 0xB7, 0xBE, 0xBF, 0x80, 0x90];
+                    let o = OPS[(rnd() % 7) as usize];
+                    bytes[0] = 0x0F;
+                    bytes[1] = if o >= 0x80 { o + (rnd() % 16) as u8 } else { o };
+                }
+                1 => bytes[0] = 0x66,
+                _ => {}
+            }
+            let Some((len, op)) = decode(&bytes, CODE) else { continue };
+            if op == Dop::Unsupported {
+                continue;
+            }
+            tried += 1;
+            let mut regs = [0u32; 8];
+            for r in regs.iter_mut() {
+                *r = DATA + 0x8000 + (rnd() % 0x1000);
+                if rnd() % 3 == 0 {
+                    *r = rnd(); // arbitrary values too (faults compared as well)
+                }
+            }
+            regs[ESP as usize] = DATA + 0xC000;
+            let flags = (rnd() & 0x8D5) | 2 | (rnd() & 0x400);
+            let mem_seed = rnd();
+            let mut fpu_st = [0f64; 8];
+            for v in fpu_st.iter_mut() {
+                *v = match rnd() % 4 {
+                    0 => (rnd() as i32) as f64,
+                    1 => (rnd() as i32) as f64 / 7.0,
+                    2 => (rnd() % 100) as f64 - 50.5,
+                    _ => f32::from_bits(rnd()) as f64,
+                };
+            }
+            let fpu_top = (rnd() % 8) as usize;
+            let setup = |e: &mut Emu| {
+                e.mem.write_bytes(CODE, &bytes).unwrap();
+                let mut y = mem_seed;
+                for i in 0..0x4000 {
+                    y = y.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    e.mem.write(DATA + 4 * i, 4, y).unwrap();
+                }
+                e.regs = regs;
+                e.eflags = flags;
+                e.eip = CODE;
+                e.fpu.st = fpu_st;
+                e.fpu.top = fpu_top;
+                e.fpu.cc = 0;
+            };
+            setup(&mut a);
+            let ra = a.exec_dop(op, CODE, CODE + len as u32);
+            setup(&mut b);
+            let rb = b.step_decoded(CODE);
+            let state = |e: &Emu, r: &Res<()>| {
+                (
+                    r.is_ok(),
+                    if r.is_ok() { e.regs } else { [0; 8] },
+                    if r.is_ok() { e.eflags & 0x8D5 } else { 0 },
+                    if r.is_ok() { e.eip } else { 0 },
+                    e.mem.read_bytes(DATA, 0x1_0000).unwrap(),
+                    if r.is_ok() { e.fpu.st.map(f64::to_bits) } else { [0; 8] },
+                    if r.is_ok() { (e.fpu.top, e.fpu.cc) } else { (0, 0) },
+                )
+            };
+            if state(&a, &ra) != state(&b, &rb) && mismatches.len() < 20 {
+                let (sa, sb) = (state(&a, &ra), state(&b, &rb));
+                mismatches.push(format!(
+                    "{:02x?} {op:?}: ok {}/{} regs {:x?}/{:x?} flags {:#x}/{:#x} eip {:#x}/{:#x} mem same {} fpu same {} top/cc {:?}/{:?}",
+                    &bytes[..len as usize], sa.0, sb.0, sa.1, sb.1, sa.2, sb.2, sa.3, sb.3, sa.4 == sb.4, sa.5 == sb.5, sa.6, sb.6
+                ));
+            }
+        }
+        assert!(tried > tries / 4, "only {tried} decodable instructions tried");
+        assert!(mismatches.is_empty(), "{} mismatches:\n{}", mismatches.len(), mismatches.join("\n"));
+    }
+
+    /// The instructions added for blocks (8-bit immediates, setcc, cdq, the moffs forms, 16-bit
+    /// mov and ALU, not/neg, test with an immediate, movsb/movsd both ways) give the same
+    /// registers, flags and memory compiled as interpreted: a loop runs them until it is hot.
+    #[test]
+    fn added_instructions_compile_like_the_interpreter() {
+        const CODE: u32 = 0x1000;
+        const M: u32 = 0x3000;
+        const SRC: u32 = 0x4000;
+        const DST: u32 = 0x5000;
+        let le = |v: u32| v.to_le_bytes().to_vec();
+        let code: Vec<u8> = [
+            vec![0xBE], le(SRC), vec![0xBF], le(DST),  // mov esi, SRC; mov edi, DST
+            vec![0xB0, 0x7F, 0xB4, 0x80],              // mov al, 0x7F; mov ah, 0x80
+            vec![0xC6, 0x05], le(M), vec![0x5A],       // mov byte [M], 0x5A
+            vec![0x0F, 0x9C, 0xC1],                    // setl cl
+            vec![0x0F, 0x94, 0x05], le(M + 1),         // sete byte [M+1]
+            vec![0x99],                                // cdq
+            vec![0x66, 0x8B, 0x1D], le(M + 4),         // mov bx, [M+4]
+            vec![0x66, 0x89, 0x1D], le(M + 8),         // mov [M+8], bx
+            vec![0x66, 0x89, 0xD9],                    // mov cx, bx
+            vec![0x66, 0x03, 0x05], le(M + 4),         // add ax, [M+4]
+            vec![0x66, 0x83, 0xC1, 0xF0],              // add cx, -16
+            vec![0xA1], le(M + 12),                    // mov eax, [M+12]
+            vec![0xF7, 0xD8],                          // neg eax
+            vec![0xA3], le(M + 16),                    // mov [M+16], eax
+            vec![0xF7, 0xD3],                          // not ebx
+            vec![0xF6, 0xC3, 0x81],                    // test bl, 0x81
+            vec![0x0F, 0x9F, 0x05], le(M + 2),         // setg byte [M+2]
+            vec![0xF7, 0x05], le(M + 4), le(0xF0F),    // test dword [M+4], 0xF0F
+            vec![0x0F, 0x92, 0x05], le(M + 3),         // setb byte [M+3]
+            vec![0xF7, 0x1D], le(M + 20),              // neg dword [M+20]
+            vec![0xA5, 0xA4],                          // movsd; movsb
+            vec![0xFD, 0xA5, 0xA4, 0xFC],              // std; movsd; movsb; cld
+            vec![0xA5],                                // movsd
+            vec![0x4D, 0x0F, 0x85],                    // dec ebp; jnz to the top
+        ]
+        .concat();
+        let mut code = code;
+        let back = -(code.len() as i32 + 4);
+        code.extend(le(back as u32));
+        code.push(0xF4);
+        let run = |jit: bool, seed: u32| {
+            let mut e = Emu::new();
+            e.jit.enabled &= jit;
+            for (a, n) in [(CODE, 0x1000), (M, 0x1000), (SRC, 0x1000), (DST, 0x1000)] {
+                e.mem.map(a, n);
+            }
+            e.mem.write_bytes(CODE, &code).unwrap();
+            let mut x = seed;
+            for i in 0..0x400 {
+                x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                for base in [M, SRC] {
+                    e.mem.write(base + 4 * i, 4, x ^ base).unwrap();
+                }
+            }
+            e.regs = [seed, 3, 0x8000_0000, seed >> 3, 0x2000, 40, 0, 0];
+            e.eip = CODE;
+            assert_eq!(e.run(100_000), Stop::Halt);
+            if jit {
+                assert!(e.jit.compiled > 0, "the loop was compiled");
+            }
+            let mem: Vec<u8> = [M, SRC, DST]
+                .iter()
+                .flat_map(|&a| e.mem.read_bytes(a, 0x200).unwrap())
+                .collect();
+            (e.regs, e.eflags & 0x8D5, mem)
+        };
+        for seed in [0, 1, 0x8000_0000, 0x1234_5678, 0xFFFF_FFFF] {
+            assert_eq!(run(true, seed), run(false, seed), "seed {seed:#x}");
+        }
+    }
 
     #[test]
     fn decodes_operands_and_absolute_targets() {
@@ -930,9 +1404,21 @@ mod tests {
             })
         );
         assert_eq!(
-            decode(&[0x66, 0x89, 0xC0], 0),
+            decode(&[0x66, 0x89, 0xC8], 0),
+            Some((
+                3,
+                Dop::MovRmR {
+                    rm: Ea::Reg(0),
+                    reg: 1,
+                    bits: 16
+                }
+            )),
+            "operand-size prefix: the 16-bit form"
+        );
+        assert_eq!(
+            decode(&[0xF3, 0xA5], 0),
             None,
-            "prefixed: left to the interpreter"
+            "rep: left to the interpreter"
         );
         assert_eq!(
             decode(&[0xD9, 0xE8], 0),

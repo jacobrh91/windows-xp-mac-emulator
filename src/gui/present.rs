@@ -268,6 +268,12 @@ mod cocoa {
         }
     }
 
+    /// Fullscreen: show the menu bar over the game, or hide it again.
+    pub fn show_menu_bar(show: bool) {
+        // SAFETY: see module docs.
+        unsafe { set_presentation_options(if show { 1 << 1 } else { HIDE_DOCK_AND_MENU_BAR }) }
+    }
+
     unsafe fn set_presentation_options(options: usize) {
         unsafe {
             let app = send_id(send_class(c"NSApplication"), sel(c"sharedApplication"));
@@ -316,8 +322,9 @@ mod cocoa {
 
     // NSApplicationPresentationHideDock | NSApplicationPresentationHideMenuBar
     const HIDE_DOCK_AND_MENU_BAR: usize = (1 << 1) | (1 << 3);
-    // Above the menu bar (NSMainMenuWindowLevel is 24).
-    const COVER_LEVEL: usize = 25;
+    // Just under the menu bar (NSMainMenuWindowLevel is 24), so that it can be shown over
+    // the game.
+    const COVER_LEVEL: usize = 23;
 
     /// Instant fullscreen: a borderless window over the whole screen with the Dock and menu
     /// bar hidden. macOS's own fullscreen plays a Space-switching animation that takes
@@ -347,9 +354,8 @@ mod cocoa {
     }
 
     /// Make macOS's own fullscreen (the green button, Control-Command-F) completely full
-    /// screen: by default it only auto-hides the menu bar, which then drops down whenever the
-    /// mouse reaches the top, where the game scrolls its map. The window gets a delegate that
-    /// asks for the menu bar and Dock to be hidden outright.
+    /// screen: the Dock and menu bar are hidden outright, so the game can scroll its map at
+    /// the top edge.
     pub fn hide_menu_bar_in_fullscreen(window: &Window) {
         #[link(name = "objc")]
         unsafe extern "C" {
@@ -420,6 +426,119 @@ mod cocoa {
     pub fn is_key_window(window: &Window) -> bool {
         // SAFETY: see module docs.
         handles(window).is_some_and(|(_, win)| unsafe { send_usize(win, sel(c"isKeyWindow")) } & 0xFF != 0)
+    }
+
+    /// Add an "Emulator" menu to the menu bar: Full Screen, and the master volume.
+    pub fn install_menu() {
+        #[link(name = "objc")]
+        unsafe extern "C" {
+            fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+            fn objc_registerClassPair(cls: Id);
+            fn class_addMethod(cls: Id, name: *mut c_void, imp: *const (), types: *const c_char) -> bool;
+        }
+        extern "C" fn full_screen(_: Id, _: *mut c_void, _: Id) {
+            super::FULLSCREEN_REQUEST.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        extern "C" fn volume(_: Id, _: *mut c_void, item: Id) {
+            // SAFETY: AppKit passes the menu item that was chosen.
+            unsafe {
+                let percent = send_usize(item, sel(c"tag")) as u32;
+                crate::media::speaker::MASTER_PERCENT.store(percent, std::sync::atomic::Ordering::Relaxed);
+                let items = send_id(send_id(item, sel(c"menu")), sel(c"itemArray"));
+                for i in 0..send_usize(items, sel(c"count")) {
+                    let other = send_id_index(items, sel(c"objectAtIndex:"), i);
+                    send_usize_arg(other, sel(c"setState:"), (send_usize(other, sel(c"tag")) as u32 == percent) as usize);
+                }
+            }
+        }
+        // SAFETY: see module docs. The class has two action methods of the signature AppKit
+        // calls (void, self, _cmd, sender); everything made here lives for the whole run.
+        unsafe {
+            let app = send_id(send_class(c"NSApplication"), sel(c"sharedApplication"));
+            let bar = send_id(app, sel(c"mainMenu"));
+            if bar.is_null() {
+                return;
+            }
+            let cls = objc_allocateClassPair(send_class(c"NSObject"), c"XPMenuTarget".as_ptr(), 0);
+            class_addMethod(cls, sel(c"fullScreen:"), full_screen as *const (), c"v@:@".as_ptr());
+            class_addMethod(cls, sel(c"setVolume:"), volume as *const (), c"v@:@".as_ptr());
+            objc_registerClassPair(cls);
+            let target = send_id(send_id(cls, sel(c"alloc")), sel(c"init"));
+
+            let string = |s: &std::ffi::CStr| {
+                send_id_ptr(send_class(c"NSString"), sel(c"stringWithUTF8String:"), s.as_ptr() as *mut c_void)
+            };
+            let item = |title: &std::ffi::CStr, action: *mut c_void, to: Id| {
+                let it = send_item_init(
+                    send_id(send_class(c"NSMenuItem"), sel(c"alloc")),
+                    sel(c"initWithTitle:action:keyEquivalent:"),
+                    string(title),
+                    action,
+                    string(c""),
+                );
+                if !to.is_null() {
+                    send_id_arg(it, sel(c"setTarget:"), to);
+                }
+                it
+            };
+            let menu = send_id_ptr(send_id(send_class(c"NSMenu"), sel(c"alloc")), sel(c"initWithTitle:"), string(c"Emulator") as *mut c_void);
+            send_id_arg(menu, sel(c"addItem:"), item(c"Full Screen", sel(c"fullScreen:"), target));
+            send_id_arg(menu, sel(c"addItem:"), send_id(send_class(c"NSMenuItem"), sel(c"separatorItem")));
+            let header = item(c"Master Volume", std::ptr::null_mut(), std::ptr::null_mut());
+            send_usize_arg(header, sel(c"setEnabled:"), 0);
+            send_id_arg(menu, sel(c"addItem:"), header);
+            let current = crate::media::speaker::MASTER_PERCENT.load(std::sync::atomic::Ordering::Relaxed);
+            for (title, percent) in [(c"100%", 100), (c"75%", 75), (c"50%", 50), (c"25%", 25), (c"Mute", 0)] {
+                let it = item(title, sel(c"setVolume:"), target);
+                send_usize_arg(it, sel(c"setTag:"), percent as usize);
+                send_usize_arg(it, sel(c"setState:"), (percent == current) as usize);
+                send_usize_arg(it, sel(c"setIndentationLevel:"), 1);
+                send_id_arg(menu, sel(c"addItem:"), it);
+            }
+            let top = item(c"Emulator", std::ptr::null_mut(), std::ptr::null_mut());
+            send_id_arg(top, sel(c"setSubmenu:"), menu);
+            // After the application menu.
+            send_id_index_arg(bar, sel(c"insertItem:atIndex:"), top, 1);
+        }
+    }
+
+    unsafe fn send_id_index(obj: Id, sel: *mut c_void, i: usize) -> Id {
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, usize) -> Id>(
+                objc_msgSend as *const (),
+            )(obj, sel, i)
+        }
+    }
+
+    unsafe fn send_id_index_arg(obj: Id, sel: *mut c_void, a: Id, i: usize) {
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, Id, usize)>(
+                objc_msgSend as *const (),
+            )(obj, sel, a, i)
+        }
+    }
+
+    unsafe fn send_id_ptr(obj: Id, sel: *mut c_void, a: *mut c_void) -> Id {
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, *mut c_void) -> Id>(
+                objc_msgSend as *const (),
+            )(obj, sel, a)
+        }
+    }
+
+    unsafe fn send_item_init(obj: Id, sel: *mut c_void, title: Id, action: *mut c_void, key: Id) -> Id {
+        unsafe {
+            std::mem::transmute::<*const (), unsafe extern "C" fn(Id, *mut c_void, Id, *mut c_void, Id) -> Id>(
+                objc_msgSend as *const (),
+            )(obj, sel, title, action, key)
+        }
+    }
+
+    /// Is the window on the Space (virtual screen) being shown? The mouse position is global,
+    /// so on another Space it would still hover the game's buttons.
+    pub fn on_active_space(window: &Window) -> bool {
+        // SAFETY: see module docs.
+        handles(window).is_none_or(|(_, win)| unsafe { send_usize(win, sel(c"isOnActiveSpace")) } & 0xFF != 0)
     }
 
     /// Debugging: which view a click at the window's centre would go to, and the frames of
@@ -567,6 +686,7 @@ mod cocoa {
         None
     }
     pub fn exit_fullscreen(_: &Window, _: &Saved) {}
+    pub fn show_menu_bar(_: bool) {}
     pub fn hide_menu_bar_in_fullscreen(_: &Window) {}
     pub fn in_native_fullscreen(_: &Window) -> bool {
         false
@@ -582,6 +702,10 @@ mod cocoa {
     pub fn is_key_window(_: &Window) -> bool {
         true
     }
+    pub fn on_active_space(_: &Window) -> bool {
+        true
+    }
+    pub fn install_menu() {}
     pub fn presentation_state(_: &Window) -> Option<String> {
         None
     }
@@ -651,6 +775,8 @@ enum Input {
     /// (virtual key, sided key, extended, down)
     Key(u32, u32, bool, bool),
     Char(u32),
+    /// The wheel turned by this much (120 per notch) at a desktop position.
+    Wheel(i32, i32, i32),
     /// The host window was closed.
     Close,
 }
@@ -681,6 +807,7 @@ impl Shared {
             match i {
                 Input::Mouse(m, x, y) => emu.wm.post_mouse(m, x, y),
                 Input::Key(vk, side, ext, down) => emu.wm.post_key_ex(vk, side, ext, down),
+                Input::Wheel(d, x, y) => emu.wm.post_wheel(d, x, y),
                 Input::Char(c) => emu.wm.post_char(c),
                 Input::Close => closed = true,
             }
@@ -688,6 +815,17 @@ impl Shared {
         closed
     }
 }
+
+/// The Emulator menu's Full Screen was chosen.
+static FULLSCREEN_REQUEST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Fullscreen, the mouse within this many points of the top edge is resting at the menu bar's
+/// trigger (the map scrolls up there too)...
+const FS_TOP_MENU: f64 = 2.0;
+/// ...and within this many points it scrolls the map up.
+const FS_TOP_PAD: f64 = 64.0;
+/// How long the mouse rests at the very top before the menu bar is shown.
+const FS_MENU_DWELL: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub struct Presenter {
     window: Window,
@@ -707,6 +845,12 @@ pub struct Presenter {
     /// The Windows modifier keys (VK_LSHIFT..VK_RMENU) as last sent to the game.
     modifiers: [bool; 6],
     last_pos: (i32, i32),
+    /// Trackpad and wheel scrolling not yet worth a whole notch.
+    scroll: f32,
+    /// Fullscreen: since when the mouse has rested at the very top, and whether the menu
+    /// bar is shown over the game.
+    top_since: Option<std::time::Instant>,
+    menu_shown: bool,
     /// Top-left of the visible region in emulated-desktop coordinates, and its size.
     region: (i32, i32, u32, u32),
     title: String,
@@ -725,6 +869,7 @@ impl Presenter {
         let chars = Arc::new(Mutex::new(Vec::new()));
         let region = (0, 0, 640, 480);
         let window = open(title, (region.2, region.3), &chars)?;
+        cocoa::install_menu();
         Ok(Presenter {
             window,
             chars,
@@ -737,6 +882,9 @@ impl Presenter {
             logged_buttons: [false; 3],
             modifiers: [false; 6],
             last_pos: (-1, -1),
+            scroll: 0.0,
+            top_since: None,
+            menu_shown: false,
             region,
             title: title.to_string(),
             frames: 0,
@@ -821,7 +969,29 @@ impl Presenter {
                 // bars beside the picture is at the picture's edge, so edge scrolling works on
                 // every side.
                 let (mx, my) = if was_fullscreen {
-                    (mx.clamp(0.0, vw - 1.0), my.clamp(0.0, vh - 1.0))
+                    let my = my.clamp(0.0, vh - 1.0);
+                    // Resting at the very top for a second shows the menu bar over the game;
+                    // moving below the scroll band hides it again.
+                    if self.fs.is_some() {
+                        if my >= FS_TOP_PAD {
+                            self.top_since = None;
+                            if std::mem::take(&mut self.menu_shown) {
+                                cocoa::show_menu_bar(false);
+                            }
+                        } else if my < FS_TOP_MENU {
+                            let since = *self.top_since.get_or_insert_with(std::time::Instant::now);
+                            if !self.menu_shown && since.elapsed() >= FS_MENU_DWELL {
+                                self.menu_shown = true;
+                                cocoa::show_menu_bar(true);
+                            }
+                        } else if !self.menu_shown {
+                            self.top_since = None;
+                        }
+                    }
+                    // The band along the top, down to the menu bar's trigger, scrolls the map
+                    // up, the very top edge included.
+                    let my = if my < FS_TOP_PAD { 0.0 } else { my };
+                    (mx.clamp(0.0, vw - 1.0), my)
                 } else {
                     (mx, my)
                 };
@@ -884,11 +1054,22 @@ impl Presenter {
                 );
             }
         }
+        // The game's window is on another Space: the mouse is not over it.
+        let mouse = mouse.filter(|_| cocoa::on_active_space(&self.window));
         if let Some((mx, my)) = mouse {
             let pos = (mx + rx, my + ry);
             if pos != self.last_pos {
                 self.last_pos = pos;
                 self.out.push(Input::Mouse(WM_MOUSEMOVE, pos.0, pos.1));
+            }
+            // Trackpad scrolling is a wheel turning in and out: a notch per half line.
+            if let Some((_, dy)) = self.window.get_scroll_wheel() {
+                self.scroll += dy;
+                let notches = (self.scroll / 0.5) as i32;
+                if notches != 0 {
+                    self.scroll -= notches as f32 * 0.5;
+                    self.out.push(Input::Wheel(notches * 120, pos.0, pos.1));
+                }
             }
             let down = self.window.get_mouse_down(MouseButton::Left);
             if down != self.left_down {
@@ -928,12 +1109,17 @@ impl Presenter {
         let start = self.start_fullscreen && self.fitted && self.frames > 5;
         let toggle = auto
             || start
+            || FULLSCREEN_REQUEST.swap(false, std::sync::atomic::Ordering::Relaxed)
             || ((self.window.is_key_down(Key::LeftAlt) || self.window.is_key_down(Key::RightAlt))
                 && self.window.is_key_pressed(Key::Enter, KeyRepeat::No));
         if toggle {
             self.start_fullscreen = false;
             match self.fs.take() {
-                Some(saved) => cocoa::exit_fullscreen(&self.window, &saved),
+                Some(saved) => {
+                    self.menu_shown = false;
+                    self.top_since = None;
+                    cocoa::exit_fullscreen(&self.window, &saved)
+                }
                 None => self.fs = cocoa::enter_fullscreen(&self.window),
             }
         }
@@ -982,6 +1168,12 @@ impl Presenter {
         for c in typed {
             if command {
                 continue;
+            }
+            // minifb reports no key for the backtick (` and ~) on macOS, only the character:
+            // the key press (VK_OEM_3) is made up from it, as the game's console opens on it.
+            if c == '`' as u32 || c == '~' as u32 {
+                self.out.push(Input::Key(0xC0, 0, false, true));
+                self.out.push(Input::Key(0xC0, 0, false, false));
             }
             // With Ctrl held, Windows types control characters (Ctrl+A is 1) and nothing for
             // other keys.

@@ -398,6 +398,8 @@ struct Params {
     format: u32,
     count: u32,
     hwnd: u32,
+    /// Windowed (TRUE) or full screen at the back buffer's size.
+    windowed: bool,
     auto_depth: bool,
     depth_format: u32,
 }
@@ -453,10 +455,22 @@ pub struct Device {
 /// Buffers reused from draw to draw.
 #[derive(Default)]
 struct DrawScratch {
-    /// Transformed vertices by vertex index, valid when the stamp is the current draw's.
-    cache: Vec<(u32, PipeVertex)>,
+    /// Transformed vertices by vertex index, valid when the stamp is the current draw's, with
+    /// where they land on screen (see `Projected`).
+    cache: Vec<(u32, Projected, PipeVertex, Vertex)>,
     stamp: u32,
     verts: Vec<Vertex>,
+}
+
+/// A transformed vertex as triangles see it: already in screen space (XYZRHW), in front of
+/// the near plane (its screen position is cached), or behind it (triangles using it are
+/// clipped first).
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Projected {
+    #[default]
+    Screen,
+    Front,
+    Behind,
 }
 
 fn identity() -> [f32; 16] {
@@ -913,15 +927,37 @@ fn read_params(e: &Emu, p: u32) -> Res<Params> {
         format: r(2)?,
         count: r(3)?,
         hwnd: r(6)?,
+        windowed: r(7)? != 0,
         auto_depth: r(8)? != 0,
         depth_format: r(9)?,
     })
+}
+
+/// A full-screen device sets the display mode to its back buffer's size: the screen takes
+/// that size, and the device window covers it, as on Windows. A windowed one gives the
+/// desktop back.
+fn full_screen_mode(e: &mut Emu, p: &Params, hwnd: u32) -> Res<()> {
+    if p.windowed {
+        e.wm.set_screen(crate::gui::wm::DESKTOP_W, crate::gui::wm::DESKTOP_H);
+        return Ok(());
+    }
+    e.wm.set_screen(p.width, p.height);
+    if hwnd != 0 {
+        crate::gui::user32::move_window(e, hwnd, 0, 0, p.width as i32, p.height as i32)?;
+    }
+    Ok(())
 }
 
 fn create_device(e: &mut Emu, a: &Args) -> Res<u32> {
     // (this, adapter, device type, focus window, behaviour flags, params*, IDirect3DDevice8**)
     if e.win.d3d.dev.is_some() {
         return Ok(D3DERR_INVALIDCALL); // one device at a time
+    }
+    // Unless asked to preserve it (D3DCREATE_FPU_PRESERVE), Direct3D puts the calling thread's
+    // x87 into single precision, rounding to nearest: from then on the program's floating
+    // point arithmetic is all single precision, which its results depend on.
+    if a[4] & 2 == 0 {
+        e.fpu.cw &= !0x0F00;
     }
     let mut p = read_params(e, a[5])?;
     let hwnd = if p.hwnd != 0 { p.hwnd } else { a[3] };
@@ -934,6 +970,7 @@ fn create_device(e: &mut Emu, a: &Args) -> Res<u32> {
         p.format = FMT_X8R8G8B8;
     }
     p.count = p.count.max(1);
+    full_screen_mode(e, &p, hwnd)?;
     // Report the values actually used, as Direct3D does.
     for (i, v) in [p.width, p.height, p.format, p.count].iter().enumerate() {
         e.mem.write(a[5] + 4 * i as u32, 4, *v)?;
@@ -1379,6 +1416,10 @@ fn device_method(method: &str) -> Handler {
         "ShowCursor" => |_, _| Ok(0),
         "Reset" => |e, a| {
             let p = read_params(e, a[1])?;
+            let hwnd = e.win.d3d.dev.as_ref().map_or(0, |d| d.hwnd);
+            if p.width != 0 && p.height != 0 {
+                full_screen_mode(e, &p, if p.hwnd != 0 { p.hwnd } else { hwnd })?;
+            }
             with_device(e, |_, d| {
                 if p.width != 0 && p.height != 0 {
                     d.target = Target::new(p.width, p.height);
@@ -2433,7 +2474,7 @@ impl Device {
                         light.raw[off + 3],
                     ]))
                 };
-                let d = normalize3([f(60), f(64), f(68)]);
+                let d = normalize3([f(64), f(68), f(72)]);
                 LightParams {
                     directional: u32::from_le_bytes([
                         light.raw[0],
@@ -2443,10 +2484,10 @@ impl Device {
                     ]) == 3,
                     diffuse: [f(4), f(8), f(12)],
                     ambient: [f(36), f(40), f(44)],
-                    pos: [f(48), f(52), f(56)],
+                    pos: [f(52), f(56), f(60)],
                     to_light: [-d[0], -d[1], -d[2]],
-                    range: f(72),
-                    atten: [f(80), f(84), f(88)],
+                    range: f(76),
+                    atten: [f(84), f(88), f(92)],
                 }
             })
             .collect()
@@ -2731,6 +2772,23 @@ fn triangle_slot(ptype: u32, i: u32) -> [u32; 3] {
     }
 }
 
+/// XP_D3D_PROBE=x,y: the pixel whose draws are described (debugging).
+fn probe_point() -> Option<(f32, f32)> {
+    static P: std::sync::OnceLock<Option<(f32, f32)>> = std::sync::OnceLock::new();
+    *P.get_or_init(|| {
+        let v = std::env::var("XP_D3D_PROBE").ok()?;
+        let (x, y) = v.split_once(',')?;
+        Some((x.trim().parse().ok()?, y.trim().parse().ok()?))
+    })
+}
+
+/// Does the screen-space triangle `t` cover pixel centre (px, py)?
+fn covers(t: &[Vertex], px: f32, py: f32) -> bool {
+    let e = |a: &Vertex, b: &Vertex| (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+    let (w0, w1, w2) = (e(&t[1], &t[2]), e(&t[2], &t[0]), e(&t[0], &t[1]));
+    (w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0) || (w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0)
+}
+
 fn draw(e: &mut Emu, call: &DrawCall) -> Res<u32> {
     let Some(()) = with_device(e, |e, d| draw_inner(e, d, call))? else {
         return Ok(D3DERR_INVALIDCALL);
@@ -2821,22 +2879,31 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
     }
     let stamp = scratch.stamp;
     let cache = &mut scratch.cache;
-    let mut fetch = |e: &Emu, d: &Device, slot: u32| -> Res<PipeVertex> {
+    // The cache entry holding the vertex at `slot`, transforming it if this draw has not yet.
+    // Vertices past the cache's limit go through one of three spare entries (`corner`).
+    let fetch = |cache: &mut Vec<(u32, Projected, PipeVertex, Vertex)>, e: &Emu, d: &Device, slot: u32, corner: usize| -> Res<usize> {
         let vi = slot_to_vertex(e, slot)?;
-        let i = vi as usize;
-        if let Some((s, v)) = cache.get(i)
-            && *s == stamp
+        let key = (vi as usize).min(CACHE_LIMIT) + if vi as usize >= CACHE_LIMIT { corner } else { 0 };
+        if key < CACHE_LIMIT
+            && let Some(c) = cache.get(key)
+            && c.0 == stamp
         {
-            return Ok(*v);
+            return Ok(key);
         }
         let v = d.process(e, &layout, &setup, vbase + vi * stride)?;
-        if i < CACHE_LIMIT {
-            if cache.len() <= i {
-                cache.resize((i + 1).next_power_of_two(), (0, PipeVertex::default()));
-            }
-            cache[i] = (stamp, v);
+        let kind = if v.screen {
+            Projected::Screen
+        } else if v.clip[2] >= 0.0 && v.clip[3] > 1e-6 {
+            Projected::Front
+        } else {
+            Projected::Behind
+        };
+        let scr = if kind == Projected::Behind { Vertex::default() } else { d.to_screen(&v) };
+        if cache.len() <= key {
+            cache.resize((key + 1).next_power_of_two(), Default::default());
         }
-        Ok(v)
+        cache[key] = (stamp, kind, v, scr);
+        Ok(key)
     };
 
     // Render state for the rasterizer.
@@ -2854,6 +2921,12 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         texture_factor: d.rs[60],
         color_write: d.rs[168],
         specular: d.rs_bool(29),
+        scissor: [
+            d.viewport[0],
+            d.viewport[1],
+            d.viewport[0].saturating_add(d.viewport[2]),
+            d.viewport[1].saturating_add(d.viewport[3]),
+        ],
     };
     let stage = |s: usize| -> StageState {
         let t = &d.ts[s];
@@ -2904,22 +2977,30 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
         if ptype >= 4 {
             for t in 0..triangle_count(ptype, n) {
                 let tri = triangle_slot(ptype, t);
-                let v = [
-                    fetch(e, dev_view, tri[0])?,
-                    fetch(e, dev_view, tri[1])?,
-                    fetch(e, dev_view, tri[2])?,
+                let k = [
+                    fetch(cache, e, dev_view, tri[0], 0)?,
+                    fetch(cache, e, dev_view, tri[1], 1)?,
+                    fetch(cache, e, dev_view, tri[2], 2)?,
                 ];
-                let (poly, len) = if v.iter().all(|x| x.screen) {
-                    ([v[0], v[1], v[2], v[2]], 3)
+                let kinds = k.map(|i| cache[i].1);
+                let mut scr = [Vertex::default(); 4];
+                let len = if kinds.iter().all(|&p| p == Projected::Screen)
+                    || kinds.iter().all(|&p| p == Projected::Front)
+                {
+                    // Nothing to clip: the screen positions are already worked out.
+                    for (o, &i) in scr.iter_mut().zip(&k) {
+                        *o = cache[i].3;
+                    }
+                    3
                 } else {
-                    clip_near(v)
+                    let (poly, len) = clip_near(k.map(|i| cache[i].2));
+                    for (o, p) in scr.iter_mut().zip(&poly[..len]) {
+                        *o = dev_view.to_screen(p);
+                    }
+                    len
                 };
                 if len < 3 {
                     continue;
-                }
-                let mut scr = [Vertex::default(); 4];
-                for (o, p) in scr.iter_mut().zip(&poly[..len]) {
-                    *o = dev_view.to_screen(p);
                 }
                 for i in 1..len - 1 {
                     if use_gpu {
@@ -2943,7 +3024,8 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
                 (0..n.saturating_sub(1)).map(|i| (i, i + 1)).collect()
             };
             for (a_slot, b_slot) in segments {
-                let (a, b) = (fetch(e, dev_view, a_slot)?, fetch(e, dev_view, b_slot)?);
+                let (ka, kb) = (fetch(cache, e, dev_view, a_slot, 0)?, fetch(cache, e, dev_view, b_slot, 1)?);
+                let (a, b) = (cache[ka].2, cache[kb].2);
                 if a.clip[3] <= 1e-6 && !a.screen || b.clip[3] <= 1e-6 && !b.screen {
                     continue;
                 }
@@ -2956,7 +3038,8 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
             }
         } else {
             for slot in 0..n {
-                let v = fetch(e, dev_view, slot)?;
+                let k = fetch(cache, e, dev_view, slot, 0)?;
+                let v = cache[k].2;
                 let s = dev_view.to_screen(&v);
                 if use_gpu {
                     thin_quad(gpu_verts, &s, &s);
@@ -2979,6 +3062,44 @@ fn draw_inner(e: &mut Emu, d: &mut Device, call: &DrawCall) -> Res<()> {
             t0.map(|t| (d.textures[0], t)),
             t1.map(|t| (d.textures[1], t)),
         ];
+        // XP_D3D_PROBE=x,y: describe each draw covering that pixel (one frame in 120).
+        if let Some((px, py)) = probe_point()
+            && d.frames % 120 == 0
+            && scratch.verts.chunks_exact(3).any(|t| covers(t, px, py))
+        {
+            let v = &scratch.verts[0];
+            eprintln!(
+                "[probe] frame {} fvf {:#x} verts {} viewport {:?} z/zw/zf {} {} {} blend {} {}->{} atest {} {} {:#x} cull {} tfactor {:#x} | stage0 {:?} tex {:?} | stage1 {:?} tex {:?} | v0 ({:.1},{:.1},{:.3},{:.3}) col {:?} uv {:?}",
+                d.frames, d.shader, scratch.verts.len(), &d.viewport[..4], rs.zenable, rs.zwrite, rs.zfunc,
+                rs.alpha_blend, rs.src_blend, rs.dst_blend, rs.alpha_test, rs.alpha_func, rs.alpha_ref, rs.cull, rs.texture_factor,
+                (stages[0].color_op, stages[0].color_arg1, stages[0].color_arg2, stages[0].alpha_op, stages[0].alpha_arg1, stages[0].alpha_arg2, stages[0].texcoord_index),
+                gtex[0].as_ref().map(|(id, t)| (*id, t.format, t.levels.first().map(|l| (l.w, l.h)))),
+                (stages[1].color_op, stages[1].color_arg1, stages[1].color_arg2, stages[1].alpha_op, stages[1].alpha_arg1, stages[1].alpha_arg2, stages[1].texcoord_index),
+                gtex[1].as_ref().map(|(id, t)| (*id, t.format, t.levels.first().map(|l| (l.w, l.h)))),
+                v.x, v.y, v.z, v.rhw, v.color, v.uv
+            );
+            eprintln!(
+                "[probe]   lighting {} ambient {:#x} material {:.2?} colorvertex {} srcs diff/amb/emi {} {} {} lights {:?}",
+                d.rs[137], d.rs[139], d.material, d.rs[141], d.rs[145], d.rs[147], d.rs[148],
+                setup.lights.iter().map(|l| (l.directional, l.diffuse, l.ambient, l.to_light, l.range, l.atten)).collect::<Vec<_>>()
+            );
+            for (s, t) in gtex.iter().enumerate() {
+                let Some((_, t)) = t else { continue };
+                let Some(l) = t.levels.first() else { continue };
+                let mut sum = [0.0f32; 4];
+                let mut max = [0.0f32; 4];
+                for j in 0..16 {
+                    for i in 0..16 {
+                        let c = texel(&e.mem, t.format, l, i * l.w / 16, j * l.h / 16);
+                        for k in 0..4 {
+                            sum[k] += c[k] / 256.0;
+                            max[k] = max[k].max(c[k]);
+                        }
+                    }
+                }
+                eprintln!("[probe]   stage{s} texture {}x{} at {:#x}: mean {sum:.2?} max {max:.2?}", l.w, l.h, l.ptr);
+            }
+        }
         if let Some(g) = d.gpu.as_mut() {
             g.draw(&e.mem, &rs, &stages, &gtex, &scratch.verts);
         }
@@ -3249,7 +3370,7 @@ mod tests {
             raw[4 + 4 * i..8 + 4 * i].copy_from_slice(&v.to_le_bytes()); // diffuse white
         }
         for (i, v) in [0.0f32, 0.0, -1.0].iter().enumerate() {
-            raw[60 + 4 * i..64 + 4 * i].copy_from_slice(&v.to_le_bytes()); // light travels toward -Z
+            raw[64 + 4 * i..68 + 4 * i].copy_from_slice(&v.to_le_bytes()); // light travels toward -Z
         }
         d.lights.insert(0, Light { raw, enabled: true });
         d.rs[145] = 0; // use the material, not vertex colours

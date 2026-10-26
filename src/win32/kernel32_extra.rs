@@ -145,7 +145,7 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
 
         // ---- user32 odds and ends ----
         ("user32", "GetSystemMetrics") => (1, |e, a| {
-            let (w, h) = e.win.ddraw.screen().unwrap_or((1024, 768));
+            let (w, h) = e.wm.screen;
             Ok(match a[0] {
                 0 => w, // SM_CXSCREEN
                 1 => h, // SM_CYSCREEN

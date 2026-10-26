@@ -141,6 +141,11 @@ pub struct Emu {
     pub(crate) jit_pages: *const usize,
     pub(crate) jit_code_pages: *const u8,
     pub(crate) jit_chain: *const jit::ChainEntry,
+    /// XP_BLOCK_STATS: block exits from compiled code that chained into the next block, and
+    /// that went back to the run loop.
+    pub(crate) jit_exits: [u64; 2],
+    /// XP_BLOCK_STATS: why compiled code went back to the run loop (see `run_compiled`).
+    pub(crate) exit_why: [u64; 5],
     /// x87, MMX and SSE state (here near the start: compiled code addresses it).
     pub fpu: Fpu,
     pub jit: jit::Jit,
@@ -198,6 +203,8 @@ impl Emu {
             jit_chain: std::ptr::null(),
             jit: jit::Jit::new(),
             jit_stop: None,
+            jit_exits: [0; 2],
+            exit_why: [0; 5],
             icache: icache::ICache::new(),
             icache_on: std::env::var_os("XP_NO_ICACHE").is_none(),
             fs_base: 0,

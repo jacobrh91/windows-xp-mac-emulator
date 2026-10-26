@@ -296,13 +296,6 @@ pub struct DDraw {
     pub frames: u64,
 }
 
-impl DDraw {
-    /// The screen size while a full-screen program has changed the display mode.
-    pub fn screen(&self) -> Option<(u32, u32)> {
-        (self.fullscreen && self.mode_set).then_some((self.mode.0, self.mode.1))
-    }
-}
-
 impl Default for DDraw {
     fn default() -> DDraw {
         DDraw { objects: HashMap::new(), vtables: HashMap::new(), mode: (1024, 768, 32), hwnd: 0, fullscreen: false, mode_set: false, primary: 0, names: 0, frames: 0 }
@@ -490,14 +483,18 @@ fn dd_method(method: &str) -> Handler {
             dd.mode = (a[1], a[2], a[3]);
             dd.mode_set = true;
             // The screen changes size, and the program's full-screen window with it.
-            if dd.fullscreen && dd.hwnd != 0 {
+            if dd.fullscreen {
                 let hwnd = dd.hwnd;
-                crate::gui::user32::move_window(e, hwnd, 0, 0, a[1] as i32, a[2] as i32)?;
+                e.wm.set_screen(a[1], a[2]);
+                if hwnd != 0 {
+                    crate::gui::user32::move_window(e, hwnd, 0, 0, a[1] as i32, a[2] as i32)?;
+                }
             }
             Ok(DD_OK)
         },
         "RestoreDisplayMode" => |e, _| {
             e.win.ddraw.mode_set = false;
+            e.wm.set_screen(crate::gui::wm::DESKTOP_W, crate::gui::wm::DESKTOP_H);
             Ok(DD_OK)
         },
         "GetDisplayMode" => |e, a| {

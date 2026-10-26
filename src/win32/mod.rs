@@ -118,6 +118,8 @@ pub struct Win32 {
     pub d3d: crate::d3d::d3d8::D3d8,
     pub ddraw: crate::d3d::ddraw::DDraw,
     pub registry: registry::Registry,
+    /// XP_API_STATS: calls per stub since the last report.
+    pub api_counts: Option<Vec<u64>>,
     pub bink: crate::media::bink::BinkState,
     pub hooks: crate::hooks::HookState,
     pub games: crate::game_optimizations::GameState,
@@ -277,6 +279,7 @@ impl Win32 {
             d3d: Default::default(),
             ddraw: Default::default(),
             registry: Default::default(),
+            api_counts: std::env::var_os("XP_API_STATS").map(|_| Vec::new()),
             bink: Default::default(),
             hooks: Default::default(),
             games: Default::default(),
@@ -454,6 +457,12 @@ impl Emu {
     /// Run the Rust handler for the stub at `eip`, then perform the stdcall return.
     pub(crate) fn call_hle(&mut self) -> Res<()> {
         let idx = ((self.eip - HLE_BASE) / STUB_SIZE) as usize;
+        if let Some(c) = self.win.api_counts.as_mut() {
+            if c.len() <= idx {
+                c.resize(idx + 1, 0);
+            }
+            c[idx] += 1;
+        }
         let (raw_argc, handler, dll, name) = match self.win.stubs.get(idx) {
             Some(s) => (s.argc, s.handler, s.dll.clone(), s.name.clone()),
             None => {
