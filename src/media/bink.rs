@@ -69,7 +69,10 @@ fn is_grayscale(path: &Path) -> bool {
     let mut head = [0u8; 40];
     std::fs::File::open(path)
         .and_then(|mut f| f.read_exact(&mut head))
-        .is_ok_and(|_| head.starts_with(b"BIK") && u32::from_le_bytes([head[36], head[37], head[38], head[39]]) & 0x20000 != 0)
+        .is_ok_and(|_| {
+            head.starts_with(b"BIK")
+                && u32::from_le_bytes([head[36], head[37], head[38], head[39]]) & 0x20000 != 0
+        })
 }
 
 fn parse_probe(line: &str) -> Option<Info> {
@@ -442,7 +445,10 @@ fn copy_to_buffer(e: &mut Emu, a: &Args) -> Res<u32> {
         return Ok(0);
     };
     if std::env::var_os("XP_BINK_LOG").is_some() {
-        eprintln!("[bink] copy flags {:#x} kind {kind} pitch {pitch} dest_h {dest_h} movie {}x{}", a[6], m.info.width, m.info.height);
+        eprintln!(
+            "[bink] copy flags {:#x} kind {kind} pitch {pitch} dest_h {dest_h} movie {}x{}",
+            a[6], m.info.width, m.info.height
+        );
     }
     let (w, h) = (m.info.width, m.info.height);
     let rows = h.min(dest_h.saturating_sub(dy));

@@ -101,7 +101,11 @@ pub fn apply(emu: &mut Emu, module: &str, base: u32) -> usize {
         return 0;
     }
     let mut n = 0;
-    for h in HOOKS.iter().chain(crate::game_optimizations::hooks()).filter(|h| h.module == module) {
+    for h in HOOKS
+        .iter()
+        .chain(crate::game_optimizations::hooks())
+        .filter(|h| h.module == module)
+    {
         let at = base + h.rva;
         if emu
             .mem

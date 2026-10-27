@@ -800,7 +800,10 @@ fn create_window(e: &mut Emu, a: &Args, wide: bool) -> Res<u32> {
 
 /// A top-level window that appears becomes the active one, as on Windows.
 fn activate_top_level(e: &mut Emu, hwnd: u32) -> Res<()> {
-    if e.wm.window(hwnd).is_some_and(|w| w.parent == 0 && w.style & WS_CHILD == 0) {
+    if e.wm
+        .window(hwnd)
+        .is_some_and(|w| w.parent == 0 && w.style & WS_CHILD == 0)
+    {
         activate(e, hwnd)?;
     }
     Ok(())

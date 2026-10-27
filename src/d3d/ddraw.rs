@@ -68,7 +68,13 @@ enum Iface {
     Clipper,
 }
 
-const ALL_IFACES: [Iface; 5] = [Iface::DirectDraw, Iface::DirectDraw2, Iface::Surface, Iface::Palette, Iface::Clipper];
+const ALL_IFACES: [Iface; 5] = [
+    Iface::DirectDraw,
+    Iface::DirectDraw2,
+    Iface::Surface,
+    Iface::Palette,
+    Iface::Clipper,
+];
 
 impl Iface {
     fn name(self) -> &'static str {
@@ -217,16 +223,44 @@ const fn guid(d1: u32, d2: u16, d3: u16, d4: [u8; 8]) -> [u8; 16] {
     let a = d1.to_le_bytes();
     let b = d2.to_le_bytes();
     let c = d3.to_le_bytes();
-    [a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]]
+    [
+        a[0], a[1], a[2], a[3], b[0], b[1], c[0], c[1], d4[0], d4[1], d4[2], d4[3], d4[4], d4[5],
+        d4[6], d4[7],
+    ]
 }
 
 const IID_IUNKNOWN: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
-const IID_DIRECTDRAW: [u8; 16] = guid(0x6C14DB80, 0xA733, 0x11CE, [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60]);
-const IID_DIRECTDRAW2: [u8; 16] = guid(0xB3A6F3E0, 0x2B43, 0x11CF, [0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56]);
+const IID_DIRECTDRAW: [u8; 16] = guid(
+    0x6C14DB80,
+    0xA733,
+    0x11CE,
+    [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60],
+);
+const IID_DIRECTDRAW2: [u8; 16] = guid(
+    0xB3A6F3E0,
+    0x2B43,
+    0x11CF,
+    [0xA2, 0xDE, 0x00, 0xAA, 0x00, 0xB9, 0x33, 0x56],
+);
 const IID_SURFACES: [[u8; 16]; 3] = [
-    guid(0x6C14DB81, 0xA733, 0x11CE, [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60]),
-    guid(0x57805885, 0x6EEC, 0x11CF, [0x94, 0x41, 0xA8, 0x23, 0x03, 0xC1, 0x0E, 0x27]),
-    guid(0xDA044E00, 0x69B2, 0x11D0, [0xA1, 0xD5, 0x00, 0xAA, 0x00, 0xB8, 0xDF, 0xBB]),
+    guid(
+        0x6C14DB81,
+        0xA733,
+        0x11CE,
+        [0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60],
+    ),
+    guid(
+        0x57805885,
+        0x6EEC,
+        0x11CF,
+        [0x94, 0x41, 0xA8, 0x23, 0x03, 0xC1, 0x0E, 0x27],
+    ),
+    guid(
+        0xDA044E00,
+        0x69B2,
+        0x11D0,
+        [0xA1, 0xD5, 0x00, 0xAA, 0x00, 0xB8, 0xDF, 0xBB],
+    ),
 ];
 
 // ---- objects ---------------------------------------------------------------------------------
@@ -264,17 +298,28 @@ struct Surface {
 }
 
 enum Obj {
-    DirectDraw { refs: u32 },
+    DirectDraw {
+        refs: u32,
+    },
     Surface(Surface),
     /// Entries as 0x00RRGGBB.
-    Palette { refs: u32, flags: u32, entries: Box<[u32; 256]> },
-    Clipper { refs: u32, hwnd: u32 },
+    Palette {
+        refs: u32,
+        flags: u32,
+        entries: Box<[u32; 256]>,
+    },
+    Clipper {
+        refs: u32,
+        hwnd: u32,
+    },
 }
 
 impl Obj {
     fn refs(&mut self) -> &mut u32 {
         match self {
-            Obj::DirectDraw { refs } | Obj::Palette { refs, .. } | Obj::Clipper { refs, .. } => refs,
+            Obj::DirectDraw { refs } | Obj::Palette { refs, .. } | Obj::Clipper { refs, .. } => {
+                refs
+            }
             Obj::Surface(s) => &mut s.refs,
         }
     }
@@ -298,7 +343,17 @@ pub struct DDraw {
 
 impl Default for DDraw {
     fn default() -> DDraw {
-        DDraw { objects: HashMap::new(), vtables: HashMap::new(), mode: (1024, 768, 32), hwnd: 0, fullscreen: false, mode_set: false, primary: 0, names: 0, frames: 0 }
+        DDraw {
+            objects: HashMap::new(),
+            vtables: HashMap::new(),
+            mode: (1024, 768, 32),
+            hwnd: 0,
+            fullscreen: false,
+            mode_set: false,
+            primary: 0,
+            names: 0,
+            frames: 0,
+        }
     }
 }
 
@@ -409,12 +464,16 @@ fn handler_for(iface: Iface, method: &str) -> Handler {
 fn query_interface(e: &mut Emu, a: &Args) -> Res<u32> {
     let want: [u8; 16] = e.mem.read_bytes(a[1], 16)?.try_into().unwrap();
     let answer = match e.win.ddraw.objects.get(&a[0]) {
-        Some(Obj::DirectDraw { .. }) if want == IID_DIRECTDRAW2 => {
-            Some(new_object(e, Iface::DirectDraw2, Obj::DirectDraw { refs: 1 })?)
-        }
-        Some(Obj::DirectDraw { .. }) if want == IID_DIRECTDRAW => {
-            Some(new_object(e, Iface::DirectDraw, Obj::DirectDraw { refs: 1 })?)
-        }
+        Some(Obj::DirectDraw { .. }) if want == IID_DIRECTDRAW2 => Some(new_object(
+            e,
+            Iface::DirectDraw2,
+            Obj::DirectDraw { refs: 1 },
+        )?),
+        Some(Obj::DirectDraw { .. }) if want == IID_DIRECTDRAW => Some(new_object(
+            e,
+            Iface::DirectDraw,
+            Obj::DirectDraw { refs: 1 },
+        )?),
         Some(Obj::Surface(_)) if IID_SURFACES.contains(&want) => {
             add_ref(e, a[0]);
             Some(a[0])
@@ -441,7 +500,9 @@ fn query_interface(e: &mut Emu, a: &Args) -> Res<u32> {
 }
 
 fn release(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(o) = e.win.ddraw.objects.get_mut(&a[0]) else { return Ok(0) };
+    let Some(o) = e.win.ddraw.objects.get_mut(&a[0]) else {
+        return Ok(0);
+    };
     let refs = o.refs();
     *refs = refs.saturating_sub(1);
     let left = *refs;
@@ -499,7 +560,17 @@ fn dd_method(method: &str) -> Handler {
         },
         "GetDisplayMode" => |e, a| {
             let (w, h, bpp) = e.win.ddraw.mode;
-            write_desc(e, a[1], w, h, w * bpp / 8, Format::of_bpp(bpp), DDSCAPS_PRIMARYSURFACE, 0, None)?;
+            write_desc(
+                e,
+                a[1],
+                w,
+                h,
+                w * bpp / 8,
+                Format::of_bpp(bpp),
+                DDSCAPS_PRIMARYSURFACE,
+                0,
+                None,
+            )?;
             Ok(DD_OK)
         },
         "EnumDisplayModes" => |e, a| {
@@ -523,7 +594,11 @@ fn dd_method(method: &str) -> Handler {
                 let size = e.mem.read(caps, 4)?.clamp(4, 0x180);
                 e.mem.write_bytes(caps + 4, &vec![0; size as usize - 4])?;
                 // BLT, BLTSTRETCH, COLORKEY, PALETTE, BLTCOLORFILL
-                e.mem.write(caps + 4, 4, 0x40 | 0x200 | 0x400 | 0x0080_0000 | 0x0400_0000)?;
+                e.mem.write(
+                    caps + 4,
+                    4,
+                    0x40 | 0x200 | 0x400 | 0x0080_0000 | 0x0400_0000,
+                )?;
                 e.mem.write(caps + 24, 4, 4)?; // DDPCAPS_8BIT
                 if size > 68 {
                     e.mem.write(caps + 60, 4, 32 << 20)?; // video memory total, free
@@ -558,7 +633,15 @@ fn dd_method(method: &str) -> Handler {
                     *slot = palette_entry(e.mem.read(a[2] + 4 * i as u32, 4)?);
                 }
             }
-            let p = new_object(e, Iface::Palette, Obj::Palette { refs: 1, flags: a[1], entries })?;
+            let p = new_object(
+                e,
+                Iface::Palette,
+                Obj::Palette {
+                    refs: 1,
+                    flags: a[1],
+                    entries,
+                },
+            )?;
             e.mem.write(a[3], 4, p)?;
             Ok(DD_OK)
         },
@@ -591,12 +674,23 @@ fn palette_entry(v: u32) -> u32 {
 
 /// Fill a DDSURFACEDESC (the version-1 layout, which DDSURFACEDESC2 extends).
 #[allow(clippy::too_many_arguments)]
-fn write_desc(e: &mut Emu, d: u32, w: u32, h: u32, pitch: u32, f: Format, caps: u32, ptr: u32, key: Option<u32>) -> Res<()> {
+fn write_desc(
+    e: &mut Emu,
+    d: u32,
+    w: u32,
+    h: u32,
+    pitch: u32,
+    f: Format,
+    caps: u32,
+    ptr: u32,
+    key: Option<u32>,
+) -> Res<()> {
     let size = e.mem.read(d, 4)?;
     let size = if size == 124 { 124 } else { 108 };
     e.mem.write(d, 4, size)?;
     e.mem.write_bytes(d + 4, &vec![0; size as usize - 4])?;
-    let mut flags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_REFRESHRATE;
+    let mut flags =
+        DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PITCH | DDSD_PIXELFORMAT | DDSD_REFRESHRATE;
     e.mem.write(d + SD_HEIGHT, 4, h)?;
     e.mem.write(d + SD_WIDTH, 4, w)?;
     e.mem.write(d + SD_PITCH, 4, pitch)?;
@@ -629,22 +723,46 @@ fn write_desc(e: &mut Emu, d: u32, w: u32, h: u32, pitch: u32, f: Format, caps: 
 fn alloc_surface(e: &mut Emu, w: u32, h: u32, format: Format, caps: u32) -> Res<u32> {
     let pitch = (w * format.bpp.div_ceil(8) + 3) & !3;
     let ptr = e.alloc_virtual((pitch * h).max(1));
-    let s = Surface { refs: 1, caps, w, h, pitch, ptr, format, back: 0, palette: 0, clipper: 0, color_key: None };
+    let s = Surface {
+        refs: 1,
+        caps,
+        w,
+        h,
+        pitch,
+        ptr,
+        format,
+        back: 0,
+        palette: 0,
+        clipper: 0,
+        color_key: None,
+    };
     new_object(e, Iface::Surface, Obj::Surface(s))
 }
 
 fn create_surface(e: &mut Emu, a: &Args) -> Res<u32> {
     let d = a[1];
     let flags = e.mem.read(d + SD_FLAGS, 4)?;
-    let caps = if flags & DDSD_CAPS != 0 { e.mem.read(d + SD_CAPS, 4)? } else { 0 };
+    let caps = if flags & DDSD_CAPS != 0 {
+        e.mem.read(d + SD_CAPS, 4)?
+    } else {
+        0
+    };
     let (mw, mh, mbpp) = e.win.ddraw.mode;
     let format = if flags & DDSD_PIXELFORMAT != 0 {
         let pf = d + SD_PIXELFORMAT;
         let pff = e.mem.read(pf + 4, 4)?;
-        let bpp = if pff & DDPF_PALETTEINDEXED8 != 0 { 8 } else { e.mem.read(pf + 12, 4)? };
+        let bpp = if pff & DDPF_PALETTEINDEXED8 != 0 {
+            8
+        } else {
+            e.mem.read(pf + 12, 4)?
+        };
         let mut f = Format::of_bpp(bpp);
         if pff & DDPF_RGB != 0 && bpp > 8 {
-            f.masks = [e.mem.read(pf + 16, 4)?, e.mem.read(pf + 20, 4)?, e.mem.read(pf + 24, 4)?];
+            f.masks = [
+                e.mem.read(pf + 16, 4)?,
+                e.mem.read(pf + 20, 4)?,
+                e.mem.read(pf + 24, 4)?,
+            ];
         }
         f
     } else {
@@ -655,11 +773,18 @@ fn create_surface(e: &mut Emu, a: &Args) -> Res<u32> {
         let p = alloc_surface(e, mw, mh, Format::of_bpp(mbpp), caps)?;
         e.win.ddraw.primary = p;
         if caps & DDSCAPS_FLIP != 0 {
-            let n = if flags & DDSD_BACKBUFFERCOUNT != 0 { e.mem.read(d + SD_BACKBUFFERS, 4)?.max(1) } else { 1 };
+            let n = if flags & DDSD_BACKBUFFERCOUNT != 0 {
+                e.mem.read(d + SD_BACKBUFFERS, 4)?.max(1)
+            } else {
+                1
+            };
             // The chain is circular: primary -> back 1 -> ... -> back n -> primary.
             let mut prev = p;
             for i in 0..n {
-                let bcaps = DDSCAPS_FLIP | DDSCAPS_COMPLEX | DDSCAPS_VIDEOMEMORY | if i == 0 { DDSCAPS_BACKBUFFER } else { 0 };
+                let bcaps = DDSCAPS_FLIP
+                    | DDSCAPS_COMPLEX
+                    | DDSCAPS_VIDEOMEMORY
+                    | if i == 0 { DDSCAPS_BACKBUFFER } else { 0 };
                 let b = alloc_surface(e, mw, mh, Format::of_bpp(mbpp), bcaps)?;
                 surface_mut(e, prev).unwrap().back = b;
                 prev = b;
@@ -672,8 +797,23 @@ fn create_surface(e: &mut Emu, a: &Args) -> Res<u32> {
             return Ok(DDERR_INVALIDPARAMS);
         }
         let (w, h) = (e.mem.read(d + SD_WIDTH, 4)?, e.mem.read(d + SD_HEIGHT, 4)?);
-        let mem = if caps & DDSCAPS_SYSTEMMEMORY != 0 { DDSCAPS_SYSTEMMEMORY } else { DDSCAPS_VIDEOMEMORY };
-        let p = alloc_surface(e, w, h, format, caps | mem | if caps & 0x7FF == 0 { DDSCAPS_OFFSCREENPLAIN } else { 0 })?;
+        let mem = if caps & DDSCAPS_SYSTEMMEMORY != 0 {
+            DDSCAPS_SYSTEMMEMORY
+        } else {
+            DDSCAPS_VIDEOMEMORY
+        };
+        let p = alloc_surface(
+            e,
+            w,
+            h,
+            format,
+            caps | mem
+                | if caps & 0x7FF == 0 {
+                    DDSCAPS_OFFSCREENPLAIN
+                } else {
+                    0
+                },
+        )?;
         if flags & DDSD_CKSRCBLT != 0 {
             let k = e.mem.read(d + SD_CKSRCBLT, 4)?;
             surface_mut(e, p).unwrap().color_key = Some(k);
@@ -689,7 +829,9 @@ fn create_surface(e: &mut Emu, a: &Args) -> Res<u32> {
 fn surface_method(method: &str) -> Handler {
     match method {
         "Lock" => |e, a| {
-            let Some(s) = surface(e, a[0]) else { return Ok(DDERR_INVALIDPARAMS) };
+            let Some(s) = surface(e, a[0]) else {
+                return Ok(DDERR_INVALIDPARAMS);
+            };
             let (w, h, pitch, f, caps, key) = (s.w, s.h, s.pitch, s.format, s.caps, s.color_key);
             let mut ptr = s.ptr;
             if a[1] != 0 {
@@ -704,7 +846,9 @@ fn surface_method(method: &str) -> Handler {
             Ok(DD_OK)
         },
         "GetSurfaceDesc" => |e, a| {
-            let Some(s) = surface(e, a[0]) else { return Ok(DDERR_INVALIDPARAMS) };
+            let Some(s) = surface(e, a[0]) else {
+                return Ok(DDERR_INVALIDPARAMS);
+            };
             let (w, h, pitch, f, caps, key) = (s.w, s.h, s.pitch, s.format, s.caps, s.color_key);
             write_desc(e, a[1], w, h, pitch, f, caps, 0, key)?;
             Ok(DD_OK)
@@ -715,7 +859,9 @@ fn surface_method(method: &str) -> Handler {
             Ok(DD_OK)
         },
         "GetPixelFormat" => |e, a| {
-            let Some(s) = surface(e, a[0]) else { return Ok(DDERR_INVALIDPARAMS) };
+            let Some(s) = surface(e, a[0]) else {
+                return Ok(DDERR_INVALIDPARAMS);
+            };
             let f = s.format;
             // Reuse the descriptor writer on scratch memory, then copy its pixel format out.
             let scratch = e.heap_alloc(108)?;
@@ -744,7 +890,9 @@ fn surface_method(method: &str) -> Handler {
             if a[1] != 0 {
                 add_ref(e, a[1]);
             }
-            let Some(s) = surface_mut(e, a[0]) else { return Ok(DDERR_INVALIDPARAMS) };
+            let Some(s) = surface_mut(e, a[0]) else {
+                return Ok(DDERR_INVALIDPARAMS);
+            };
             s.palette = a[1];
             show_if_primary(e, a[0])?;
             Ok(DD_OK)
@@ -774,22 +922,25 @@ fn surface_method(method: &str) -> Handler {
             Ok(DD_OK)
         },
         "SetColorKey" => |e, a| {
-            let key = if a[2] != 0 { Some(e.mem.read(a[2], 4)?) } else { None };
+            let key = if a[2] != 0 {
+                Some(e.mem.read(a[2], 4)?)
+            } else {
+                None
+            };
             if a[1] & DDCKEY_SRCBLT != 0
-                && let Some(s) = surface_mut(e, a[0]) {
-                    s.color_key = key;
-                }
+                && let Some(s) = surface_mut(e, a[0])
+            {
+                s.color_key = key;
+            }
             Ok(DD_OK)
         },
-        "GetColorKey" => |e, a| {
-            match surface(e, a[0]).and_then(|s| s.color_key) {
-                Some(k) if a[1] & DDCKEY_SRCBLT != 0 => {
-                    e.mem.write(a[2], 4, k)?;
-                    e.mem.write(a[2] + 4, 4, k)?;
-                    Ok(DD_OK)
-                }
-                _ => Ok(DDERR_NOCOLORKEY),
+        "GetColorKey" => |e, a| match surface(e, a[0]).and_then(|s| s.color_key) {
+            Some(k) if a[1] & DDCKEY_SRCBLT != 0 => {
+                e.mem.write(a[2], 4, k)?;
+                e.mem.write(a[2] + 4, 4, k)?;
+                Ok(DD_OK)
             }
+            _ => Ok(DDERR_NOCOLORKEY),
         },
         "GetDC" | "ReleaseDC" => |_, _| Ok(DDERR_UNSUPPORTED),
         "IsLost" | "Restore" | "GetBltStatus" | "GetFlipStatus" | "PageLock" | "PageUnlock" => ok,
@@ -829,7 +980,9 @@ fn rect_or_all(e: &Emu, p: u32, w: u32, h: u32) -> Res<(i32, i32, i32, i32)> {
 
 fn blt(e: &mut Emu, a: &Args) -> Res<u32> {
     let (dst, src, flags, fx) = (a[0], a[2], a[4], a[5]);
-    let Some(d) = surface(e, dst) else { return Ok(DDERR_INVALIDPARAMS) };
+    let Some(d) = surface(e, dst) else {
+        return Ok(DDERR_INVALIDPARAMS);
+    };
     let (dw, dh) = (d.w, d.h);
     let dr = rect_or_all(e, a[1], dw, dh)?;
     if flags & DDBLT_COLORFILL != 0 {
@@ -849,11 +1002,17 @@ fn blt(e: &mut Emu, a: &Args) -> Res<u32> {
 
 fn blt_fast(e: &mut Emu, a: &Args) -> Res<u32> {
     let (dst, x, y, src, flags) = (a[0], a[1] as i32, a[2] as i32, a[3], a[5]);
-    let Some(s) = surface(e, src) else { return Ok(DDERR_INVALIDPARAMS) };
+    let Some(s) = surface(e, src) else {
+        return Ok(DDERR_INVALIDPARAMS);
+    };
     let (sw, sh, key) = (s.w, s.h, s.color_key);
     let sr = rect_or_all(e, a[4], sw, sh)?;
     let dr = (x, y, x + sr.2 - sr.0, y + sr.3 - sr.1);
-    let key = if flags & DDBLTFAST_SRCCOLORKEY != 0 { key } else { None };
+    let key = if flags & DDBLTFAST_SRCCOLORKEY != 0 {
+        key
+    } else {
+        None
+    };
     copy(e, src, sr, dst, dr, key)?;
     show_if_primary(e, dst)?;
     Ok(DD_OK)
@@ -861,22 +1020,41 @@ fn blt_fast(e: &mut Emu, a: &Args) -> Res<u32> {
 
 fn fill(e: &mut Emu, dst: u32, r: (i32, i32, i32, i32), color: u32) -> Res<()> {
     let d = surface(e, dst).unwrap();
-    let (w, h, pitch, ptr, bytes) = (d.w as i32, d.h as i32, d.pitch, d.ptr, d.format.bpp.div_ceil(8));
+    let (w, h, pitch, ptr, bytes) = (
+        d.w as i32,
+        d.h as i32,
+        d.pitch,
+        d.ptr,
+        d.format.bpp.div_ceil(8),
+    );
     let (x0, y0, x1, y1) = (r.0.max(0), r.1.max(0), r.2.min(w), r.3.min(h));
     if x0 >= x1 || y0 >= y1 {
         return Ok(());
     }
     let px = &color.to_le_bytes()[..bytes as usize];
-    let row: Vec<u8> = px.iter().copied().cycle().take(((x1 - x0) as u32 * bytes) as usize).collect();
+    let row: Vec<u8> = px
+        .iter()
+        .copied()
+        .cycle()
+        .take(((x1 - x0) as u32 * bytes) as usize)
+        .collect();
     for y in y0..y1 {
-        e.mem.write_bytes(ptr + y as u32 * pitch + x0 as u32 * bytes, &row)?;
+        e.mem
+            .write_bytes(ptr + y as u32 * pitch + x0 as u32 * bytes, &row)?;
     }
     Ok(())
 }
 
 /// Copy (stretching by nearest neighbour if the sizes differ) between surfaces of the same
 /// format, skipping source pixels equal to `key`.
-fn copy(e: &mut Emu, src: u32, sr: (i32, i32, i32, i32), dst: u32, dr: (i32, i32, i32, i32), key: Option<u32>) -> Res<()> {
+fn copy(
+    e: &mut Emu,
+    src: u32,
+    sr: (i32, i32, i32, i32),
+    dst: u32,
+    dr: (i32, i32, i32, i32),
+    key: Option<u32>,
+) -> Res<()> {
     let s = surface(e, src).unwrap();
     let (sp, spitch, bytes) = (s.ptr, s.pitch, s.format.bpp.div_ceil(8) as usize);
     let (sw, sh) = (s.w as i32, s.h as i32);
@@ -895,7 +1073,8 @@ fn copy(e: &mut Emu, src: u32, sr: (i32, i32, i32, i32), dst: u32, dr: (i32, i32
             if y < 0 || y >= sh {
                 return Ok(Vec::new());
             }
-            e.mem.read_bytes(sp + y as u32 * spitch, (sw as usize * bytes) as u32)
+            e.mem
+                .read_bytes(sp + y as u32 * spitch, (sw as usize * bytes) as u32)
         })
         .collect::<Result<_, _>>()?;
     let key_bytes = key.map(|k| k.to_le_bytes());
@@ -910,11 +1089,18 @@ fn copy(e: &mut Emu, src: u32, sr: (i32, i32, i32, i32), dst: u32, dr: (i32, i32
             continue;
         }
         let at = dp + y as u32 * dpitch + x0 as u32 * bytes as u32;
-        let src_x = |x: i32| -> i32 { sr.0 + if stretch { ((x - dr.0) as i64 * srw as i64 / rw as i64) as i32 } else { x - dr.0 } };
+        let src_x = |x: i32| -> i32 {
+            sr.0 + if stretch {
+                ((x - dr.0) as i64 * srw as i64 / rw as i64) as i32
+            } else {
+                x - dr.0
+            }
+        };
         match key_bytes {
             None if !stretch && src_x(x0) >= 0 && src_x(x1 - 1) < sw => {
                 let from = src_x(x0) as usize * bytes;
-                e.mem.write_bytes(at, &row[from..from + (x1 - x0) as usize * bytes])?;
+                e.mem
+                    .write_bytes(at, &row[from..from + (x1 - x0) as usize * bytes])?;
             }
             _ => {
                 let mut out = e.mem.read_bytes(at, (x1 - x0) as u32 * bytes as u32)?;
@@ -949,20 +1135,32 @@ fn palette_method(method: &str) -> Handler {
             Ok(DD_OK)
         },
         "GetEntries" => |e, a| {
-            let Some(Obj::Palette { entries, .. }) = e.win.ddraw.objects.get(&a[0]) else { return Ok(DDERR_INVALIDPARAMS) };
-            let picked: Vec<u32> = entries.iter().skip(a[2] as usize).take(a[3] as usize).copied().collect();
+            let Some(Obj::Palette { entries, .. }) = e.win.ddraw.objects.get(&a[0]) else {
+                return Ok(DDERR_INVALIDPARAMS);
+            };
+            let picked: Vec<u32> = entries
+                .iter()
+                .skip(a[2] as usize)
+                .take(a[3] as usize)
+                .copied()
+                .collect();
             for (i, c) in picked.into_iter().enumerate() {
                 e.mem.write(a[4] + 4 * i as u32, 4, palette_entry(c))?;
             }
             Ok(DD_OK)
         },
         "SetEntries" => |e, a| {
-            let (start, n) = (a[2] as usize, (a[3] as usize).min(256usize.saturating_sub(a[2] as usize)));
+            let (start, n) = (
+                a[2] as usize,
+                (a[3] as usize).min(256usize.saturating_sub(a[2] as usize)),
+            );
             let mut new = Vec::with_capacity(n);
             for i in 0..n {
                 new.push(palette_entry(e.mem.read(a[4] + 4 * i as u32, 4)?));
             }
-            let Some(Obj::Palette { entries, .. }) = e.win.ddraw.objects.get_mut(&a[0]) else { return Ok(DDERR_INVALIDPARAMS) };
+            let Some(Obj::Palette { entries, .. }) = e.win.ddraw.objects.get_mut(&a[0]) else {
+                return Ok(DDERR_INVALIDPARAMS);
+            };
             entries[start..start + n].copy_from_slice(&new);
             // The screen shows the new colours at once.
             let primary = e.win.ddraw.primary;
@@ -1006,8 +1204,12 @@ fn show_if_primary(e: &mut Emu, s: u32) -> Res<()> {
 
 /// Copy the primary surface into the game's window, as RGB, scaled to the window's size.
 fn show(e: &mut Emu, s: u32) -> Res<()> {
-    let Some(sf) = surface(e, s) else { return Ok(()) };
-    let (w, h, pitch, ptr, f, pal, clipper) = (sf.w, sf.h, sf.pitch, sf.ptr, sf.format, sf.palette, sf.clipper);
+    let Some(sf) = surface(e, s) else {
+        return Ok(());
+    };
+    let (w, h, pitch, ptr, f, pal, clipper) = (
+        sf.w, sf.h, sf.pitch, sf.ptr, sf.format, sf.palette, sf.clipper,
+    );
     let palette: [u32; 256] = match e.win.ddraw.objects.get(&pal) {
         Some(Obj::Palette { entries, .. }) => **entries,
         _ => std::array::from_fn(|i| (i as u32) * 0x010101),
@@ -1019,7 +1221,12 @@ fn show(e: &mut Emu, s: u32) -> Res<()> {
     let hwnd = [clip_hwnd, e.win.ddraw.hwnd]
         .into_iter()
         .find(|&h| h != 0)
-        .or_else(|| e.wm.windows.iter().find(|w| w.parent == 0 && w.visible).map(|w| w.hwnd));
+        .or_else(|| {
+            e.wm.windows
+                .iter()
+                .find(|w| w.parent == 0 && w.visible)
+                .map(|w| w.hwnd)
+        });
     let Some(hwnd) = hwnd else { return Ok(()) };
     let bytes = e.mem.read_bytes(ptr, pitch * h)?;
     let mut rgb = vec![0u32; (w * h) as usize];
@@ -1027,7 +1234,10 @@ fn show(e: &mut Emu, s: u32) -> Res<()> {
         let row = &bytes[y * pitch as usize..];
         let out = &mut rgb[y * w as usize..][..w as usize];
         match f.bpp {
-            8 => out.iter_mut().zip(row).for_each(|(o, &i)| *o = palette[i as usize]),
+            8 => out
+                .iter_mut()
+                .zip(row)
+                .for_each(|(o, &i)| *o = palette[i as usize]),
             16 => {
                 for (x, o) in out.iter_mut().enumerate() {
                     let v = u16::from_le_bytes([row[2 * x], row[2 * x + 1]]) as u32;
@@ -1094,7 +1304,10 @@ mod tests {
         assert_eq!(DD2_METHODS.len(), 24);
         assert_eq!(SURFACE_METHODS.len(), 40);
         assert_eq!(SURFACE_METHODS.iter().position(|m| m.0 == "Lock"), Some(25));
-        assert_eq!(DD_METHODS.iter().position(|m| m.0 == "EnumDisplayModes"), Some(8));
+        assert_eq!(
+            DD_METHODS.iter().position(|m| m.0 == "EnumDisplayModes"),
+            Some(8)
+        );
     }
 
     /// Fill, keyed blit and lock through the COM entry points, as a game would use them.
@@ -1113,39 +1326,92 @@ mod tests {
         let desc = 0x10100;
         e.mem.write(desc, 4, 108).unwrap();
         e.mem.write(desc + SD_FLAGS, 4, DDSD_CAPS).unwrap();
-        e.mem.write(desc + SD_CAPS, 4, DDSCAPS_PRIMARYSURFACE).unwrap();
-        assert_eq!(call(&mut e, "IDirectDraw::CreateSurface", &[dd, desc, 0x10004, 0]), DD_OK);
+        e.mem
+            .write(desc + SD_CAPS, 4, DDSCAPS_PRIMARYSURFACE)
+            .unwrap();
+        assert_eq!(
+            call(
+                &mut e,
+                "IDirectDraw::CreateSurface",
+                &[dd, desc, 0x10004, 0]
+            ),
+            DD_OK
+        );
         let primary = e.mem.read(0x10004, 4).unwrap();
         // offscreen 4x4, source key 0
-        e.mem.write(desc + SD_FLAGS, 4, DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_CKSRCBLT).unwrap();
-        e.mem.write(desc + SD_CAPS, 4, DDSCAPS_OFFSCREENPLAIN).unwrap();
+        e.mem
+            .write(
+                desc + SD_FLAGS,
+                4,
+                DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_CKSRCBLT,
+            )
+            .unwrap();
+        e.mem
+            .write(desc + SD_CAPS, 4, DDSCAPS_OFFSCREENPLAIN)
+            .unwrap();
         e.mem.write(desc + SD_WIDTH, 4, 4).unwrap();
         e.mem.write(desc + SD_HEIGHT, 4, 4).unwrap();
         e.mem.write(desc + SD_CKSRCBLT, 4, 0).unwrap();
-        call(&mut e, "IDirectDraw::CreateSurface", &[dd, desc, 0x10008, 0]);
+        call(
+            &mut e,
+            "IDirectDraw::CreateSurface",
+            &[dd, desc, 0x10008, 0],
+        );
         let sprite = e.mem.read(0x10008, 4).unwrap();
         // fill the primary with colour 1, write a sprite pixel 2 at (1,1) and blit it keyed
         let fx = 0x10200;
         e.mem.write(fx + 80, 4, 1).unwrap();
-        call(&mut e, "IDirectDrawSurface::Blt", &[primary, 0, 0, 0, DDBLT_COLORFILL, fx]);
+        call(
+            &mut e,
+            "IDirectDrawSurface::Blt",
+            &[primary, 0, 0, 0, DDBLT_COLORFILL, fx],
+        );
         e.mem.write(desc, 4, 108).unwrap();
         call(&mut e, "IDirectDrawSurface::Lock", &[sprite, 0, desc, 0, 0]);
-        let (bits, pitch) = (e.mem.read(desc + SD_SURFACE, 4).unwrap(), e.mem.read(desc + SD_PITCH, 4).unwrap());
+        let (bits, pitch) = (
+            e.mem.read(desc + SD_SURFACE, 4).unwrap(),
+            e.mem.read(desc + SD_PITCH, 4).unwrap(),
+        );
         e.mem.write(bits + pitch + 1, 1, 2).unwrap();
         call(&mut e, "IDirectDrawSurface::Unlock", &[sprite, 0]);
-        call(&mut e, "IDirectDrawSurface::BltFast", &[primary, 4, 0, sprite, 0, DDBLTFAST_SRCCOLORKEY]);
+        call(
+            &mut e,
+            "IDirectDrawSurface::BltFast",
+            &[primary, 4, 0, sprite, 0, DDBLTFAST_SRCCOLORKEY],
+        );
         let p = surface(&e, primary).unwrap();
-        let rows: Vec<Vec<u8>> = (0..2).map(|y| e.mem.read_bytes(p.ptr + y * p.pitch, 8).unwrap()).collect();
+        let rows: Vec<Vec<u8>> = (0..2)
+            .map(|y| e.mem.read_bytes(p.ptr + y * p.pitch, 8).unwrap())
+            .collect();
         assert_eq!(rows[0], [1; 8], "the key colour left the fill showing");
-        assert_eq!(rows[1], [1, 1, 1, 1, 1, 2, 1, 1], "the sprite pixel landed at (4+1, 1)");
+        assert_eq!(
+            rows[1],
+            [1, 1, 1, 1, 1, 2, 1, 1],
+            "the sprite pixel landed at (4+1, 1)"
+        );
         // a palette maps the indices to colours
         let entries = 0x10300;
         e.mem.write(entries + 4, 4, 0x0000_00FF).unwrap(); // index 1: red
-        call(&mut e, "IDirectDraw::CreatePalette", &[dd, 0x44, entries, 0x1000C, 0]);
+        call(
+            &mut e,
+            "IDirectDraw::CreatePalette",
+            &[dd, 0x44, entries, 0x1000C, 0],
+        );
         let pal = e.mem.read(0x1000C, 4).unwrap();
-        assert_eq!(call(&mut e, "IDirectDrawSurface::SetPalette", &[primary, pal]), DD_OK);
+        assert_eq!(
+            call(&mut e, "IDirectDrawSurface::SetPalette", &[primary, pal]),
+            DD_OK
+        );
         e.mem.write(0x10400, 4, 0).unwrap();
-        call(&mut e, "IDirectDrawPalette::GetEntries", &[pal, 0, 1, 1, 0x10400]);
-        assert_eq!(e.mem.read(0x10400, 4).unwrap(), 0xFF, "entries come back in PALETTEENTRY order");
+        call(
+            &mut e,
+            "IDirectDrawPalette::GetEntries",
+            &[pal, 0, 1, 1, 0x10400],
+        );
+        assert_eq!(
+            e.mem.read(0x10400, 4).unwrap(),
+            0xFF,
+            "entries come back in PALETTEENTRY order"
+        );
     }
 }

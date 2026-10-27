@@ -14,11 +14,11 @@ use crate::cpu::Emu;
 use crate::hooks::Hook;
 use crate::win32::Handler;
 
-const GAMES: &[&[Hook]] = &[impossible_creatures::HOOKS];
+const GAMES: &[&[&[Hook]]] = &[impossible_creatures::TABLES];
 
 /// Every game's hooks.
 pub fn hooks() -> impl Iterator<Item = &'static Hook> {
-    GAMES.iter().flat_map(|g| g.iter())
+    GAMES.iter().flat_map(|g| g.iter()).flat_map(|t| t.iter())
 }
 
 /// The native stub for a game hook's name.

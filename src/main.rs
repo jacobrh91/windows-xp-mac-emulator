@@ -6,6 +6,8 @@ mod hooks;
 mod loader;
 mod media;
 mod memory;
+mod report;
+mod scripted;
 mod win32;
 
 #[cfg(test)]
@@ -57,7 +59,9 @@ fn main() {
             let started = std::time::Instant::now();
             // XP_DEBUG_STALL=<secs>: freeze the window thread for 3 s at that time, as a hidden
             // window does during a Space switch (the game should carry on regardless).
-            let mut stall = env::var("XP_DEBUG_STALL").ok().and_then(|v| v.parse::<u64>().ok());
+            let mut stall = env::var("XP_DEBUG_STALL")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok());
             loop {
                 if stall.is_some_and(|t| started.elapsed().as_secs() >= t) {
                     stall = None;
@@ -67,7 +71,8 @@ fn main() {
                 if open && !presenter.pump(&shared) {
                     open = false; // closed: the emulator asks the program to quit
                 }
-                let wait = std::time::Duration::from_micros(16_667).saturating_sub(presenter.since_pump());
+                let wait =
+                    std::time::Duration::from_micros(16_667).saturating_sub(presenter.since_pump());
                 std::thread::sleep(wait.max(std::time::Duration::from_millis(1)));
             }
         }
@@ -128,7 +133,12 @@ fn info(path: &str, data: &[u8]) {
 
 /// Runs the program inside the emulator only; nothing in the image executes natively.
 /// `window`: the link to the window on the main thread, if there is one.
-fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shared>>, screenshot: Option<String>) -> ! {
+fn run(
+    path: &str,
+    data: &[u8],
+    window: Option<std::sync::Arc<gui::present::Shared>>,
+    screenshot: Option<String>,
+) -> ! {
     let mut emu = cpu::Emu::new();
     if let Some(dir) = std::path::Path::new(path).parent() {
         emu.win.dll_dirs.push(dir.to_path_buf());
@@ -180,45 +190,10 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
         .map(std::time::Duration::from_secs);
     let started = std::time::Instant::now();
     let mut dumped = false;
-    let mut tapped = 0u128;
     let show_fps = env::var_os("XP_FPS").is_some();
     let mut fps_mark = (std::time::Instant::now(), 0u64, 0u64);
     let mut idle = std::time::Duration::ZERO;
-    // XP_CLICKS=<secs>:<x>:<y>[:r],...  scripted clicks at desktop coordinates (headless
-    // testing): left clicks, or right clicks with `:r`.
-    let mut clicks: Vec<(u64, i32, i32, bool)> = env::var("XP_CLICKS")
-        .map(|v| {
-            v.split(',')
-                .filter_map(|c| {
-                    let f: Vec<&str> = c.split(':').map(str::trim).collect();
-                    Some((
-                        f.first()?.parse().ok()?,
-                        f.get(1)?.parse().ok()?,
-                        f.get(2)?.parse().ok()?,
-                        f.get(3) == Some(&"r"),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    clicks.reverse();
-    // When to let go of the button pressed by a scripted click, where, and its button-up message.
-    let mut release_at: Option<(std::time::Instant, i32, i32, u32)> = None;
-    // XP_KEYS=<secs>:<virtual key>[+<virtual key>...],...  scripted key presses (27 is Esc;
-    // 17+69 is Ctrl+E): pressed in order, held a moment, released in reverse.
-    let mut keys: Vec<(u64, Vec<u32>)> = env::var("XP_KEYS")
-        .map(|v| {
-            v.split(',')
-                .filter_map(|k| {
-                    let (t, vks) = k.split_once(':')?;
-                    let vks: Vec<u32> = vks.split('+').filter_map(|vk| vk.trim().parse().ok()).collect();
-                    Some((t.trim().parse().ok()?, vks))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    keys.reverse();
-    let mut keys_up: Option<(std::time::Instant, Vec<u32>)> = None;
+    let mut script = scripted::Script::from_env();
     let stop = loop {
         let stop = emu.run(1_000_000);
         if let Some(s) = env::var("XP_STOP_AFTER")
@@ -228,125 +203,13 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
         {
             break stop;
         }
-        // XP_TAP=<vk>: tap that key every two seconds (headless way to skip intro movies).
-        if let Some(vk) = env::var("XP_TAP").ok().and_then(|v| v.parse::<u32>().ok())
-            && started.elapsed().as_millis() / 2000 != tapped
-        {
-            tapped = started.elapsed().as_millis() / 2000;
-            emu.wm.post_key(vk, true);
-            emu.wm.post_key(vk, false);
-        }
         if profile_from.is_some_and(|t| started.elapsed().as_secs() >= t) && emu.profile.is_none() {
             emu.profile = Some(Default::default());
         }
-        // XP_FPS=1: report presented frames per second every 5 seconds.
         if show_fps && fps_mark.0.elapsed().as_secs() >= 5 {
-            let frames = emu.win.d3d.frames();
-            let secs = fps_mark.0.elapsed().as_secs_f64();
-            let mut gaps = emu
-                .win
-                .d3d
-                .dev
-                .as_mut()
-                .map(|d| std::mem::take(&mut d.frame_times))
-                .unwrap_or_default();
-            gaps.sort_by(|a, b| a.total_cmp(b));
-            let pct = |p: f32| {
-                gaps.get(((gaps.len() as f32 - 1.0) * p) as usize)
-                    .copied()
-                    .unwrap_or(0.0)
-            };
-            eprintln!(
-                "[fps] {:.1} at {:.0}s ({:.0}M instructions/s, idle {:.0}%) frame ms: median {:.0}, 95% {:.0}, worst {:.0}",
-                (frames - fps_mark.1) as f64 / secs,
-                started.elapsed().as_secs_f64(),
-                (emu.steps - fps_mark.2) as f64 / secs / 1e6,
-                idle.as_secs_f64() * 100.0 / secs,
-                pct(0.5),
-                pct(0.95),
-                pct(1.0)
-            );
-            if env::var_os("XP_BLOCK_STATS").is_some() {
-                eprintln!(
-                    "[blocks] {} built, {} runs ({:.1} instructions per run), {} flushes",
-                    emu.icache.built,
-                    emu.icache.runs,
-                    (emu.steps - fps_mark.2) as f64 / emu.icache.runs.max(1) as f64,
-                    emu.icache.flushes
-                );
-                emu.icache.flushes = 0;
-                let mut kinds: Vec<_> = emu.jit.helper_kinds.drain().collect();
-                kinds.sort_by(|a, b| b.1.cmp(&a.1));
-                let total = (emu.steps - fps_mark.2).max(1) as f64;
-                eprintln!(
-                    "[jit] {} compiled, {} block runs, {:.1}% of instructions via the interpreter: {}",
-                    emu.jit.compiled,
-                    emu.jit.runs,
-                    emu.jit.helper_calls as f64 * 100.0 / total,
-                    kinds
-                        .iter()
-                        .map(|(k, n)| format!("{k} {:.1}%", *n as f64 * 100.0 / total))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                eprintln!("[chain] {} chained, {} back to the run loop", emu.jit_exits[0], emu.jit_exits[1]);
-                emu.jit_exits = [0; 2];
-                eprintln!("[exits] budget {}, api {}, undecodable {}, not compiled {}, chain miss {}", emu.exit_why[0], emu.exit_why[1], emu.exit_why[2], emu.exit_why[3], emu.exit_why[4]);
-                emu.exit_why = [0; 5];
-                emu.jit.helper_calls = 0;
-                emu.jit.runs = 0;
-                emu.icache.built = 0;
-                emu.icache.runs = 0;
-            }
-            if let Some(counts) = emu.win.api_counts.as_mut() {
-                let mut top: Vec<(u64, usize)> = counts.iter().enumerate().filter(|c| *c.1 > 0).map(|(i, &n)| (n, i)).collect();
-                top.sort_by(|a, b| b.cmp(a));
-                let names: Vec<String> = top
-                    .iter()
-                    .map(|&(n, i)| format!("{}!{} {n}", emu.win.stubs[i].dll, emu.win.stubs[i].name))
-                    .collect();
-                eprintln!("[api] {}", names.join(", "));
-                counts.iter_mut().for_each(|c| *c = 0);
-            }
-            fps_mark = (std::time::Instant::now(), frames, emu.steps);
-            idle = std::time::Duration::ZERO;
+            report::fps(&mut emu, started, &mut fps_mark, &mut idle);
         }
-        while keys
-            .last()
-            .is_some_and(|k| started.elapsed().as_secs() >= k.0)
-        {
-            let (_, vks) = keys.pop().unwrap();
-            for &vk in &vks {
-                emu.wm.post_key(vk, true);
-            }
-            keys_up = Some((std::time::Instant::now() + std::time::Duration::from_millis(100), vks));
-        }
-        if let Some((at, vks)) = keys_up.take_if(|(at, _)| std::time::Instant::now() >= *at) {
-            let _ = at;
-            for &vk in vks.iter().rev() {
-                emu.wm.post_key(vk, false);
-            }
-        }
-        while clicks
-            .last()
-            .is_some_and(|c| started.elapsed().as_secs() >= c.0)
-        {
-            let (_, x, y, right) = clicks.pop().unwrap();
-            // WM_LBUTTONDOWN / WM_RBUTTONDOWN; the button-up message is the next one.
-            let down = if right { 0x0204 } else { 0x0201 };
-            emu.wm.post_mouse(0x0200, x, y); // WM_MOUSEMOVE
-            emu.wm.post_mouse(down, x, y);
-            // The button is held a moment, as a hand would: games that poll once a frame
-            // must see it down.
-            let at = std::time::Instant::now() + std::time::Duration::from_millis(100);
-            release_at = Some((at, x, y, down + 1));
-        }
-        if let Some((at, x, y, up)) = release_at
-            && std::time::Instant::now() >= at
-        {
-            emu.wm.post_mouse(up, x, y);
-            release_at = None;
-        }
+        script.poll(&mut emu, started);
         if let Some(d) = dump_after
             && !dumped
             && started.elapsed() >= d
@@ -382,71 +245,13 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
             _ => break stop,
         }
     };
-    if let Some(p) = emu.profile.take() {
-        let mut ops: Vec<(u32, u32)> = p
-            .iter()
-            .filter(|(k, _)| **k & 0x8000_0000 != 0)
-            .map(|(k, v)| (*k & 0xFFFF, *v))
-            .collect();
-        ops.sort_by(|a, b| b.1.cmp(&a.1));
-        let all: u64 = ops.iter().map(|o| o.1 as u64).sum();
-        for (op, n) in ops.iter().take(60) {
-            eprintln!(
-                "[opcodes] {:5.1}% {}{:02x}",
-                *n as f64 * 100.0 / all as f64,
-                if *op >= 0x100 { "0f " } else { "" },
-                op & 0xFF
-            );
-        }
-        let mut rows: Vec<_> = p
-            .into_iter()
-            .filter(|(k, _)| *k & 0x8000_0000 == 0)
-            .collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
-        let total: u32 = rows.iter().map(|r| r.1).sum();
-        let mut by_module: std::collections::HashMap<String, u32> = Default::default();
-        for (addr, n) in &rows {
-            let loc = emu.win.locate(*addr).unwrap_or_else(|| "?".into());
-            *by_module
-                .entry(loc.split('+').next().unwrap_or("?").to_string())
-                .or_insert(0) += n;
-        }
-        let mut mods: Vec<_> = by_module.into_iter().collect();
-        mods.sort_by(|a, b| b.1.cmp(&a.1));
-        for (m, n) in mods.iter().take(8) {
-            eprintln!("[module] {:5.1}% {m}", *n as f64 * 100.0 / total as f64);
-        }
-        let top = env::var("XP_PROFILE_TOP")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(45);
-        for (addr, n) in rows.iter().take(top) {
-            eprintln!(
-                "[profile] {:5.1}% {}",
-                *n as f64 * 100.0 / total as f64,
-                emu.win
-                    .locate(*addr)
-                    .unwrap_or_else(|| format!("{addr:#x}"))
-            );
-        }
-    }
+    report::profile(&mut emu);
     print!("{}", String::from_utf8_lossy(&emu.win.stdout));
     for m in &emu.win.messages {
         eprintln!("[MessageBox] {m}");
     }
     if let Some(out) = screenshot {
-        // Same region the live window shows: content only, without the emulated frame.
-        crate::d3d::d3d8::finish_present(&mut emu, true);
-        let region = emu.wm.content_bounds();
-        let desktop = emu.wm.compose();
-        let shot = match region {
-            Some((x, y, w, h)) => desktop.crop(x, y, w, h),
-            None => desktop.crop(0, 0, desktop.width, desktop.height),
-        };
-        match fs::write(&out, shot.to_ppm()) {
-            Ok(()) => eprintln!("screenshot written to {out}"),
-            Err(e) => eprintln!("cannot write {out}: {e}"),
-        }
+        report::screenshot(&mut emu, &out);
     }
     eprintln!(
         "stopped: {stop:?} at eip={:#x} after {} steps, {} frames presented in {:.1}s",
@@ -455,66 +260,17 @@ fn run(path: &str, data: &[u8], window: Option<std::sync::Arc<gui::present::Shar
         emu.win.d3d.frames() + emu.win.ddraw.frames,
         started.elapsed().as_secs_f64()
     );
-    // XP_REGS=1: the guest's registers where it stopped.
-    if env::var_os("XP_REGS").is_some() {
-        let r = &emu.regs;
-        eprintln!(
-            "regs eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x} eflags={:#x}",
-            r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], emu.eflags
-        );
-    }
-    // XP_PEEK=<hex address>:<length>[,...]: guest memory where it stopped.
-    for spec in env::var("XP_PEEK").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
-        let (a, n) = spec.split_once(':').unwrap_or((spec, "64"));
-        let (Ok(a), Ok(n)) = (u32::from_str_radix(a.trim_start_matches("0x"), 16), n.parse::<u32>()) else { continue };
-        for row in (0..n).step_by(16) {
-            let bytes = emu.mem.read_bytes(a + row, 16.min(n - row)).unwrap_or_default();
-            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            eprintln!("{:08x}: {}", a + row, hex.join(" "));
-        }
-    }
+    report::registers_and_memory(&emu);
     // Close devices properly (process::exit skips destructors).
     emu.win.audio.close();
     if matches!(
         stop,
         cpu::Stop::Fault(_) | cpu::Stop::InvalidOpcode { .. } | cpu::Stop::DivideError(_)
     ) {
-        crash_report(&emu);
+        report::crash(&emu);
     }
     if let cpu::Stop::Exit(code) = stop {
         process::exit(code as i32);
     }
     process::exit(1);
-}
-
-/// Where did it go wrong? Registers, the module the crash is in, and return addresses that
-/// point into game code (found by scanning the stack), so the spot can be looked up.
-fn crash_report(emu: &cpu::Emu) {
-    let r = emu.regs;
-    eprintln!(
-        "[crash] eip={:#x} ({})  eax={:#x} ecx={:#x} edx={:#x} ebx={:#x} esp={:#x} ebp={:#x} esi={:#x} edi={:#x}",
-        emu.eip,
-        emu.win.locate(emu.eip).unwrap_or_else(|| "unknown".into()),
-        r[cpu::EAX],
-        r[cpu::ECX],
-        r[cpu::EDX],
-        r[cpu::EBX],
-        r[cpu::ESP],
-        r[cpu::EBP],
-        r[cpu::ESI],
-        r[cpu::EDI]
-    );
-    let mut shown = 0;
-    for i in 0..256u32 {
-        let Ok(v) = emu.mem.read(r[cpu::ESP].wrapping_add(4 * i), 4) else {
-            break;
-        };
-        if let Some(loc) = emu.win.locate(v) {
-            eprintln!("[crash]   stack+{:#04x}: {v:#x} = {loc}", 4 * i);
-            shown += 1;
-            if shown >= 12 {
-                break;
-            }
-        }
-    }
 }

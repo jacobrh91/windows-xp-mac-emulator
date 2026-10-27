@@ -120,7 +120,15 @@ impl SpeakerHandle {
     pub fn queue(&self, id: u32, frames: &[[f32; 2]]) {
         if sound_log() {
             let peak = frames.iter().flatten().fold(0.0f32, |m, &x| m.max(x.abs()));
-            eprintln!("[sound] {:?} voice {id:#x} +{} frames, peak {peak:.3}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64() % 1000.0, frames.len());
+            eprintln!(
+                "[sound] {:?} voice {id:#x} +{} frames, peak {peak:.3}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64()
+                    % 1000.0,
+                frames.len()
+            );
         }
         let cap = (self.rate as f32 * MAX_QUEUED_SECS) as usize;
         self.with_voice(id, |v| {

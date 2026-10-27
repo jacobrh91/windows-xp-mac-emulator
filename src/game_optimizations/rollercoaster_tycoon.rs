@@ -6,7 +6,8 @@
 
 use crate::cpu::Emu;
 
-const SETUP_KEY: &str = r"HKEY_LOCAL_MACHINE\Software\Fish Technology Group\RollerCoaster Tycoon Setup";
+const SETUP_KEY: &str =
+    r"HKEY_LOCAL_MACHINE\Software\Fish Technology Group\RollerCoaster Tycoon Setup";
 
 /// Prepare the machine as the installer would have, when `exe` is the game.
 pub(super) fn setup(e: &mut Emu, exe: &str) {

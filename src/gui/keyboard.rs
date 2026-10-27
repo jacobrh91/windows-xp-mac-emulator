@@ -158,7 +158,11 @@ pub fn key_name(scan: u32, extended: bool) -> Option<String> {
         0xA3 => "Right Ctrl",
         0xA4 => "Alt",
         0xA5 => "Right Alt",
-        _ => return char::from_u32(char_of(vk)).filter(|c| c.is_ascii_graphic()).map(|c| c.to_string()),
+        _ => {
+            return char::from_u32(char_of(vk))
+                .filter(|c| c.is_ascii_graphic())
+                .map(|c| c.to_string());
+        }
     };
     Some(name.to_string())
 }
@@ -185,7 +189,11 @@ mod tests {
         assert_eq!(key_name(0x32, false).as_deref(), Some("M"));
         assert_eq!(key_name(0x1D, false).as_deref(), Some("Ctrl"));
         assert_eq!(key_name(0x48, true).as_deref(), Some("Up"));
-        assert_eq!(key_name(0x48, false).as_deref(), Some("Num 8"), "the numpad twin of Up");
+        assert_eq!(
+            key_name(0x48, false).as_deref(),
+            Some("Num 8"),
+            "the numpad twin of Up"
+        );
         assert_eq!(vk_of_scan(0x2A, false, true), 0xA0, "left shift, sided");
         assert_eq!(vk_of_scan(0x2A, false, false), 0x10);
     }
@@ -198,6 +206,10 @@ mod tests {
         assert_eq!(repeat >> 30, 1, "auto-repeat: was already down");
         let up = key_lparam(0x4D, false, false, true, false);
         assert_eq!(up >> 30, 3, "WM_KEYUP: previous state and transition set");
-        assert_eq!(key_lparam(0x25, true, true, false, false) >> 24 & 1, 1, "arrows are extended");
+        assert_eq!(
+            key_lparam(0x25, true, true, false, false) >> 24 & 1,
+            1,
+            "arrows are extended"
+        );
     }
 }

@@ -43,7 +43,11 @@ impl Registry {
             None => self.handles.get(&hkey)?.clone(),
         };
         let sub = sub.trim_matches('\\').to_ascii_lowercase();
-        Some(if sub.is_empty() { base } else { format!("{base}\\{sub}") })
+        Some(if sub.is_empty() {
+            base
+        } else {
+            format!("{base}\\{sub}")
+        })
     }
 
     fn open(&mut self, path: String) -> u32 {
@@ -77,7 +81,10 @@ impl Registry {
         };
         let path = format!("{root}\\{}", rest.to_ascii_lowercase());
         self.create(&path);
-        self.keys.get_mut(&path).unwrap().insert(name.to_ascii_lowercase(), (name.to_string(), kind, data));
+        self.keys
+            .get_mut(&path)
+            .unwrap()
+            .insert(name.to_ascii_lowercase(), (name.to_string(), kind, data));
     }
 
     /// A string value: its bytes with the terminating NUL.
@@ -98,8 +105,15 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "RegCreateKeyA" => (3, |e, a| open_key(e, a[0], a[1], a[2], true)),
         "RegCreateKeyExA" => (9, |e, a| {
             let existed = {
-                let sub = if a[1] != 0 { e.mem.read_cstr(a[1])? } else { String::new() };
-                e.win.registry.path_of(a[0], &sub).is_some_and(|p| e.win.registry.keys.contains_key(&p))
+                let sub = if a[1] != 0 {
+                    e.mem.read_cstr(a[1])?
+                } else {
+                    String::new()
+                };
+                e.win
+                    .registry
+                    .path_of(a[0], &sub)
+                    .is_some_and(|p| e.win.registry.keys.contains_key(&p))
             };
             let r = open_key(e, a[0], a[1], a[7], true)?;
             if r == ERROR_SUCCESS && a[8] != 0 {
@@ -114,23 +128,50 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         "RegFlushKey" => (1, |_, _| Ok(ERROR_SUCCESS)),
         "RegQueryValueExA" => (6, query_value),
         "RegSetValueExA" => (6, |e, a| {
-            let Some(path) = e.win.registry.path_of(a[0], "") else { return Ok(ERROR_INVALID_HANDLE) };
-            let name = if a[1] != 0 { e.mem.read_cstr(a[1])? } else { String::new() };
+            let Some(path) = e.win.registry.path_of(a[0], "") else {
+                return Ok(ERROR_INVALID_HANDLE);
+            };
+            let name = if a[1] != 0 {
+                e.mem.read_cstr(a[1])?
+            } else {
+                String::new()
+            };
             let data = e.mem.read_bytes(a[4], a[5])?;
             let key = e.win.registry.keys.entry(path).or_default();
             key.insert(name.to_ascii_lowercase(), (name, a[3], data));
             Ok(ERROR_SUCCESS)
         }),
         "RegDeleteValueA" => (2, |e, a| {
-            let Some(path) = e.win.registry.path_of(a[0], "") else { return Ok(ERROR_INVALID_HANDLE) };
-            let name = if a[1] != 0 { e.mem.read_cstr(a[1])? } else { String::new() };
-            let gone = e.win.registry.keys.get_mut(&path).and_then(|k| k.remove(&name.to_ascii_lowercase()));
-            Ok(if gone.is_some() { ERROR_SUCCESS } else { ERROR_FILE_NOT_FOUND })
+            let Some(path) = e.win.registry.path_of(a[0], "") else {
+                return Ok(ERROR_INVALID_HANDLE);
+            };
+            let name = if a[1] != 0 {
+                e.mem.read_cstr(a[1])?
+            } else {
+                String::new()
+            };
+            let gone = e
+                .win
+                .registry
+                .keys
+                .get_mut(&path)
+                .and_then(|k| k.remove(&name.to_ascii_lowercase()));
+            Ok(if gone.is_some() {
+                ERROR_SUCCESS
+            } else {
+                ERROR_FILE_NOT_FOUND
+            })
         }),
         "RegDeleteKeyA" => (2, |e, a| {
             let sub = e.mem.read_cstr(a[1])?;
-            let Some(path) = e.win.registry.path_of(a[0], &sub) else { return Ok(ERROR_INVALID_HANDLE) };
-            Ok(if e.win.registry.keys.remove(&path).is_some() { ERROR_SUCCESS } else { ERROR_FILE_NOT_FOUND })
+            let Some(path) = e.win.registry.path_of(a[0], &sub) else {
+                return Ok(ERROR_INVALID_HANDLE);
+            };
+            Ok(if e.win.registry.keys.remove(&path).is_some() {
+                ERROR_SUCCESS
+            } else {
+                ERROR_FILE_NOT_FOUND
+            })
         }),
         "RegEnumValueA" => (8, enum_value),
         _ => return None,
@@ -139,9 +180,15 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
 }
 
 fn open_key(e: &mut Emu, hkey: u32, sub: u32, out: u32, create: bool) -> Res<u32> {
-    let sub = if sub != 0 { e.mem.read_cstr(sub)? } else { String::new() };
+    let sub = if sub != 0 {
+        e.mem.read_cstr(sub)?
+    } else {
+        String::new()
+    };
     let reg = &mut e.win.registry;
-    let Some(path) = reg.path_of(hkey, &sub) else { return Ok(ERROR_INVALID_HANDLE) };
+    let Some(path) = reg.path_of(hkey, &sub) else {
+        return Ok(ERROR_INVALID_HANDLE);
+    };
     if create {
         reg.create(&path);
     } else if !reg.keys.contains_key(&path) && root_name(hkey).is_none_or(|_| !sub.is_empty()) {
@@ -154,7 +201,14 @@ fn open_key(e: &mut Emu, hkey: u32, sub: u32, out: u32, create: bool) -> Res<u32
 
 /// Copy value data out as RegQueryValueEx does: the size is always reported, and a buffer
 /// too small gets ERROR_MORE_DATA.
-fn give_data(e: &mut Emu, kind: u32, data: &[u8], kind_out: u32, buf: u32, size_out: u32) -> Res<u32> {
+fn give_data(
+    e: &mut Emu,
+    kind: u32,
+    data: &[u8],
+    kind_out: u32,
+    buf: u32,
+    size_out: u32,
+) -> Res<u32> {
     if kind_out != 0 {
         e.mem.write(kind_out, 4, kind)?;
     }
@@ -174,19 +228,42 @@ fn give_data(e: &mut Emu, kind: u32, data: &[u8], kind_out: u32, buf: u32, size_
 }
 
 fn query_value(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(path) = e.win.registry.path_of(a[0], "") else { return Ok(ERROR_INVALID_HANDLE) };
-    let name = if a[1] != 0 { e.mem.read_cstr(a[1])? } else { String::new() };
-    let Some((_, kind, data)) = e.win.registry.keys.get(&path).and_then(|k| k.get(&name.to_ascii_lowercase())).cloned() else {
+    let Some(path) = e.win.registry.path_of(a[0], "") else {
+        return Ok(ERROR_INVALID_HANDLE);
+    };
+    let name = if a[1] != 0 {
+        e.mem.read_cstr(a[1])?
+    } else {
+        String::new()
+    };
+    let Some((_, kind, data)) = e
+        .win
+        .registry
+        .keys
+        .get(&path)
+        .and_then(|k| k.get(&name.to_ascii_lowercase()))
+        .cloned()
+    else {
         return Ok(ERROR_FILE_NOT_FOUND);
     };
     give_data(e, kind, &data, a[3], a[4], a[5])
 }
 
 fn enum_value(e: &mut Emu, a: &Args) -> Res<u32> {
-    let Some(path) = e.win.registry.path_of(a[0], "") else { return Ok(ERROR_INVALID_HANDLE) };
-    let mut values: Vec<(String, u32, Vec<u8>)> = e.win.registry.keys.get(&path).map(|k| k.values().cloned().collect()).unwrap_or_default();
+    let Some(path) = e.win.registry.path_of(a[0], "") else {
+        return Ok(ERROR_INVALID_HANDLE);
+    };
+    let mut values: Vec<(String, u32, Vec<u8>)> = e
+        .win
+        .registry
+        .keys
+        .get(&path)
+        .map(|k| k.values().cloned().collect())
+        .unwrap_or_default();
     values.sort_by(|x, y| x.0.cmp(&y.0));
-    let Some((name, kind, data)) = values.into_iter().nth(a[1] as usize) else { return Ok(ERROR_NO_MORE_ITEMS) };
+    let Some((name, kind, data)) = values.into_iter().nth(a[1] as usize) else {
+        return Ok(ERROR_NO_MORE_ITEMS);
+    };
     let room = e.mem.read(a[3], 4)?;
     if room as usize <= name.len() {
         return Ok(ERROR_MORE_DATA);
@@ -206,23 +283,61 @@ mod tests {
     fn values_can_be_seeded_opened_and_read_back() {
         let mut e = Emu::new();
         e.mem.map(0x10000, 0x1000);
-        e.win.registry.set_str(r"HKEY_LOCAL_MACHINE\Software\Vendor\Game", "Path", r"C:\Game");
-        let run = |e: &mut Emu, name: &str, args: &[u32]| call(e, lookup("advapi32", name).unwrap().1, args);
-        e.mem.write_bytes(0x10000, b"SOFTWARE\\vendor\\game\0Path\0Missing\0").unwrap();
-        assert_eq!(run(&mut e, "RegOpenKeyA", &[0x8000_0002, 0x10000, 0x10100]), ERROR_SUCCESS, "case does not matter");
+        e.win.registry.set_str(
+            r"HKEY_LOCAL_MACHINE\Software\Vendor\Game",
+            "Path",
+            r"C:\Game",
+        );
+        let run = |e: &mut Emu, name: &str, args: &[u32]| {
+            call(e, lookup("advapi32", name).unwrap().1, args)
+        };
+        e.mem
+            .write_bytes(0x10000, b"SOFTWARE\\vendor\\game\0Path\0Missing\0")
+            .unwrap();
+        assert_eq!(
+            run(&mut e, "RegOpenKeyA", &[0x8000_0002, 0x10000, 0x10100]),
+            ERROR_SUCCESS,
+            "case does not matter"
+        );
         let hk = e.mem.read(0x10100, 4).unwrap();
         // size query first, then the data
         e.mem.write(0x10104, 4, 0).unwrap();
-        assert_eq!(run(&mut e, "RegQueryValueExA", &[hk, 0x10015, 0, 0x10108, 0, 0x10104]), ERROR_SUCCESS);
+        assert_eq!(
+            run(
+                &mut e,
+                "RegQueryValueExA",
+                &[hk, 0x10015, 0, 0x10108, 0, 0x10104]
+            ),
+            ERROR_SUCCESS
+        );
         assert_eq!(e.mem.read(0x10104, 4).unwrap(), 8);
-        assert_eq!(run(&mut e, "RegQueryValueExA", &[hk, 0x10015, 0, 0x10108, 0x10200, 0x10104]), ERROR_SUCCESS);
+        assert_eq!(
+            run(
+                &mut e,
+                "RegQueryValueExA",
+                &[hk, 0x10015, 0, 0x10108, 0x10200, 0x10104]
+            ),
+            ERROR_SUCCESS
+        );
         assert_eq!(e.mem.read_cstr(0x10200).unwrap(), r"C:\Game");
         assert_eq!(e.mem.read(0x10108, 4).unwrap(), REG_SZ);
-        assert_eq!(run(&mut e, "RegQueryValueExA", &[hk, 0x1001a, 0, 0, 0, 0]), ERROR_FILE_NOT_FOUND);
+        assert_eq!(
+            run(&mut e, "RegQueryValueExA", &[hk, 0x1001a, 0, 0, 0, 0]),
+            ERROR_FILE_NOT_FOUND
+        );
         // an unknown key is not found; creating it makes it openable
         e.mem.write_bytes(0x10300, b"Software\\Other\0").unwrap();
-        assert_eq!(run(&mut e, "RegOpenKeyA", &[0x8000_0001, 0x10300, 0x10100]), ERROR_FILE_NOT_FOUND);
-        assert_eq!(run(&mut e, "RegCreateKeyA", &[0x8000_0001, 0x10300, 0x10100]), ERROR_SUCCESS);
-        assert_eq!(run(&mut e, "RegOpenKeyA", &[0x8000_0001, 0x10300, 0x10100]), ERROR_SUCCESS);
+        assert_eq!(
+            run(&mut e, "RegOpenKeyA", &[0x8000_0001, 0x10300, 0x10100]),
+            ERROR_FILE_NOT_FOUND
+        );
+        assert_eq!(
+            run(&mut e, "RegCreateKeyA", &[0x8000_0001, 0x10300, 0x10100]),
+            ERROR_SUCCESS
+        );
+        assert_eq!(
+            run(&mut e, "RegOpenKeyA", &[0x8000_0001, 0x10300, 0x10100]),
+            ERROR_SUCCESS
+        );
     }
 }

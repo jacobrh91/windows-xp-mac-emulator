@@ -4,9 +4,9 @@
 
 pub mod kernel32;
 pub mod kernel32_extra;
-pub mod registry;
 pub mod msvcrt;
 pub mod other_dlls;
+pub mod registry;
 pub mod seh;
 pub mod threads;
 pub mod vfs;
@@ -75,8 +75,8 @@ pub struct Exports {
 const EMULATED_DLLS: &[&str] = &[
     "kernel32", "user32", "gdi32", "advapi32", "ntdll", "shell32", "ole32", "oleaut32", "comctl32",
     "comdlg32", "version", "winmm", "ws2_32", "wsock32", "msvcrt", "ddraw", "d3d8", "d3d9",
-    "dsound", "dinput", "dinput8", "dplayx", "shlwapi", "imm32", "opengl32", "glu32", "setupapi", "wininet",
-    "winspool", "msacm32", "psapi", "rpcrt4", "mpr", "netapi32", "iphlpapi",
+    "dsound", "dinput", "dinput8", "dplayx", "shlwapi", "imm32", "opengl32", "glu32", "setupapi",
+    "wininet", "winspool", "msacm32", "psapi", "rpcrt4", "mpr", "netapi32", "iphlpapi",
 ];
 
 pub struct Win32 {
@@ -835,7 +835,11 @@ mod heap_tests {
         assert!(e.heap_free(a));
         let b = e.heap_alloc(64).unwrap();
         assert_eq!(b, a);
-        assert_eq!(e.mem.read_bytes(b, 64).unwrap(), vec![0; 64], "no stale data, as with fresh memory");
+        assert_eq!(
+            e.mem.read_bytes(b, 64).unwrap(),
+            vec![0; 64],
+            "no stale data, as with fresh memory"
+        );
     }
 
     #[test]
