@@ -135,6 +135,8 @@ enum Input {
     Char(u32),
     /// The wheel turned by this much (120 per notch) at a desktop position.
     Wheel(i32, i32, i32),
+    /// Left Shift went down or up: speed up while it is held.
+    Turbo(bool),
     /// The host window was closed.
     Close,
 }
@@ -159,6 +161,16 @@ impl Shared {
             let row = ((ry as u32 + y) * fb.width + rx as u32) as usize;
             pixels.extend_from_slice(&fb.pixels[row..row + rw as usize]);
         }
+        if emu.win.turbo && rw > 0 {
+            let mut shot = crate::gui::gfx::Framebuffer {
+                width: rw,
+                height: rh,
+                pixels,
+            };
+            emu.wm
+                .draw_overlay(&mut shot, &format!("{:.1}x", emu.win.speedup));
+            pixels = shot.pixels;
+        }
         *self.frame.lock().unwrap() = Some(Frame {
             pixels,
             region,
@@ -176,6 +188,7 @@ impl Shared {
                 Input::Key(vk, side, ext, down) => emu.wm.post_key_ex(vk, side, ext, down),
                 Input::Wheel(d, x, y) => emu.wm.post_wheel(d, x, y),
                 Input::Char(c) => emu.wm.post_char(c),
+                Input::Turbo(on) => emu.win.turbo = on,
                 Input::Close => closed = true,
             }
         }
@@ -283,6 +296,9 @@ impl Presenter {
                     (0x12, 0xA5, true),
                 ][i];
                 self.out.push(Input::Key(vk, side, ext, is));
+                if i == 0 {
+                    self.out.push(Input::Turbo(is));
+                }
             }
         }
         self.modifiers = now;

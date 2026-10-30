@@ -907,6 +907,15 @@ impl WindowManager {
         None
     }
 
+    /// Writes `text` in the top-left corner of a picture of the screen (the speed-up ratio).
+    pub fn draw_overlay(&mut self, fb: &mut Framebuffer, text: &str) {
+        self.ensure_font();
+        let font = self.font.as_ref().unwrap();
+        let (w, h) = font.measure(text, 20);
+        fb.fill_rect(0, 0, w + 12, h + 8, 0x0000_0000);
+        font.draw(fb, 6, 4, text, 20, 0x00FF_FFFF);
+    }
+
     fn ensure_font(&mut self) {
         self.font.get_or_insert_with(Font::load_system);
     }

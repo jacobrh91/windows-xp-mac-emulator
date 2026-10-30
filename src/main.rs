@@ -194,8 +194,32 @@ fn run(
     let mut fps_mark = (std::time::Instant::now(), 0u64, 0u64);
     let mut idle = std::time::Duration::ZERO;
     let mut script = scripted::Script::from_env();
+    // (real time, clock) at the start of the window the speed-up ratio is measured over.
+    let mut speed_mark = (std::time::Instant::now(), emu.win.now_ms());
+    // While speeding up, the clock runs this many times faster than real time (on top of
+    // skipping idle waits), so a game that never idles still gets ahead.
+    // XP_TURBO=<factor>[:<secs>] sets it, and speeds up the run from that time on (measuring).
+    let turbo_env = env::var("XP_TURBO").ok();
+    let turbo_arg = |i: usize| {
+        turbo_env
+            .as_deref()
+            .and_then(|v| v.split(':').nth(i)?.parse::<f64>().ok())
+    };
+    let turbo = turbo_arg(0).unwrap_or(8.0);
+    let turbo_from = turbo_env.as_ref().map(|_| turbo_arg(1).unwrap_or(0.0));
+    let mut tick = std::time::Instant::now();
     let stop = loop {
         let stop = emu.run(1_000_000);
+        let dt = std::mem::replace(&mut tick, std::time::Instant::now()).elapsed();
+        if turbo_from.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
+            emu.win.turbo = true;
+        }
+        if emu.win.turbo {
+            emu.win.skew_ms_frac += dt.as_secs_f64() * 1000.0 * (turbo - 1.0);
+            let whole = emu.win.skew_ms_frac as u64;
+            emu.win.skew_ms += whole;
+            emu.win.skew_ms_frac -= whole as f64;
+        }
         if let Some(s) = env::var("XP_STOP_AFTER")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -210,6 +234,12 @@ fn run(
             report::fps(&mut emu, started, &mut fps_mark, &mut idle);
         }
         script.poll(&mut emu, started);
+        let real = speed_mark.0.elapsed();
+        if real.as_millis() >= 500 {
+            let clock = emu.win.now_ms();
+            emu.win.speedup = (clock - speed_mark.1) as f32 * 1000.0 / real.as_micros() as f32;
+            speed_mark = (std::time::Instant::now(), clock);
+        }
         if let Some(d) = dump_after
             && !dumped
             && started.elapsed() >= d
@@ -237,6 +267,8 @@ fn run(
             (cpu::Stop::StepLimit, Some(_)) => {}
             // Every thread is waiting for a time (or for input): let it pass. At most 8 ms,
             // so pictures and input keep flowing.
+            // Speeding up: nobody waits; the clock jumps over the wait instead.
+            (cpu::Stop::Sleeping, _) if emu.win.turbo => emu.win.skew_ms += emu.idle_ms(8),
             (cpu::Stop::Sleeping, _) | (cpu::Stop::WaitForInput, Some(_)) => {
                 let ms = emu.idle_ms(8);
                 idle += std::time::Duration::from_millis(ms);

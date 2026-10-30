@@ -101,6 +101,14 @@ pub struct Win32 {
     pub(crate) tls_next: u32,
     /// When set, the emulator's clock reads this instead of real time (tests).
     pub virtual_now: Option<u64>,
+    /// Milliseconds of idle waiting skipped while speeding up: the clock runs ahead of real
+    /// time by this much.
+    pub skew_ms: u64,
+    pub skew_ms_frac: f64,
+    /// While Left Shift is held the emulator skips its idle waits.
+    pub turbo: bool,
+    /// How much faster than real time the clock has been running lately (shown while turbo).
+    pub speedup: f32,
     pub last_error: u32,
     /// Everything the guest wrote to stdout/stderr.
     pub stdout: Vec<u8>,
@@ -214,7 +222,7 @@ fn core_api(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("kernel32", "GetVersionExA") => (1, k32_get_version_ex),
         ("kernel32", "GetTickCount") => (0, |e, _| Ok(e.win.now_ms() as u32)),
         ("kernel32", "QueryPerformanceCounter") => (1, |e, a| {
-            let ns = e.win.started.elapsed().as_nanos() as u64;
+            let ns = e.win.started.elapsed().as_nanos() as u64 + e.win.skew_ms * 1_000_000;
             e.mem.write(a[0], 4, ns as u32)?;
             e.mem.write(a[0] + 4, 4, (ns >> 32) as u32)?;
             Ok(1)
@@ -267,6 +275,10 @@ impl Win32 {
             tls: Vec::new(),
             tls_next: 0,
             virtual_now: None,
+            skew_ms: 0,
+            skew_ms_frac: 0.0,
+            turbo: false,
+            speedup: 1.0,
             last_error: 0,
             stdout: Vec::new(),
             messages: Vec::new(),
@@ -334,7 +346,7 @@ impl Win32 {
     /// The emulator's clock in milliseconds: real time since start, or the test override.
     pub fn now_ms(&self) -> u64 {
         self.virtual_now
-            .unwrap_or_else(|| self.started.elapsed().as_millis() as u64)
+            .unwrap_or_else(|| self.started.elapsed().as_millis() as u64 + self.skew_ms)
     }
 
     pub fn elapsed_ms(&self) -> u64 {
