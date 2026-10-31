@@ -200,3 +200,35 @@ fn mappings_and_other_objects_share_the_handle_space() {
     assert!(matches!(v.get(m), Some(Obj::Mapping { size: 1000, .. })));
     assert!(v.create_mapping(e, 0).is_err(), "only files can be mapped");
 }
+
+#[test]
+fn cd_drive_reports_cd_style_short_names() {
+    let (root, mut v) = tree("cd");
+    v.mount_cd('D', &root.join("Game"));
+    fs::create_dir(root.join("Game/Saved Games")).unwrap();
+    let (_, entry) = v.find_first(r"D:\Saved Games").unwrap();
+    assert_eq!(entry.short_name.find('~'), Some(5));
+    assert!(entry.short_name.starts_with("SAVED~"));
+    // A name that fits 8.3 has no short name, and neither has a long name on the hard disk.
+    assert_eq!(v.find_first(r"D:\a.sga").unwrap().1.short_name, "");
+    assert_eq!(
+        v.find_first(r"C:\Game\Saved Games").unwrap().1.short_name,
+        ""
+    );
+}
+
+#[test]
+fn guest_path_maps_host_files_back_through_the_mounts() {
+    let (root, v) = tree("guest");
+    let game = root.join("Game");
+    assert_eq!(
+        v.guest_path(&game.join("Data/File.TXT")).as_deref(),
+        Some(r"C:\Game\Data\File.TXT")
+    );
+    // Not there yet (a file about to be saved).
+    assert_eq!(
+        v.guest_path(&game.join("Data/new.sv4")).as_deref(),
+        Some(r"C:\Game\Data\new.sv4")
+    );
+    assert_eq!(v.guest_path(&root.join("secret.txt")), None);
+}

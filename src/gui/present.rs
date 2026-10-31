@@ -201,9 +201,9 @@ static FULLSCREEN_REQUEST: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Fullscreen, the mouse within this many points of the top edge is resting at the menu bar's
-/// trigger (the map scrolls up there too)...
+/// trigger...
 const FS_TOP_MENU: f64 = 2.0;
-/// ...and within this many points it scrolls the map up.
+/// ...and further down than this it hides the menu bar again.
 const FS_TOP_PAD: f64 = 64.0;
 /// How long the mouse rests at the very top before the menu bar is shown.
 const FS_MENU_DWELL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -232,6 +232,8 @@ pub struct Presenter {
     /// bar is shown over the game.
     top_since: Option<std::time::Instant>,
     menu_shown: bool,
+    /// Fullscreen: the mouse this many points from the top edge counts as at the edge.
+    top_scroll_band: f64,
     /// Top-left of the visible region in emulated-desktop coordinates, and its size.
     region: (i32, i32, u32, u32),
     title: String,
@@ -245,7 +247,11 @@ pub struct Presenter {
 }
 
 impl Presenter {
-    pub fn new(title: &str, fullscreen: bool) -> Result<Presenter, minifb::Error> {
+    pub fn new(
+        title: &str,
+        fullscreen: bool,
+        top_scroll_band: f64,
+    ) -> Result<Presenter, minifb::Error> {
         cocoa::keep_awake();
         let chars = Arc::new(Mutex::new(Vec::new()));
         let region = (0, 0, 640, 480);
@@ -266,6 +272,7 @@ impl Presenter {
             scroll: 0.0,
             top_since: None,
             menu_shown: false,
+            top_scroll_band,
             region,
             title: title.to_string(),
             frames: 0,
@@ -363,7 +370,7 @@ impl Presenter {
                 let (mx, my) = if was_fullscreen {
                     let my = my.clamp(0.0, vh - 1.0);
                     // Resting at the very top for a second shows the menu bar over the game;
-                    // moving below the scroll band hides it again.
+                    // moving well below it hides it again.
                     if self.fs.is_some() {
                         if my >= FS_TOP_PAD {
                             self.top_since = None;
@@ -380,9 +387,8 @@ impl Presenter {
                             self.top_since = None;
                         }
                     }
-                    // The band along the top, down to the menu bar's trigger, scrolls the map
-                    // up, the very top edge included.
-                    let my = if my < FS_TOP_PAD { 0.0 } else { my };
+                    // The game's band along the top, if it has one, scrolls the map up.
+                    let my = if my < self.top_scroll_band { 0.0 } else { my };
                     (mx.clamp(0.0, vw - 1.0), my)
                 } else {
                     (mx, my)

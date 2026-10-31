@@ -305,7 +305,7 @@ impl Emu {
     /// Cached code was written to: throw away everything made from the old bytes, the decoded
     /// instructions and blocks and the compiled code (which chained blocks jump into directly).
     #[cold]
-    fn flush_code_caches(&mut self) {
+    pub(crate) fn flush_code_caches(&mut self) {
         self.icache.clear();
         self.mem.forget_code_pages();
         self.jit.reset();

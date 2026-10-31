@@ -30,6 +30,9 @@ pub struct FindEntry {
     pub size: u64,
     /// Seconds since the Unix epoch.
     pub mtime: u64,
+    /// The 8.3 name Windows reports next to a long one; empty when the name is already short
+    /// or the drive makes none up.
+    pub short_name: String,
 }
 
 pub enum Obj {
@@ -70,6 +73,32 @@ pub struct Vfs {
     next: u32,
     /// File extensions (lower-case, with the dot) the guest is told do not exist.
     pub hidden_ext: Vec<String>,
+    /// The drive letter that is a CD-ROM drive, if any (see `mount_cd`).
+    cd_drive: Option<char>,
+}
+
+/// The short name a CD-ROM driver makes up for a long one: up to five characters, `~` and a
+/// checksum of the whole name, with the extension kept (`Saved Games` is `SAVED~xx`). Empty
+/// for a name that already fits 8.3.
+fn cd_short_name(name: &str) -> String {
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name, ""));
+    let fits = |s: &str, max| s.len() <= max && !s.contains([' ', '.']);
+    if name.starts_with('.') || (fits(stem, 8) && fits(ext, 3)) {
+        return String::new();
+    }
+    let clean = |s: &str, max| -> String {
+        s.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(max)
+            .map(|c| c.to_ascii_uppercase())
+            .collect()
+    };
+    let sum = name.bytes().fold(0u8, |a, b| a.wrapping_add(b));
+    let short = format!("{}~{sum:02X}", clean(stem, 5));
+    match clean(ext, 3) {
+        ext if ext.is_empty() => short,
+        ext => format!("{short}.{ext}"),
+    }
 }
 
 /// Wildcard match as FindFirstFile does it: `*` and `?`, case-insensitive. `*.*` matches
@@ -101,7 +130,34 @@ impl Vfs {
             objs: HashMap::new(),
             next: 0x1000,
             hidden_ext: Vec::new(),
+            cd_drive: None,
         }
+    }
+
+    /// The Windows path of a file on this machine, if a mount makes it visible to the guest.
+    /// The file itself need not exist yet, but its folder must.
+    pub fn guest_path(&self, host: &Path) -> Option<String> {
+        let real = match host.canonicalize() {
+            Ok(real) => real,
+            Err(_) => host.parent()?.canonicalize().ok()?.join(host.file_name()?),
+        };
+        self.mounts.iter().find_map(|(prefix, dir)| {
+            let rest = real.strip_prefix(dir.canonicalize().ok()?).ok()?;
+            let rest = rest.to_string_lossy().replace('/', "\\");
+            let prefix = prefix.trim_end_matches('\\');
+            Some(format!("{prefix}\\{rest}"))
+        })
+    }
+
+    /// Show `host` as a CD-ROM in the drive `letter`.
+    pub fn mount_cd(&mut self, letter: char, host: &Path) {
+        self.mount(&format!(r"{letter}:\"), host);
+        self.cd_drive = Some(letter.to_ascii_uppercase());
+    }
+
+    /// The drive letter of the CD-ROM drive, if there is one.
+    pub fn cd_drive(&self) -> Option<char> {
+        self.cd_drive
     }
 
     /// Make `host` visible to the guest at the Windows path `win_prefix` (e.g. `C:\Game`).
@@ -392,6 +448,7 @@ impl Vfs {
             is_dir: meta.is_dir(),
             size: if meta.is_dir() { 0 } else { meta.len() },
             mtime,
+            short_name: String::new(),
         })
     }
 
@@ -438,6 +495,11 @@ impl Vfs {
         if entries.is_empty() {
             return Err(ERROR_FILE_NOT_FOUND);
         }
+        if norm.chars().next() == self.cd_drive {
+            for e in &mut entries {
+                e.short_name = cd_short_name(&e.name);
+            }
+        }
         let first = entries.remove(0);
         let h = self.add(Obj::Find { entries, pos: 0 });
         Ok((h, first))
@@ -454,6 +516,7 @@ impl Vfs {
             is_dir: e.is_dir,
             size: e.size,
             mtime: e.mtime,
+            short_name: std::mem::take(&mut e.short_name),
         })
     }
 

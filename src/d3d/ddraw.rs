@@ -339,6 +339,9 @@ pub struct DDraw {
     /// Strings handed to DirectDrawEnumerate's callback.
     names: u32,
     pub frames: u64,
+    /// When the primary surface was last shown, and a surface whose changes are yet to be.
+    last_show: Option<std::time::Instant>,
+    unshown: u32,
 }
 
 impl Default for DDraw {
@@ -353,6 +356,8 @@ impl Default for DDraw {
             primary: 0,
             names: 0,
             frames: 0,
+            last_show: None,
+            unshown: 0,
         }
     }
 }
@@ -1165,7 +1170,7 @@ fn palette_method(method: &str) -> Handler {
             // The screen shows the new colours at once.
             let primary = e.win.ddraw.primary;
             if surface(e, primary).is_some_and(|s| s.palette == a[0]) {
-                show(e, primary)?;
+                show_if_primary(e, primary)?;
             }
             Ok(DD_OK)
         },
@@ -1197,9 +1202,24 @@ fn clipper_method(method: &str) -> Handler {
 
 fn show_if_primary(e: &mut Emu, s: u32) -> Res<()> {
     if s != 0 && s == e.win.ddraw.primary {
-        show(e, s)?;
+        // A game may blit each changed rectangle by itself, hundreds a frame: the whole surface
+        // is converted at most this often, and the rest waits for `show_pending`.
+        let recent = |t: std::time::Instant| t.elapsed() < std::time::Duration::from_millis(16);
+        if e.win.ddraw.last_show.is_some_and(recent) {
+            e.win.ddraw.unshown = s;
+        } else {
+            show(e, s)?;
+        }
     }
     Ok(())
+}
+
+/// Show changes to the primary surface held back by `show_if_primary`, once it is time.
+pub fn show_pending(e: &mut Emu) -> Res<()> {
+    match e.win.ddraw.unshown {
+        0 => Ok(()),
+        s => show_if_primary(e, s),
+    }
 }
 
 /// Copy the primary surface into the game's window, as RGB, scaled to the window's size.
@@ -1270,6 +1290,8 @@ fn show(e: &mut Emu, s: u32) -> Res<()> {
         win.needs_paint = false;
     }
     e.win.ddraw.frames += 1;
+    e.win.ddraw.last_show = Some(std::time::Instant::now());
+    e.win.ddraw.unshown = 0;
     Ok(())
 }
 

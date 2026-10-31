@@ -2,6 +2,7 @@
 //! unmapped region; when the CPU jumps there, a Rust handler runs instead and the
 //! stdcall return is performed for the guest.
 
+pub mod dinput;
 pub mod kernel32;
 pub mod kernel32_extra;
 pub mod msvcrt;
@@ -109,6 +110,10 @@ pub struct Win32 {
     pub turbo: bool,
     /// How much faster than real time the clock has been running lately (shown while turbo).
     pub speedup: f32,
+    /// A game that can run flat out: where it counts its ticks, and how many it does a second
+    /// at normal speed. While speeding up, every timeGetTime then finds 25 ms have passed, so
+    /// it never waits for the clock, and the ratio shown is measured in ticks.
+    pub tick_counter: Option<(u32, f32)>,
     pub last_error: u32,
     /// Everything the guest wrote to stdout/stderr.
     pub stdout: Vec<u8>,
@@ -125,6 +130,7 @@ pub struct Win32 {
     pub audio: crate::media::audio::AudioState,
     pub d3d: crate::d3d::d3d8::D3d8,
     pub ddraw: crate::d3d::ddraw::DDraw,
+    pub dinput: dinput::DInput,
     pub registry: registry::Registry,
     /// XP_API_STATS: calls per stub since the last report.
     pub api_counts: Option<Vec<u64>>,
@@ -168,6 +174,7 @@ const PROVIDERS: &[Provider] = &[
     crate::media::audio::lookup,
     crate::d3d::d3d8::lookup,
     crate::d3d::ddraw::lookup,
+    dinput::lookup,
     crate::media::bink::lookup,
     crate::hooks::lookup,
     kernel32::lookup,
@@ -279,6 +286,7 @@ impl Win32 {
             skew_ms_frac: 0.0,
             turbo: false,
             speedup: 1.0,
+            tick_counter: None,
             last_error: 0,
             stdout: Vec::new(),
             messages: Vec::new(),
@@ -290,6 +298,7 @@ impl Win32 {
             audio: Default::default(),
             d3d: Default::default(),
             ddraw: Default::default(),
+            dinput: Default::default(),
             registry: Default::default(),
             api_counts: std::env::var_os("XP_API_STATS").map(|_| Vec::new()),
             bink: Default::default(),

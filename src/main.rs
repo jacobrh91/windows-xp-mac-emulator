@@ -43,6 +43,7 @@ fn main() {
             // The window lives on the main thread (AppKit wants it there) and the emulator
             // on its own, so a window that stalls (a Space switch, a slow redraw) never holds
             // up the game or the sound its mixer makes. The emulator thread ends the process.
+            let band = game_optimizations::top_scroll_band(&path);
             let shared = std::sync::Arc::new(gui::present::Shared::default());
             let link = shared.clone();
             std::thread::Builder::new()
@@ -50,11 +51,12 @@ fn main() {
                 .stack_size(64 << 20)
                 .spawn(move || run(&path, &data, Some(link), shot))
                 .expect("emulator thread");
-            let mut presenter = gui::present::Presenter::new("Windows XP emulator", fullscreen)
-                .unwrap_or_else(|e| {
-                    eprintln!("cannot open window: {e}");
-                    process::exit(1);
-                });
+            let mut presenter =
+                gui::present::Presenter::new("Windows XP emulator", fullscreen, band)
+                    .unwrap_or_else(|e| {
+                        eprintln!("cannot open window: {e}");
+                        process::exit(1);
+                    });
             let mut open = true;
             let started = std::time::Instant::now();
             // XP_DEBUG_STALL=<secs>: freeze the window thread for 3 s at that time, as a hidden
@@ -195,7 +197,12 @@ fn run(
     let mut idle = std::time::Duration::ZERO;
     let mut script = scripted::Script::from_env();
     // (real time, clock) at the start of the window the speed-up ratio is measured over.
-    let mut speed_mark = (std::time::Instant::now(), emu.win.now_ms());
+    let ticks = |e: &cpu::Emu| {
+        e.win
+            .tick_counter
+            .map_or(0, |(at, _)| e.mem.read(at, 4).unwrap_or(0))
+    };
+    let mut speed_mark = (std::time::Instant::now(), emu.win.now_ms(), ticks(&emu));
     // While speeding up, the clock runs this many times faster than real time (on top of
     // skipping idle waits), so a game that never idles still gets ahead.
     // XP_TURBO=<factor>[:<secs>] sets it, and speeds up the run from that time on (measuring).
@@ -233,12 +240,20 @@ fn run(
         if show_fps && fps_mark.0.elapsed().as_secs() >= 5 {
             report::fps(&mut emu, started, &mut fps_mark, &mut idle);
         }
+        game_optimizations::speedup_tick(&mut emu);
+        if d3d::ddraw::show_pending(&mut emu).is_err() {
+            eprintln!("[ddraw] cannot read the primary surface");
+        }
         script.poll(&mut emu, started);
         let real = speed_mark.0.elapsed();
         if real.as_millis() >= 500 {
-            let clock = emu.win.now_ms();
-            emu.win.speedup = (clock - speed_mark.1) as f32 * 1000.0 / real.as_micros() as f32;
-            speed_mark = (std::time::Instant::now(), clock);
+            let (clock, game) = (emu.win.now_ms(), ticks(&emu));
+            let seconds = real.as_secs_f32();
+            emu.win.speedup = match emu.win.tick_counter {
+                Some((_, rate)) => game.wrapping_sub(speed_mark.2) as f32 / seconds / rate,
+                None => (clock - speed_mark.1) as f32 / 1000.0 / seconds,
+            };
+            speed_mark = (std::time::Instant::now(), clock, game);
         }
         if let Some(d) = dump_after
             && !dumped

@@ -236,6 +236,8 @@ pub struct WindowManager {
     pub open_menu: Option<OpenMenu>,
     pub accels: HashMap<u32, Vec<Accel>>,
     pub key_down: [bool; 256],
+    /// Where the mouse is, in desktop coordinates.
+    pub cursor: (i32, i32),
     /// Mouse buttons held, as MK_LBUTTON / MK_RBUTTON / MK_MBUTTON bits.
     pub buttons: u32,
     pub modal: Option<Modal>,
@@ -318,6 +320,7 @@ impl WindowManager {
             open_menu: None,
             accels: HashMap::new(),
             key_down: [false; 256],
+            cursor: (0, 0),
             buttons: 0,
             modal: None,
             last_click: None,
@@ -662,6 +665,7 @@ impl WindowManager {
 
     pub fn post_mouse(&mut self, message: u32, x: i32, y: i32) {
         let mut message = message;
+        self.cursor = (x, y);
         if message == WM_LBUTTONDOWN && self.handle_menu_click(x, y) {
             return;
         }

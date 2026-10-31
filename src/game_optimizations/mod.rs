@@ -31,8 +31,22 @@ pub fn setup(e: &mut Emu, exe: &str) {
     rollercoaster_tycoon::setup(e, exe);
 }
 
+/// Fullscreen: how many points below the top edge still count as the edge, for the program at
+/// `path`.
+pub fn top_scroll_band(path: &str) -> f64 {
+    let exe = std::path::Path::new(path).file_name();
+    let exe = exe.map_or("".into(), |f| f.to_string_lossy());
+    impossible_creatures::top_scroll_band(&exe)
+}
+
+/// Called all the time while running: lets a game prepare for or stop speeding up.
+pub fn speedup_tick(e: &mut Emu) {
+    rollercoaster_tycoon::speedup_tick(e);
+}
+
 /// What the games' native stubs remember between calls.
 #[derive(Default)]
 pub struct GameState {
     pub impossible_creatures: impossible_creatures::State,
+    pub rollercoaster_tycoon: rollercoaster_tycoon::State,
 }

@@ -95,14 +95,22 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             let name = e.mem.read_cstr(a[0])?;
             e.load_library(&name)
         }),
-        "GetDriveTypeA" | "GetDriveTypeW" => (1, |_, _| Ok(3)), // DRIVE_FIXED
-        "GetLogicalDrives" => (0, |_, _| Ok(1 << 2)),           // C:
+        "GetDriveTypeA" => (1, |e, a| drive_type(e, a[0], false)),
+        "GetDriveTypeW" => (1, |e, a| drive_type(e, a[0], true)),
+        "GetLogicalDrives" => (0, |e, _| {
+            let cd = e.win.vfs.cd_drive().map_or(0, |d| 1 << (d as u8 - b'A'));
+            Ok(1 << 2 | cd) // C:, and the CD-ROM drive
+        }),
         "GetLogicalDriveStringsA" => (2, |e, a| {
-            let drives = b"C:\\\0\0";
+            let mut drives = b"C:\\\0".to_vec();
+            if let Some(d) = e.win.vfs.cd_drive() {
+                drives.extend_from_slice(format!("{d}:\\\0").as_bytes());
+            }
+            drives.push(0);
             if (a[0] as usize) < drives.len() {
                 return Ok(drives.len() as u32);
             }
-            e.mem.write_bytes(a[1], drives)?;
+            e.mem.write_bytes(a[1], &drives)?;
             Ok(drives.len() as u32 - 1)
         }),
         "GetComputerNameA" => (2, |e, a| name_out(e, a[0], a[1], "XPMAC")),
@@ -657,13 +665,33 @@ fn write_find_data(e: &mut Emu, out: u32, entry: &FindEntry, wide: bool) -> Res<
     e.mem.write(out + 32, 4, entry.size as u32)?;
     if wide {
         e.mem.write_wstr(out + 44, &entry.name)?;
+        e.mem.write_wstr(out + 564, &entry.short_name)?;
     } else {
         let mut b = entry.name.as_bytes().to_vec();
         b.truncate(259);
         b.push(0);
         e.mem.write_bytes(out + 44, &b)?;
+        let mut short = entry.short_name.as_bytes().to_vec();
+        short.push(0);
+        e.mem.write_bytes(out + 304, &short)?;
     }
     Ok(())
+}
+
+/// GetDriveType: `DRIVE_CDROM` for the CD-ROM drive's paths, otherwise `DRIVE_FIXED`. No path
+/// means the current directory's drive.
+fn drive_type(e: &mut Emu, path: u32, wide: bool) -> Res<u32> {
+    let path = if path == 0 {
+        e.win.vfs.cwd.clone()
+    } else {
+        path_arg(e, path, wide)?
+    };
+    let drive = path.chars().next().map(|c| c.to_ascii_uppercase());
+    Ok(if drive.is_some() && drive == e.win.vfs.cd_drive() {
+        5
+    } else {
+        3
+    })
 }
 
 fn find_first(e: &mut Emu, a: &Args, wide: bool) -> Res<u32> {

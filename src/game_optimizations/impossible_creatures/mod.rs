@@ -50,6 +50,16 @@ const ZLIB_HOOKS: &[Hook] = &[
 /// All of the game's hook tables.
 pub(super) const TABLES: &[&[Hook]] = &[ZLIB_HOOKS, mathbox::HOOKS, miles::HOOKS, fire::HOOKS];
 
+/// Fullscreen, the mouse this close to the top edge scrolls the map up, so scrolling still works
+/// with the menu bar's trigger at the very edge.
+pub(super) fn top_scroll_band(exe: &str) -> f64 {
+    if exe.eq_ignore_ascii_case("ic.exe") {
+        64.0
+    } else {
+        0.0
+    }
+}
+
 /// What the game's native stubs remember between calls.
 #[derive(Default)]
 pub struct State {

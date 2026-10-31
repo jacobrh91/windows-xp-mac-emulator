@@ -108,8 +108,8 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "ClientToScreen") => (2, |e, a| shift_point(e, a[0], a[1], 1)),
         ("user32", "ScreenToClient") => (2, |e, a| shift_point(e, a[0], a[1], -1)),
         ("user32", "GetCursorPos") => (1, |e, a| {
-            e.mem.write(a[0], 4, 0)?;
-            e.mem.write(a[0] + 4, 4, 0)?;
+            e.mem.write(a[0], 4, e.wm.cursor.0 as u32)?;
+            e.mem.write(a[0] + 4, 4, e.wm.cursor.1 as u32)?;
             Ok(1)
         }),
 
@@ -508,7 +508,11 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("user32", "RegisterWindowMessageW") | ("user32", "RegisterWindowMessageA") => {
             (1, |_, _| Ok(0xC100))
         }
-        ("user32", "SetCursorPos") | ("user32", "WinHelpW") => (2, |_, _| Ok(1)),
+        ("user32", "SetCursorPos") => (2, |e, a| {
+            e.wm.cursor = (a[0] as i32, a[1] as i32);
+            Ok(1)
+        }),
+        ("user32", "WinHelpW") => (2, |_, _| Ok(1)),
         // Real animation loops use this as a sleep; reporting a timeout keeps them moving.
         ("user32", "MsgWaitForMultipleObjects") => (5, |_, _| Ok(258)),
         // ---- dialogs ----

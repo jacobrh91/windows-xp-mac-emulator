@@ -4,6 +4,7 @@
 //! is harmless, and fail with the error Windows would give where a device is missing.
 
 use crate::cpu::{Emu, Res};
+use crate::gui::file_dialog::file_dialog;
 use crate::win32::{Args, CDECL, Handler};
 
 const MMSYSERR_NODRIVER: u32 = 6;
@@ -300,7 +301,12 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
         ("iphlpapi", "GetBestRoute") | ("iphlpapi", "GetIpAddrTable") => (3, |_, _| Ok(50)), // ERROR_NOT_SUPPORTED
 
         // ---- winmm: real clock, no audio / MIDI / mixer hardware ----
-        ("winmm", "timeGetTime") => (0, |e, _| Ok(e.win.elapsed_ms() as u32)),
+        ("winmm", "timeGetTime") => (0, |e, _| {
+            if e.win.turbo && e.win.tick_counter.is_some() {
+                e.win.skew_ms += 25;
+            }
+            Ok(e.win.elapsed_ms() as u32)
+        }),
         ("winmm", "timeBeginPeriod") | ("winmm", "timeEndPeriod") => (1, |_, _| Ok(0)),
         ("winmm", "timeKillEvent") => (1, |_, _| Ok(0)),
         // Timer callbacks do not fire yet; hand back a plausible id so callers carry on.
@@ -322,15 +328,15 @@ pub fn lookup(dll: &str, name: &str) -> Option<(usize, Handler)> {
             (2, |_, _| Ok(MMSYSERR_NODRIVER))
         }
 
-        // ---- DirectSound, DirectInput, DirectPlay: no such devices (yet) ----
+        // ---- DirectSound, DirectPlay: no such devices (yet) ----
         ("dsound", "DirectSoundCreate") => (3, |_, _| Ok(DSERR_NODRIVER)),
         ("dsound", "DirectSoundEnumerateA") => (2, |_, _| Ok(0)),
-        ("dinput", "DirectInputCreateA") => (4, |_, _| Ok(E_FAIL)),
         ("dplayx", "#1") => (3, |_, _| Ok(E_FAIL)), // DirectPlayCreate
         ("dplayx", "#2") => (2, |_, _| Ok(E_FAIL)), // DirectPlayEnumerateA
 
         // ---- comdlg32 / shell32 ----
-        ("comdlg32", "GetOpenFileNameA") | ("comdlg32", "GetSaveFileNameA") => (1, |_, _| Ok(0)), // cancelled
+        ("comdlg32", "GetOpenFileNameA") => (1, |e, a| file_dialog(e, a, false)),
+        ("comdlg32", "GetSaveFileNameA") => (1, |e, a| file_dialog(e, a, true)),
         ("shell32", "DragAcceptFiles") => (2, |_, _| Ok(0)),
         ("shell32", "DragQueryFileA") => (4, |_, _| Ok(0)),
         ("shell32", "Shell_NotifyIconA") => (2, |_, _| Ok(1)),

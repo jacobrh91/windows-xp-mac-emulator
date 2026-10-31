@@ -1,6 +1,7 @@
 //! The Windows desktop: window manager and USER32/GDI32 on top of it, the software
 //! framebuffer they draw into, and the macOS window that shows the result.
 
+pub mod file_dialog;
 pub mod gfx;
 pub mod keyboard;
 pub mod present;
